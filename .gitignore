@@ -1,5 +1,4 @@
 node_modules/
-build/
 out/
 release/
 .playwright-mcp/
