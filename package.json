@@ -1,0 +1,36 @@
+{
+  "name": "youyu",
+  "version": "0.3.6",
+  "private": true,
+  "author": "118 Studio",
+  "description": "YouYu Windows proxy desktop app",
+  "main": "out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "dev:ui": "vite --host 127.0.0.1 --port 5173",
+    "assets": "node scripts/run-brand-assets.mjs",
+    "cache:electron:win": "node scripts/cache-electron-win.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && electron-vite build",
+    "dist:win": "npm run assets && npm run build && npm run cache:electron:win && node scripts/run-electron-builder.mjs",
+    "smoke": "tsx scripts/smoke-test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.2",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "39.8.9",
+    "electron-builder": "26.8.1",
+    "electron-vite": "4.0.0",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.2",
+    "vitest": "4.1.5",
+    "yaml": "2.8.3"
+  }
+}
