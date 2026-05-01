@@ -1,0 +1,46 @@
+appId: studio.youyu.proxy
+productName: YouYu
+compression: maximum
+electronLanguages:
+  - zh-CN
+  - en-US
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+  - "!**/*.map"
+  - "!**/node_modules/.cache/**"
+  - "!**/release/**"
+extraResources:
+  - from: resources/mihomo
+    to: mihomo
+    filter:
+      - "**/*"
+  - from: build/icon.png
+    to: assets/icon.png
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: YouYu-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: YouYu
+  uninstallDisplayName: YouYu ${version}
+  language: "2052"
+  installerLanguages:
+    - zh_CN
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerSidebar: build/installerSidebar.bmp
+  uninstallerSidebar: build/uninstallerSidebar.bmp
+  installerHeader: build/installerHeader.bmp
+  license: build/license_zh_CN.txt
+  include: build/installer.nsh

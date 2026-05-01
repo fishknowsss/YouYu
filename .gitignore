@@ -1,0 +1,11 @@
+node_modules/
+build/
+out/
+release/
+.playwright-mcp/
+.DS_Store
+*.log
+dist/
+coverage/
+.env
+.env.*
