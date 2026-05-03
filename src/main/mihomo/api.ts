@@ -31,7 +31,9 @@ export type MihomoApiClient = {
 const selectorName = '节点选择';
 const providerName = 'airport';
 const delayTestUrl = 'https://www.gstatic.com/generate_204';
-const strategyTargetSet = new Set<string>([...Object.values(strategyTargets), 'DIRECT']);
+const builtInProxyNames = new Set(['COMPATIBLE', 'DIRECT', 'PASS', 'REJECT', 'REJECT-DROP']);
+const noticeNodeKeywords = ['失去支持', '更新你的代理客户端', '官网公告', '代理客户端'];
+const strategyTargetSet = new Set<string>([...Object.values(strategyTargets), ...builtInProxyNames]);
 
 type MihomoConnectionsResponse = {
   uploadTotal?: number;
@@ -41,6 +43,10 @@ type MihomoConnectionsResponse = {
 
 type MihomoDelayResponse = {
   delay?: number;
+};
+
+type MihomoProvidersResponse = {
+  providers?: Record<string, unknown>;
 };
 
 export function createMihomoApiClient(options: {
@@ -87,13 +93,45 @@ export function createMihomoApiClient(options: {
   }
 
   function latestDelay(item: MihomoProxyItem | undefined): number | undefined {
-    return item?.history?.findLast((entry) => typeof entry.delay === 'number')?.delay;
+    const delay = item?.history?.findLast((entry) => typeof entry.delay === 'number')?.delay;
+    return typeof delay === 'number' && delay > 0 ? delay : undefined;
   }
 
   function resolveCurrentNode(proxies: Record<string, MihomoProxyItem>, selector: MihomoProxyItem | undefined) {
     const current = selector?.now ?? strategyTargets.auto;
     const nestedCurrent = proxies[current]?.now;
-    return nestedCurrent && nestedCurrent !== current ? nestedCurrent : current;
+    const resolved = nestedCurrent && nestedCurrent !== current ? nestedCurrent : current;
+    if (!builtInProxyNames.has(resolved)) {
+      return resolved;
+    }
+
+    return collectSelectableNodes(proxies, selector?.all ?? [])[0] ?? resolved;
+  }
+
+  function collectSelectableNodes(proxies: Record<string, MihomoProxyItem>, names: string[]): string[] {
+    const nodes: string[] = [];
+    const seen = new Set<string>();
+    const visit = (name: string) => {
+      if (seen.has(name) || builtInProxyNames.has(name) || isNoticeNodeName(name)) return;
+      seen.add(name);
+
+      const item = proxies[name];
+      if (item?.all?.length) {
+        item.all.forEach(visit);
+        return;
+      }
+
+      if (!strategyTargetSet.has(name)) {
+        nodes.push(name);
+      }
+    };
+
+    names.forEach(visit);
+    return nodes;
+  }
+
+  function isNoticeNodeName(name: string): boolean {
+    return noticeNodeKeywords.some((keyword) => name.includes(keyword));
   }
 
   function inferStrategy(current: string): StrategyKey {
@@ -110,13 +148,11 @@ export function createMihomoApiClient(options: {
       const selected = selector?.now ?? strategyTargets.auto;
       const currentNode = resolveCurrentNode(proxies, selector);
 
-      return all
-        .filter((name) => !strategyTargetSet.has(name))
-        .map((name) => ({
-          name,
-          delay: latestDelay(proxies[name]),
-          active: name === selected || name === currentNode
-        }));
+      return collectSelectableNodes(proxies, all).map((name) => ({
+        name,
+        delay: latestDelay(proxies[name]),
+        active: name === selected || name === currentNode
+      }));
     },
     async listStrategies() {
       const data = await readProxies();
@@ -157,7 +193,14 @@ export function createMihomoApiClient(options: {
         throw new Error('mihomo selector missing');
       }
 
-      await request(`/proxies/${encodeURIComponent(selector.name)}`, {
+      const directSelector = selector.item.all?.includes(name)
+        ? selector.name
+        : Object.entries(data.proxies ?? {}).find(([_groupName, item]) => item.all?.includes(name))?.[0];
+      if (!directSelector) {
+        throw new Error('mihomo node missing');
+      }
+
+      await request(`/proxies/${encodeURIComponent(directSelector)}`, {
         method: 'PUT',
         headers: headers({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ name })
@@ -204,10 +247,28 @@ export function createMihomoApiClient(options: {
       });
     },
     async updateProvider() {
-      await request(`/providers/proxies/${encodeURIComponent(providerName)}`, {
-        method: 'PUT',
-        headers: headers()
-      });
+      let providerNames = [providerName];
+      try {
+        const response = await request('/providers/proxies', {
+          headers: headers()
+        });
+        const data = (await response.json()) as MihomoProvidersResponse;
+        const names = Object.keys(data.providers ?? {}).filter((name) => name !== 'default');
+        if (names.length > 0) {
+          providerNames = names;
+        }
+      } catch {
+        providerNames = [providerName];
+      }
+
+      await Promise.all(
+        providerNames.map((name) =>
+          request(`/providers/proxies/${encodeURIComponent(name)}`, {
+            method: 'PUT',
+            headers: headers()
+          })
+        )
+      );
     }
   };
 }

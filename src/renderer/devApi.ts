@@ -60,6 +60,9 @@ export function createDevYouYuApi(): YouYuApi {
     async getSnapshot() {
       return structuredClone(snapshot);
     },
+    onSnapshotUpdated() {
+      return () => undefined;
+    },
     async start() {
       requireSubscription();
       return publish({

@@ -41,12 +41,15 @@ body {
   min-width: 900px;
   min-height: 600px;
   background: var(--surface);
+  -webkit-app-region: drag;
 }
 
 button,
 input,
-select {
+select,
+a {
   font: inherit;
+  -webkit-app-region: no-drag;
 }
 
 button {
@@ -73,6 +76,7 @@ select:focus-visible {
   grid-template-columns: 168px minmax(0, 1fr);
   padding-top: 30px;
   background: var(--surface);
+  -webkit-app-region: drag;
 }
 
 .app-shell.easy-shell {
@@ -89,6 +93,7 @@ select:focus-visible {
   border-right: 1px solid var(--line);
   background: var(--surface-raised);
   overflow: hidden;
+  -webkit-app-region: no-drag;
 }
 
 .main-surface {
@@ -97,6 +102,7 @@ select:focus-visible {
   overflow: hidden;
   padding: 18px;
   background: var(--surface);
+  -webkit-app-region: no-drag;
 }
 
 .easy-shell .main-surface {
@@ -384,10 +390,12 @@ select:focus-visible {
 
 .easy-power-button {
   width: 188px;
-  height: 188px;
+  height: 222px;
   min-width: 188px;
-  min-height: 188px;
-  display: inline-flex;
+  min-height: 222px;
+  display: grid;
+  grid-template-rows: 188px 26px;
+  gap: 8px;
   align-self: center;
   justify-self: center;
   align-items: center;
@@ -432,6 +440,52 @@ select:focus-visible {
 
 .easy-power-button.running .brand-mark-lg {
   filter: none;
+}
+
+.easy-power-button:disabled {
+  opacity: 1;
+}
+
+.startup-mark {
+  width: 188px;
+  height: 188px;
+  display: grid;
+  place-items: center;
+}
+
+.startup-ring {
+  width: 26px;
+  height: 26px;
+  align-self: start;
+  justify-self: center;
+  border-radius: 999px;
+  background:
+    conic-gradient(
+      from 0deg,
+      rgb(143 88 215 / 78%),
+      rgb(222 210 236 / 30%),
+      rgb(143 88 215 / 68%),
+      rgb(222 210 236 / 38%),
+      rgb(143 88 215 / 78%)
+    );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+.startup-ring.is-starting {
+  opacity: 1;
+  animation: startup-ring-spin 900ms linear infinite;
+}
+
+.easy-power-button:has(.startup-ring.is-starting) .brand-mark-lg {
+  filter: grayscale(0.18) saturate(1.05) contrast(0.98) opacity(0.82);
+}
+
+@keyframes startup-ring-spin {
+  to {
+    transform: rotate(1turn);
+  }
 }
 
 .home-side-panel {

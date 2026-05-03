@@ -85,8 +85,10 @@ describe('app actions', () => {
     expect(updateProvider).not.toHaveBeenCalled();
   });
 
-  it('uses mihomo provider update when the controller is already running', async () => {
+  it('restarts mihomo to refresh the inlined subscription when already running', async () => {
     const updateProvider = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => undefined);
+    const start = vi.fn(async () => undefined);
 
     await updateSubscriptionNodes({
       settingsStore: {
@@ -95,8 +97,8 @@ describe('app actions', () => {
       },
       lifecycle: {
         getStatus: () => 'running',
-        start: vi.fn(),
-        stop: vi.fn(),
+        start,
+        stop,
         restart: vi.fn(),
         repair: vi.fn()
       },
@@ -104,7 +106,9 @@ describe('app actions', () => {
       createSnapshot: async () => makeSnapshot()
     });
 
-    expect(updateProvider).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    expect(updateProvider).not.toHaveBeenCalled();
   });
 
   it('fully restarts mihomo after saving settings while running', async () => {

@@ -1,6 +1,9 @@
 import YAML from 'yaml';
 import type { MihomoMode, RuleProfile, StrategyKey } from '../../shared/ipc';
 
+const preferredDefaultNodeKeywords = ['日本', '09', '家宽'];
+const noticeNodeKeywords = ['失去支持', '更新你的代理客户端', '官网公告', '代理客户端'];
+
 export type MihomoConfigInput = {
   subscriptionUrl: string;
   secret: string;
@@ -19,10 +22,17 @@ export type MihomoConfigInput = {
 };
 
 export function buildMihomoConfig(input: MihomoConfigInput): string {
-  if (input.ruleProfile === 'subscription' && input.subscriptionConfigText) {
+  if (input.subscriptionConfigText) {
     const subscriptionConfig = buildSubscriptionConfig(input);
     if (subscriptionConfig) {
       return subscriptionConfig;
+    }
+  }
+
+  if (input.subscriptionConfigText) {
+    const inlineConfig = buildInlineSubscriptionConfig(input);
+    if (inlineConfig) {
+      return inlineConfig;
     }
   }
 
@@ -83,6 +93,90 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
   return YAML.stringify(config);
 }
 
+function buildInlineSubscriptionConfig(input: MihomoConfigInput): string | null {
+  try {
+    const parsed = YAML.parse(input.subscriptionConfigText ?? '');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    const proxies = (parsed as Record<string, unknown>).proxies;
+    if (!Array.isArray(proxies) || proxies.length === 0) {
+      return null;
+    }
+
+    const validProxies = proxies.filter((proxy) => {
+      const name = isRecord(proxy) && typeof proxy.name === 'string' ? proxy.name : '';
+      return Boolean(name) && !isNoticeNodeName(name);
+    });
+    const proxyNames = validProxies
+      .map((proxy) => (isRecord(proxy) && typeof proxy.name === 'string' ? proxy.name : undefined))
+      .filter((name): name is string => Boolean(name));
+    if (proxyNames.length === 0) {
+      return null;
+    }
+    const orderedProxyNames = orderProxyNames(proxyNames);
+
+    const config = {
+      ...buildRuntimeOptions(input),
+      proxies: validProxies,
+      'proxy-groups': [
+        {
+          name: '节点选择',
+          type: 'select',
+          proxies: ['自动选择', orderedProxyNames[0], '故障转移', '负载均衡', 'DIRECT', ...orderedProxyNames.slice(1)]
+        },
+        {
+          name: '自动选择',
+          type: 'url-test',
+          proxies: orderedProxyNames,
+          url: 'https://www.gstatic.com/generate_204',
+          interval: 300,
+          tolerance: 50,
+          lazy: true
+        },
+        {
+          name: '故障转移',
+          type: 'fallback',
+          proxies: orderedProxyNames,
+          url: 'https://www.gstatic.com/generate_204',
+          interval: 300,
+          lazy: true
+        },
+        {
+          name: '负载均衡',
+          type: 'load-balance',
+          proxies: orderedProxyNames,
+          url: 'https://www.gstatic.com/generate_204',
+          interval: 300,
+          strategy: 'consistent-hashing',
+          lazy: true
+        }
+      ],
+      rules: buildManagedRules(input.ruleProfile ?? 'smart')
+    };
+
+    return YAML.stringify(config);
+  } catch {
+    return null;
+  }
+}
+
+function isNoticeNodeName(name: string): boolean {
+  return noticeNodeKeywords.some((keyword) => name.includes(keyword));
+}
+
+function orderProxyNames(proxyNames: string[]): string[] {
+  const preferred = proxyNames.find((name) =>
+    preferredDefaultNodeKeywords.every((keyword) => name.includes(keyword))
+  );
+  if (!preferred) {
+    return proxyNames;
+  }
+
+  return [preferred, ...proxyNames.filter((name) => name !== preferred)];
+}
+
 export const strategyTargets: Record<Exclude<StrategyKey, 'manual'>, string> = {
   auto: '自动选择',
   fallback: '故障转移',
@@ -110,6 +204,10 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
     'unified-delay': true,
     'tcp-concurrent': true,
     'find-process-mode': 'strict',
+    'geodata-mode': false,
+    'geo-auto-update': false,
+    'geodata-loader': 'memconservative',
+    'global-ua': 'Clash Verge/2.3.2',
     profile: {
       'store-selected': true,
       'store-fake-ip': true
@@ -130,9 +228,8 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
         'dns.msftncsi.com',
         'www.msftconnecttest.com'
       ],
-      'default-nameserver': ['223.5.5.5', '119.29.29.29', '1.1.1.1'],
-      nameserver: ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
-      fallback: ['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query']
+      'default-nameserver': ['223.5.5.5', '119.29.29.29'],
+      nameserver: ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query', '1.1.1.1']
     };
   }
 
@@ -210,19 +307,50 @@ function buildSubscriptionConfig(input: MihomoConfigInput): string | null {
       return null;
     }
 
-    const merged = {
-      ...config,
-      ...buildRuntimeOptions(input)
-    };
+    const runtimeOptions = buildRuntimeOptions(input);
+    const merged = { ...config };
+    removeSubscriptionListenerPorts(merged);
+    Object.assign(merged, runtimeOptions);
+    sanitizeDnsConfig(merged);
 
     if (!Array.isArray(merged.rules) || merged.rules.length === 0) {
       merged.rules = buildManagedRules('smart');
+    } else {
+      merged.rules = normalizeSubscriptionRules(merged.rules);
     }
 
     return YAML.stringify(merged);
   } catch {
     return null;
   }
+}
+
+function removeSubscriptionListenerPorts(config: Record<string, unknown>) {
+  delete config.port;
+  delete config['socks-port'];
+  delete config['redir-port'];
+  delete config['tproxy-port'];
+  delete config['mixed-port'];
+}
+
+function normalizeSubscriptionRules(rules: unknown[]): unknown[] {
+  return rules.filter((rule) => {
+    if (typeof rule !== 'string') {
+      return true;
+    }
+
+    const normalizedRule = rule.trim().toUpperCase();
+    return !normalizedRule.startsWith('GEOIP,') && !normalizedRule.startsWith('GEOSITE,');
+  });
+}
+
+function sanitizeDnsConfig(config: Record<string, unknown>) {
+  if (!isRecord(config.dns)) {
+    return;
+  }
+
+  delete config.dns.fallback;
+  delete config.dns['fallback-filter'];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

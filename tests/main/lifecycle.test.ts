@@ -155,4 +155,32 @@ describe('createLifecycleController', () => {
 
     expect(calls).toEqual(['mihomo.start', 'proxy.enable', 'proxy.restore', 'mihomo.stop']);
   });
+
+  it('marks the lifecycle failed when the mihomo process is no longer alive', async () => {
+    let alive = true;
+    const onStatusChange = vi.fn();
+    const controller = createLifecycleController({
+      proxy: {
+        enable: vi.fn(async () => undefined),
+        restore: vi.fn(async () => undefined),
+        repair: vi.fn(async () => undefined)
+      },
+      mihomo: {
+        start: vi.fn(async () => {
+          alive = true;
+        }),
+        stop: vi.fn(async () => {
+          alive = false;
+        }),
+        isRunning: () => alive
+      },
+      onStatusChange
+    });
+
+    await controller.start();
+    alive = false;
+
+    expect(controller.getStatus()).toBe('failed');
+    expect(onStatusChange).toHaveBeenLastCalledWith('failed');
+  });
 });
