@@ -3,6 +3,13 @@ import { ipcChannels, type YouYuApi } from '../shared/ipc';
 
 const api: YouYuApi = {
   getSnapshot: () => ipcRenderer.invoke(ipcChannels.getSnapshot),
+  onSnapshotUpdated: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: Parameters<typeof listener>[0]) => {
+      listener(snapshot);
+    };
+    ipcRenderer.on(ipcChannels.snapshotUpdated, handler);
+    return () => ipcRenderer.off(ipcChannels.snapshotUpdated, handler);
+  },
   start: () => ipcRenderer.invoke(ipcChannels.start),
   stop: () => ipcRenderer.invoke(ipcChannels.stop),
   repair: () => ipcRenderer.invoke(ipcChannels.repair),

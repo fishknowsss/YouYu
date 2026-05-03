@@ -46,6 +46,7 @@ const easyStartSettings: AppSettingsInput = {
   tunEnabled: false,
   allowLan: false
 };
+const actionTimeoutMs = 75000;
 
 export function App() {
   const [page, setPage] = useState<PageKey>('home');
@@ -56,6 +57,14 @@ export function App() {
 
   useEffect(() => {
     void runAction((api) => api.getSnapshot(), '');
+  }, []);
+
+  useEffect(() => {
+    const dispose = window.youyu?.onSnapshotUpdated((next) => {
+      setSnapshot(next);
+      setBusy(false);
+    });
+    return dispose;
   }, []);
 
   useEffect(() => {
@@ -112,7 +121,7 @@ export function App() {
     setBusy(true);
     setMessage('');
     try {
-      const next = await action(api);
+      const next = await withTimeout(action(api), actionTimeoutMs);
       setSnapshot(next);
       setMessage(doneMessage);
     } catch (error) {
@@ -141,11 +150,16 @@ export function App() {
     setBusy(true);
     setMessage('');
     try {
-      const saved = await api.saveSettings({
-        ...easyStartSettings,
-        subscriptionUrl: nextUrl
-      });
-      const next = saved.status === 'running' ? saved : await api.start();
+      const next = await withTimeout(
+        (async () => {
+          const saved = await api.saveSettings({
+            ...easyStartSettings,
+            subscriptionUrl: nextUrl
+          });
+          return saved.status === 'running' ? saved : await api.start();
+        })(),
+        actionTimeoutMs
+      );
       setSnapshot(next);
       setMessage('快速连接已启动');
     } catch (error) {
@@ -214,8 +228,23 @@ function readUsageMode(): UsageMode {
   return 'easy';
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('operation timed out')), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function getActionErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('operation timed out')) return '启动超时';
   if (message.includes('missing subscription url')) return '先填写订阅地址';
   if (message.includes('核心接口未加载')) return '核心接口未加载';
   if (message.includes('mihomo api failed')) return '更新失败';

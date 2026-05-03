@@ -60,6 +60,7 @@ export type AppSnapshot = {
 
 export type YouYuApi = {
   getSnapshot: () => Promise<AppSnapshot>;
+  onSnapshotUpdated: (listener: (snapshot: AppSnapshot) => void) => () => void;
   start: () => Promise<AppSnapshot>;
   stop: () => Promise<AppSnapshot>;
   repair: () => Promise<AppSnapshot>;
@@ -75,6 +76,7 @@ export type YouYuApi = {
 
 export const ipcChannels = {
   getSnapshot: 'youyu:get-snapshot',
+  snapshotUpdated: 'youyu:snapshot-updated',
   start: 'youyu:start',
   stop: 'youyu:stop',
   repair: 'youyu:repair',

@@ -45,18 +45,15 @@ export async function updateSubscriptionNodes(deps: AppActionDeps): Promise<AppS
     throw new Error('missing subscription url');
   }
 
-  if (deps.lifecycle.getStatus() !== 'running') {
+  const wasStopped = deps.lifecycle.getStatus() !== 'running';
+  if (wasStopped) {
     await deps.lifecycle.start();
-    return deps.createSnapshot();
   }
 
-  if (settings.ruleProfile === 'subscription') {
+  if (!wasStopped) {
     await deps.lifecycle.stop();
     await deps.lifecycle.start();
-    return deps.createSnapshot();
   }
-
-  await deps.createMihomoApi({ secret: settings.controllerSecret }).updateProvider();
   return deps.createSnapshot();
 }
 

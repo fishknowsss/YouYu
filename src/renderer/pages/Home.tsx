@@ -26,6 +26,7 @@ export function Home(props: HomeProps) {
 
 function EasyHome(props: HomeProps) {
   const running = props.snapshot.status === 'running';
+  const starting = props.busy && !running;
   const primaryLabel = props.busy ? '处理中' : running ? '停止使用' : '一键连接';
 
   function handlePrimaryAction() {
@@ -47,7 +48,10 @@ function EasyHome(props: HomeProps) {
             onClick={handlePrimaryAction}
             aria-label={primaryLabel}
           >
-            <BrandMark size="lg" />
+            <span className="startup-mark">
+              <BrandMark size="lg" />
+            </span>
+            <span className={`startup-ring ${starting ? 'is-starting' : ''}`} aria-hidden="true" />
           </button>
         </div>
       </section>

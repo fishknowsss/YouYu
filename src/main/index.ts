@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, Tray, ipcMain } from 'electron';
 import { join } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createLifecycleController, type MihomoRuntime } from './lifecycle';
 import { createMihomoApiClient } from './mihomo/api';
@@ -23,9 +23,12 @@ const appId = 'studio.youyu.proxy';
 const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let trayMenu: Menu | null = null;
 let cleanupFinished = false;
 let cleanupStarted = false;
 let isQuitting = false;
+let trayBusy = false;
+let lifecycle: ReturnType<typeof createLifecycleController>;
 let runtimePorts = {
   mixedPort: 7890,
   controllerPort: 9090,
@@ -37,6 +40,11 @@ const appLogs: string[] = [];
 app.setName('YouYu');
 if (process.platform === 'win32') {
   app.setAppUserModelId(appId);
+}
+
+if (process.env.YOUYU_USER_DATA_DIR) {
+  mkdirSync(process.env.YOUYU_USER_DATA_DIR, { recursive: true });
+  app.setPath('userData', process.env.YOUYU_USER_DATA_DIR);
 }
 
 const userDataDir = app.getPath('userData');
@@ -61,8 +69,14 @@ const mihomoRuntime: MihomoRuntime =
         binaryPath: mihomoBinaryPath,
         userDataDir,
         readSettings: () => settingsStore.read(),
-        getPorts: () => runtimePorts,
-        logLine: appendLog
+        getPorts: allocateRuntimePorts,
+        logLine: appendLog,
+        onUnexpectedExit: (reason) => {
+          recordError('mihomo 异常退出', reason);
+          lifecycle.markRuntimeExited?.(reason);
+          refreshTrayMenu();
+          void broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
+        }
       })
     : {
         async start() {
@@ -70,6 +84,9 @@ const mihomoRuntime: MihomoRuntime =
         },
         async stop() {
           return undefined;
+        },
+        isRunning() {
+          return false;
         }
       };
 
@@ -95,6 +112,10 @@ function formatError(error: unknown): string {
 function recordError(context: string, error: unknown) {
   lastError = `${context}: ${formatError(error)}`;
   appendLog(lastError);
+}
+
+function clearLastError() {
+  lastError = undefined;
 }
 
 async function listenOnPort(port: number) {
@@ -136,13 +157,14 @@ async function findAvailablePort(preferred: number): Promise<number> {
 
 async function allocateRuntimePorts() {
   const mixedPort = await findAvailablePort(7890);
-  const controllerPort = await findAvailablePort(mixedPort === 9090 ? 9091 : 9090);
-  const dnsPort = await findAvailablePort(1053);
+  const controllerPort = await getRandomPort();
+  const dnsPort = await getRandomPort();
   runtimePorts = { mixedPort, controllerPort, dnsPort };
   appendLog(`runtime ports: mixed=${mixedPort}, controller=${controllerPort}, dns=${dnsPort}`);
+  return runtimePorts;
 }
 
-const lifecycle = createLifecycleController({
+lifecycle = createLifecycleController({
   proxy: createSystemProxyAdapter({
     shouldManageProxy: async () => {
       const settings = await settingsStore.read();
@@ -150,7 +172,10 @@ const lifecycle = createLifecycleController({
     },
     getProxyServer: () => `127.0.0.1:${runtimePorts.mixedPort}`
   }),
-  mihomo: mihomoRuntime
+  mihomo: mihomoRuntime,
+  onStatusChange: () => {
+    refreshTrayMenu();
+  }
 });
 
 async function createSnapshot(): Promise<AppSnapshot> {
@@ -201,6 +226,20 @@ async function createSnapshot(): Promise<AppSnapshot> {
   };
 }
 
+function sendSnapshotToWindows(snapshot: AppSnapshot) {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send(ipcChannels.snapshotUpdated, snapshot);
+    }
+  });
+}
+
+async function broadcastSnapshot(): Promise<AppSnapshot> {
+  const snapshot = await createSnapshot();
+  sendSnapshotToWindows(snapshot);
+  return snapshot;
+}
+
 function createDefaultStrategies(active: string): StrategyGroup[] {
   return (Object.entries(strategyTargets) as Array<[Exclude<keyof typeof strategyTargets, 'manual'>, string]>).map(
     ([key, target]) => ({
@@ -221,36 +260,68 @@ function createRuntimeMihomoApi(options: { secret: string }) {
   });
 }
 
+async function withTrayRefresh<T>(task: () => Promise<T>): Promise<T> {
+  try {
+    return await task();
+  } finally {
+    refreshTrayMenu();
+  }
+}
+
+async function startProxy(): Promise<AppSnapshot> {
+  await lifecycle.start();
+  clearLastError();
+  return createSnapshot();
+}
+
+async function stopProxy(): Promise<AppSnapshot> {
+  await lifecycle.stop();
+  return createSnapshot();
+}
+
+async function repairProxy(): Promise<AppSnapshot> {
+  await lifecycle.repair();
+  clearLastError();
+  return createSnapshot();
+}
+
 function registerIpc() {
   ipcMain.handle(ipcChannels.getSnapshot, createSnapshot);
   ipcMain.handle(ipcChannels.start, async () => {
-    try {
-      await lifecycle.start();
-      lastError = undefined;
-      return createSnapshot();
-    } catch (error) {
-      recordError('启动失败', error);
-      throw error;
-    }
+    return withTrayRefresh(async () => {
+      try {
+        const snapshot = await startProxy();
+        sendSnapshotToWindows(snapshot);
+        return snapshot;
+      } catch (error) {
+        recordError('启动失败', error);
+        throw error;
+      }
+    });
   });
   ipcMain.handle(ipcChannels.stop, async () => {
-    try {
-      await lifecycle.stop();
-      return createSnapshot();
-    } catch (error) {
-      recordError('停止失败', error);
-      throw error;
-    }
+    return withTrayRefresh(async () => {
+      try {
+        const snapshot = await stopProxy();
+        sendSnapshotToWindows(snapshot);
+        return snapshot;
+      } catch (error) {
+        recordError('停止失败', error);
+        throw error;
+      }
+    });
   });
   ipcMain.handle(ipcChannels.repair, async () => {
-    try {
-      await lifecycle.repair();
-      lastError = undefined;
-      return createSnapshot();
-    } catch (error) {
-      recordError('修复失败', error);
-      throw error;
-    }
+    return withTrayRefresh(async () => {
+      try {
+        const snapshot = await repairProxy();
+        sendSnapshotToWindows(snapshot);
+        return snapshot;
+      } catch (error) {
+        recordError('修复失败', error);
+        throw error;
+      }
+    });
   });
   ipcMain.handle(ipcChannels.selectNode, async (_event, name: string) => {
     const settings = await settingsStore.read();
@@ -312,22 +383,26 @@ function registerIpc() {
     });
   });
   ipcMain.handle(ipcChannels.updateSubscription, async () => {
-    return updateSubscriptionNodes({
-      settingsStore,
-      lifecycle,
-      createMihomoApi: createRuntimeMihomoApi,
-      createSnapshot
+    return withTrayRefresh(async () => {
+      return updateSubscriptionNodes({
+        settingsStore,
+        lifecycle,
+        createMihomoApi: createRuntimeMihomoApi,
+        createSnapshot
+      });
     });
   });
   ipcMain.handle(ipcChannels.saveSettings, async (_event, settings) => {
-    return saveSubscriptionSettings(
-      {
-        settingsStore,
-        lifecycle,
-        createSnapshot
-      },
-      settings
-    );
+    return withTrayRefresh(async () => {
+      return saveSubscriptionSettings(
+        {
+          settingsStore,
+          lifecycle,
+          createSnapshot
+        },
+        settings
+      );
+    });
   });
 }
 
@@ -347,34 +422,74 @@ function showMainWindow() {
 function refreshTrayMenu() {
   if (!tray) return;
 
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: '显示 YouYu',
-        click: showMainWindow
-      },
-      {
-        label: '停止代理',
-        click: () => {
-          void lifecycle.stop().catch((error) => console.error('stop from tray failed', error));
-        }
-      },
-      {
-        label: '修复网络',
-        click: () => {
-          void lifecycle.repair().catch((error) => console.error('repair from tray failed', error));
-        }
-      },
-      { type: 'separator' },
-      {
-        label: '退出',
-        click: () => {
-          isQuitting = true;
-          void cleanupBeforeExit();
-        }
+  const status = lifecycle.getStatus();
+  const running = status === 'running';
+  const failed = status === 'failed';
+  const statusLabel = trayBusy ? '处理中' : running ? '运行中' : failed ? '启动失败' : '已停止';
+  const primaryLabel = running ? '停止代理' : '启动代理';
+  tray.setToolTip(`YouYu - ${statusLabel}`);
+  trayMenu = Menu.buildFromTemplate([
+    {
+      label: `状态：${statusLabel}`,
+      enabled: false
+    },
+    { type: 'separator' },
+    {
+      label: '打开 YouYu',
+      click: showMainWindow
+    },
+    {
+      label: primaryLabel,
+      enabled: !trayBusy,
+      click: () => {
+        const currentStatus = lifecycle.getStatus();
+        const actionLabel = currentStatus === 'running' ? '停止代理' : '启动代理';
+        void runTrayAction(actionLabel, async () => {
+          if (lifecycle.getStatus() === 'running') {
+            return stopProxy();
+          }
+
+          return startProxy();
+        });
       }
-    ])
-  );
+    },
+    {
+      label: '修复网络',
+      enabled: !trayBusy,
+      click: () => {
+        void runTrayAction('修复网络', async () => {
+          return repairProxy();
+        });
+      }
+    },
+    { type: 'separator' },
+    {
+      label: '退出',
+      enabled: !trayBusy,
+      click: () => {
+        isQuitting = true;
+        void cleanupBeforeExit();
+      }
+    }
+  ]);
+  tray.setContextMenu(trayMenu);
+}
+
+async function runTrayAction(label: string, action: () => Promise<AppSnapshot>) {
+  if (trayBusy) return;
+  trayBusy = true;
+  refreshTrayMenu();
+  try {
+    const snapshot = await action();
+    sendSnapshotToWindows(snapshot);
+  } catch (error) {
+    recordError(`${label}失败`, error);
+    console.error(`${label} from tray failed`, error);
+    await broadcastSnapshot().catch((broadcastError) => console.error('broadcast snapshot failed', broadcastError));
+  } finally {
+    trayBusy = false;
+    refreshTrayMenu();
+  }
 }
 
 function createTray() {
@@ -384,6 +499,7 @@ function createTray() {
   tray.setToolTip('YouYu');
   tray.on('click', showMainWindow);
   tray.on('double-click', showMainWindow);
+  tray.on('right-click', refreshTrayMenu);
   refreshTrayMenu();
 }
 
