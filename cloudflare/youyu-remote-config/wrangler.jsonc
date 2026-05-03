@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "youyu-remote-config",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-03",
+  "routes": [
+    {
+      "pattern": "youyu.fishknowsss.com",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "DEFAULT_NODE_KEYWORDS": "香港,HK,Hong Kong"
+  }
+}

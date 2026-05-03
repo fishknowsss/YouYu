@@ -17,7 +17,7 @@ extraResources:
     to: mihomo
     filter:
       - "**/*"
-  - from: resources/default-subscription.txt
+  - from: resources/generated/default-subscription.txt
     to: default-subscription.txt
   - from: build/icon.png
     to: assets/icon.png

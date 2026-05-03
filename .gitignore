@@ -8,3 +8,5 @@ dist/
 coverage/
 .env
 .env.*
+resources/default-subscription.in.txt
+resources/generated/

@@ -150,8 +150,15 @@ function findDirectSelectorForNode(proxies: Record<string, MihomoProxyItem>, fal
   return Object.entries(proxies).find(([_name, item]) => item.all?.includes(node))?.[0] ?? fallbackSelector;
 }
 
-function sortDefaultCandidates(nodes: string[]): string[] {
+function sortDefaultCandidates(nodes: string[], remoteKeywords: string[] = []): string[] {
   const preferred: string[] = [];
+  if (remoteKeywords.length > 0) {
+    const matched = nodes.filter((node) => remoteKeywords.every((keyword) => node.includes(keyword)));
+    for (const node of matched) {
+      if (!preferred.includes(node)) preferred.push(node);
+    }
+  }
+
   for (const keywords of preferredDefaultNodeKeywordSets) {
     const matched = nodes.filter((node) => keywords.every((keyword) => node.includes(keyword)));
     for (const node of matched) {
@@ -162,8 +169,8 @@ function sortDefaultCandidates(nodes: string[]): string[] {
   return [...preferred, ...nodes.filter((node) => !preferred.includes(node))];
 }
 
-function pickDefaultNode(nodes: string[]): string | undefined {
-  return sortDefaultCandidates(nodes)[0];
+function pickDefaultNode(nodes: string[], remoteKeywords: string[] = []): string | undefined {
+  return sortDefaultCandidates(nodes, remoteKeywords)[0];
 }
 
 function isNoticeNodeName(name: string): boolean {
@@ -205,6 +212,7 @@ async function refreshProviders(port: number, secret: string): Promise<void> {
 async function waitForUsableProxies(
   secret: string,
   port: number,
+  defaultNodeKeywords: string[],
   logLine?: (line: string) => void
 ): Promise<void> {
   const deadline = Date.now() + 25000;
@@ -219,7 +227,7 @@ async function waitForUsableProxies(
     lastSummary = `selector=${selector?.name ?? 'missing'}, current=${currentNode || 'missing'}, nodes=${nodes.length}`;
 
     if (nodes.length > 0) {
-      const target = pickDefaultNode(nodes);
+      const target = pickDefaultNode(nodes, defaultNodeKeywords);
       if (target && (!currentNode || builtInProxyNames.has(currentNode) || currentNode !== target)) {
         const group = findDirectSelectorForNode(proxies, selector?.name ?? selectorName, target);
         await selectNode(port, secret, group, target);
@@ -425,7 +433,12 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
               ? options.waitForReady(settings.controllerSecret)
               : (async () => {
                   await waitForController(settings.controllerSecret, ports.controllerPort);
-                  await waitForUsableProxies(settings.controllerSecret, ports.controllerPort, options.logLine);
+                  await waitForUsableProxies(
+                    settings.controllerSecret,
+                    ports.controllerPort,
+                    settings.defaultNodeKeywords,
+                    options.logLine
+                  );
                 })(),
             earlyFailure
           ]);
