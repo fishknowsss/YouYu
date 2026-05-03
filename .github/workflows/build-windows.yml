@@ -43,8 +43,15 @@ jobs:
       - name: Smoke packaged output
         run: npm run smoke
 
+      - name: Read package version
+        id: package
+        run: |
+          $version = node -p "require('./package.json').version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
       - name: Upload installer
         uses: actions/upload-artifact@v7
         with:
-          name: youyu-windows
-          path: release/*.exe
+          name: youyu-windows-x64-${{ steps.package.outputs.version }}
+          path: release/YouYu-${{ steps.package.outputs.version }}-x64.exe
+          if-no-files-found: error

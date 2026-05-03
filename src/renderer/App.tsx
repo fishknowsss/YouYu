@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AppSettingsInput, AppSnapshot, MihomoMode, StrategyKey } from '../shared/ipc';
+import type { AppSettingsInput, AppSnapshot, MihomoMode } from '../shared/ipc';
 import { AppShell, type PageKey, type UsageMode } from './components/AppShell';
 import { Home } from './pages/Home';
 import { NodeSelect } from './pages/NodeSelect';
@@ -30,10 +30,11 @@ const emptySnapshot: AppSnapshot = {
     uploadTotal: 0,
     downloadTotal: 0
   },
-  subscriptionUrl: ''
+  subscriptionUrl: '',
+  diagnostics: {
+    logs: []
+  }
 };
-
-const usageModeStorageKey = 'youyu:usage-mode';
 
 const easyStartSettings: AppSettingsInput = {
   mode: 'rule',
@@ -56,6 +57,49 @@ export function App() {
   useEffect(() => {
     void runAction((api) => api.getSnapshot(), '');
   }, []);
+
+  useEffect(() => {
+    const advancedSequence = [
+      'ArrowUp',
+      'ArrowUp',
+      'ArrowDown',
+      'ArrowDown',
+      'ArrowLeft',
+      'ArrowRight',
+      'ArrowLeft',
+      'ArrowRight',
+      'KeyB',
+      'KeyA'
+    ];
+    let sequenceIndex = 0;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+
+      const expectedKey = advancedSequence[sequenceIndex];
+      if (event.code === expectedKey) {
+        sequenceIndex += 1;
+        if (sequenceIndex === advancedSequence.length) {
+          changeUsageMode(usageMode === 'advanced' ? 'easy' : 'advanced');
+          sequenceIndex = 0;
+        }
+        return;
+      }
+
+      sequenceIndex = event.code === advancedSequence[0] ? 1 : 0;
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [usageMode]);
 
   async function runAction(action: (api: NonNullable<Window['youyu']>) => Promise<AppSnapshot>, doneMessage: string) {
     const api = window.youyu;
@@ -118,12 +162,6 @@ export function App() {
     if (next === 'easy') {
       setPage('home');
     }
-
-    try {
-      window.localStorage.setItem(usageModeStorageKey, next);
-    } catch {
-      // localStorage can be unavailable in restricted previews.
-    }
   }
 
   return (
@@ -131,7 +169,6 @@ export function App() {
       page={page}
       usageMode={usageMode}
       onPageChange={setPage}
-      onUsageModeChange={changeUsageMode}
     >
       {page === 'home' && (
         <Home
@@ -139,18 +176,12 @@ export function App() {
           snapshot={snapshot}
           busy={busy}
           message={message}
-          onUsageModeChange={changeUsageMode}
           onQuickStart={quickStart}
           onStart={() => runAction((api) => api.start(), '已启动')}
           onStop={() => runAction((api) => api.stop(), '已停止')}
           onRepair={() => runAction((api) => api.repair(), '已修复')}
           onModeChange={(mode: MihomoMode) => runAction((api) => api.setMode(mode), '模式已切换')}
-          onStrategyChange={(strategy: StrategyKey) =>
-            runAction((api) => api.selectStrategy(strategy), '策略已切换')
-          }
-          onCloseConnections={() => runAction((api) => api.closeConnections(), '连接已清理')}
-          onNodeSelect={() => setPage('nodes')}
-          onSettings={() => setPage('settings')}
+          onUsageModeChange={changeUsageMode}
         />
       )}
       {page === 'nodes' && (
@@ -180,11 +211,7 @@ export function App() {
 }
 
 function readUsageMode(): UsageMode {
-  try {
-    return window.localStorage.getItem(usageModeStorageKey) === 'advanced' ? 'advanced' : 'easy';
-  } catch {
-    return 'easy';
-  }
+  return 'easy';
 }
 
 function getActionErrorMessage(error: unknown): string {

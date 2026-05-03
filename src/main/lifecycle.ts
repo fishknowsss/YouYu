@@ -41,9 +41,9 @@ export function createLifecycleController(deps: {
   async function startInternal() {
     if (status === 'running') return;
 
-    await deps.proxy.enable();
     try {
       await deps.mihomo.start();
+      await deps.proxy.enable();
       status = 'running';
     } catch (error) {
       await rollbackFailedStart(error);
@@ -77,9 +77,10 @@ export function createLifecycleController(deps: {
           return;
         }
 
-        await deps.mihomo.stop();
+        await Promise.allSettled([deps.proxy.restore(), deps.mihomo.stop()]);
         try {
           await deps.mihomo.start();
+          await deps.proxy.enable();
           status = 'running';
         } catch (error) {
           await rollbackFailedStart(error);

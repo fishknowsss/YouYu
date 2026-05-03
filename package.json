@@ -1,6 +1,6 @@
 {
   "name": "youyu",
-  "version": "0.3.6",
+  "version": "0.4.10",
   "private": true,
   "author": "118 Studio",
   "description": "YouYu Windows proxy desktop app",
@@ -11,10 +11,12 @@
     "dev:ui": "vite --host 127.0.0.1 --port 5173",
     "assets": "node scripts/run-brand-assets.mjs",
     "cache:electron:win": "node scripts/cache-electron-win.mjs",
+    "clean:release": "node scripts/clean-release.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && electron-vite build",
-    "dist:win": "npm run assets && npm run build && npm run cache:electron:win && node scripts/run-electron-builder.mjs",
+    "dist:win": "npm run clean:release && npm run assets && npm run build && npm run cache:electron:win && node scripts/run-electron-builder.mjs && npm run validate:release",
+    "validate:release": "tsx scripts/validate-windows-release.ts",
     "smoke": "tsx scripts/smoke-test.ts"
   },
   "devDependencies": {

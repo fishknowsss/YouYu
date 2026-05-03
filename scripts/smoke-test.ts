@@ -11,10 +11,10 @@ const requiredPaths = [
   'src/renderer/assets/youyu-icon.png',
   'build/source-icon.png',
   'build/icon.ico',
+  'build/tray-icon.png',
   'build/installerSidebar.bmp',
-  'build/installerHeader.bmp',
   'build/installer.nsh',
-  'build/license_zh_CN.txt',
+  'resources/default-subscription.txt',
   'resources/mihomo/win-x64/mihomo.exe'
 ];
 
@@ -42,7 +42,9 @@ if (await exists(unpackedDir)) {
   for (const path of [
     'release/win-unpacked/YouYu.exe',
     'release/win-unpacked/resources/app.asar',
+    'release/win-unpacked/resources/default-subscription.txt',
     'release/win-unpacked/resources/assets/icon.png',
+    'release/win-unpacked/resources/assets/tray-icon.png',
     'release/win-unpacked/resources/mihomo/win-x64/mihomo.exe'
   ]) {
     await assertExists(path);

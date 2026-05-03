@@ -12,14 +12,13 @@ BUILD = ROOT / "build"
 SOURCE_ICON = ROOT / "youyu.png"
 RENDERER_ICON = ROOT / "src" / "renderer" / "assets" / "youyu-icon.png"
 
-INK = (39, 27, 58, 255)
-INK_SOFT = (82, 57, 119, 255)
+INK = (36, 26, 51, 255)
+INK_SOFT = (77, 63, 93, 255)
 PAPER = (252, 249, 255, 255)
-LAVENDER = (238, 226, 255, 255)
+LAVENDER = (239, 229, 255, 255)
 LAVENDER_SOFT = (247, 241, 255, 255)
 PURPLE = (143, 88, 215, 255)
-PURPLE_DARK = (104, 58, 169, 255)
-MINT = (52, 155, 132, 255)
+PURPLE_DARK = (113, 68, 186, 255)
 WHITE = (255, 255, 255, 255)
 
 
@@ -182,6 +181,60 @@ def resize_image(src, width: int, height: int):
     return out
 
 
+def transparent_bounds(src, threshold: int = 10) -> tuple[int, int, int, int]:
+    xs: list[int] = []
+    ys: list[int] = []
+    for y, row in enumerate(src):
+        for x, pixel in enumerate(row):
+            if pixel[3] > threshold:
+                xs.append(x)
+                ys.append(y)
+
+    if not xs:
+        return 0, 0, len(src[0]), len(src)
+
+    return min(xs), min(ys), max(xs) + 1, max(ys) + 1
+
+
+def crop_image(src, x0: int, y0: int, x1: int, y1: int):
+    return [row[x0:x1] for row in src[y0:y1]]
+
+
+def fit_icon_subject(src, size: int, padding: int):
+    x0, y0, x1, y1 = transparent_bounds(src)
+    cropped = crop_image(src, x0, y0, x1, y1)
+    target = max(1, size - padding * 2)
+    src_height = len(cropped)
+    src_width = len(cropped[0])
+    if src_width >= src_height:
+        width = target
+        height = max(1, round(target * src_height / src_width))
+    else:
+        height = target
+        width = max(1, round(target * src_width / src_height))
+
+    resized = resize_image(cropped, width, height)
+    out = new_image(size, size, (0, 0, 0, 0))
+    paste(out, resized, (size - width) // 2, (size - height) // 2)
+    return out
+
+
+def icon_padding(size: int) -> int:
+    if size <= 16:
+        return 0
+    if size <= 32:
+        return 1
+    if size <= 48:
+        return 2
+    if size <= 64:
+        return 3
+    if size <= 128:
+        return 6
+    if size <= 256:
+        return 12
+    return 20
+
+
 def write_png(path: Path, img):
     height = len(img)
     width = len(img[0])
@@ -301,25 +354,27 @@ def vertical_gradient(width: int, height: int, top, bottom):
 
 
 def sidebar(path: Path, icon):
-    img = vertical_gradient(164, 314, PAPER, LAVENDER)
-    draw_circle(img, 142, 24, 58, (224, 202, 255, 170))
-    draw_circle(img, 22, 278, 84, (197, 161, 248, 130))
-    draw_rounded_rect(img, 28, 26, 136, 134, 28, WHITE)
-    draw_rounded_rect(img, 36, 184, 128, 276, 22, (126, 75, 196, 245))
-    draw_circle(img, 55, 232, 8, (255, 255, 255, 180))
-    draw_circle(img, 82, 222, 6, (255, 255, 255, 150))
-    draw_circle(img, 108, 238, 10, (255, 255, 255, 120))
-    paste(img, resize_image(icon, 86, 86), 39, 37)
+    width = 164
+    height = 220
+    img = vertical_gradient(width, height, (249, 245, 255, 255), (232, 219, 250, 255))
+    draw_rect(img, 0, 0, width, height, (255, 255, 255, 26))
+    draw_rect(img, 0, 0, 5, height, PURPLE)
+    draw_circle(img, 138, 28, 60, (255, 255, 255, 74))
+    draw_circle(img, 18, 196, 66, (255, 255, 255, 62))
+    for offset, alpha in ((10, 28), (6, 36), (3, 44)):
+        draw_rounded_rect(img, 30 + offset, 60 + offset, 134 + offset, 164 + offset, 26, (118, 86, 159, alpha))
+    draw_rounded_rect(img, 29, 56, 135, 162, 28, (255, 255, 255, 205))
+    draw_rounded_rect(img, 38, 65, 126, 153, 24, (245, 237, 255, 245))
+    paste(img, fit_icon_subject(icon, 100, 0), 32, 59)
+    draw_rounded_rect(img, 42, 176, 122, 182, 3, (143, 88, 215, 210))
+    draw_rounded_rect(img, 52, 196, 112, 201, 3, (104, 88, 122, 190))
     write_bmp(path, img)
 
 
 def header(path: Path, icon):
-    img = new_image(150, 57, PAPER)
-    draw_rect(img, 0, 52, 150, 57, PURPLE)
-    draw_rounded_rect(img, 7, 9, 47, 49, 12, WHITE)
-    paste(img, resize_image(icon, 32, 32), 11, 13)
-    draw_rounded_rect(img, 57, 16, 132, 23, 4, INK)
-    draw_rounded_rect(img, 57, 31, 112, 37, 3, MINT)
+    img = vertical_gradient(150, 57, (250, 246, 255, 255), (241, 232, 254, 255))
+    draw_rect(img, 0, 53, 150, 57, PURPLE)
+    paste(img, fit_icon_subject(icon, 42, 1), 14, 8)
     write_bmp(path, img)
 
 
@@ -329,22 +384,22 @@ def main():
 
     BUILD.mkdir(exist_ok=True)
     shutil.copyfile(SOURCE_ICON, BUILD / "source-icon.png")
-    shutil.copyfile(SOURCE_ICON, RENDERER_ICON)
 
     source_icon = read_png(SOURCE_ICON)
+    write_png(RENDERER_ICON, fit_icon_subject(source_icon, 512, icon_padding(512)))
     sizes = [16, 24, 32, 48, 64, 128, 256]
     png_entries = []
     for size in sizes:
-        img = resize_image(source_icon, size, size)
+        img = fit_icon_subject(source_icon, size, icon_padding(size))
         png_path = BUILD / f"icon-{size}.png"
         write_png(png_path, img)
         png_entries.append((size, png_path.read_bytes()))
 
-    write_png(BUILD / "icon.png", resize_image(source_icon, 512, 512))
+    write_png(BUILD / "icon.png", fit_icon_subject(source_icon, 512, icon_padding(512)))
+    write_png(BUILD / "tray-icon.png", fit_icon_subject(source_icon, 32, 1))
     write_ico(BUILD / "icon.ico", png_entries)
     sidebar(BUILD / "installerSidebar.bmp", source_icon)
     sidebar(BUILD / "uninstallerSidebar.bmp", source_icon)
-    header(BUILD / "installerHeader.bmp", source_icon)
 
 
 if __name__ == "__main__":

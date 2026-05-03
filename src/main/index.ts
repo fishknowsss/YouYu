@@ -1,5 +1,7 @@
 import { app, BrowserWindow, Menu, Tray, ipcMain } from 'electron';
 import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { createLifecycleController, type MihomoRuntime } from './lifecycle';
 import { createMihomoApiClient } from './mihomo/api';
 import { strategyLabels, strategyTargets } from './mihomo/config';
@@ -24,26 +26,43 @@ let tray: Tray | null = null;
 let cleanupFinished = false;
 let cleanupStarted = false;
 let isQuitting = false;
+let runtimePorts = {
+  mixedPort: 7890,
+  controllerPort: 9090,
+  dnsPort: 1053
+};
+let lastError: string | undefined;
+const appLogs: string[] = [];
 
 app.setName('YouYu');
 if (process.platform === 'win32') {
   app.setAppUserModelId(appId);
 }
 
-const settingsStore = new SettingsStore(app.getPath('userData'));
 const userDataDir = app.getPath('userData');
+const defaultSubscriptionPath = isDev
+  ? join(process.cwd(), 'resources/default-subscription.txt')
+  : join(process.resourcesPath, 'default-subscription.txt');
+const settingsStore = new SettingsStore(app.getPath('userData'), {
+  defaultSubscriptionUrl: readDefaultSubscriptionUrl(defaultSubscriptionPath)
+});
 const mihomoBinaryPath = isDev
   ? join(process.cwd(), 'resources/mihomo/win-x64/mihomo.exe')
   : join(process.resourcesPath, 'mihomo/win-x64/mihomo.exe');
 const windowIconPath = isDev
   ? join(process.cwd(), 'build/icon.png')
   : join(process.resourcesPath, 'assets/icon.png');
+const trayIconPath = isDev
+  ? join(process.cwd(), 'build/tray-icon.png')
+  : join(process.resourcesPath, 'assets/tray-icon.png');
 const mihomoRuntime: MihomoRuntime =
   process.platform === 'win32'
     ? createMihomoRuntime({
         binaryPath: mihomoBinaryPath,
         userDataDir,
-        readSettings: () => settingsStore.read()
+        readSettings: () => settingsStore.read(),
+        getPorts: () => runtimePorts,
+        logLine: appendLog
       })
     : {
         async start() {
@@ -53,19 +72,93 @@ const mihomoRuntime: MihomoRuntime =
           return undefined;
         }
       };
+
+function readDefaultSubscriptionUrl(path: string): string {
+  if (!existsSync(path)) return '';
+
+  return readFileSync(path, 'utf8').trim();
+}
+
+function appendLog(message: string) {
+  const line = `${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ${message}`;
+  appLogs.push(line);
+  if (appLogs.length > 200) {
+    appLogs.splice(0, appLogs.length - 200);
+  }
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function recordError(context: string, error: unknown) {
+  lastError = `${context}: ${formatError(error)}`;
+  appendLog(lastError);
+}
+
+async function listenOnPort(port: number) {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve());
+  });
+  return server;
+}
+
+async function closeServer(server: ReturnType<typeof createServer>) {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+async function canListen(port: number): Promise<boolean> {
+  try {
+    const server = await listenOnPort(port);
+    await closeServer(server);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getRandomPort(): Promise<number> {
+  const server = await listenOnPort(0);
+  const address = server.address();
+  await closeServer(server);
+  return typeof address === 'object' && address ? address.port : 0;
+}
+
+async function findAvailablePort(preferred: number): Promise<number> {
+  for (let port = preferred; port < preferred + 80; port += 1) {
+    if (await canListen(port)) return port;
+  }
+  return getRandomPort();
+}
+
+async function allocateRuntimePorts() {
+  const mixedPort = await findAvailablePort(7890);
+  const controllerPort = await findAvailablePort(mixedPort === 9090 ? 9091 : 9090);
+  const dnsPort = await findAvailablePort(1053);
+  runtimePorts = { mixedPort, controllerPort, dnsPort };
+  appendLog(`runtime ports: mixed=${mixedPort}, controller=${controllerPort}, dns=${dnsPort}`);
+}
+
 const lifecycle = createLifecycleController({
   proxy: createSystemProxyAdapter({
     shouldManageProxy: async () => {
       const settings = await settingsStore.read();
       return settings.systemProxyEnabled;
-    }
+    },
+    getProxyServer: () => `127.0.0.1:${runtimePorts.mixedPort}`
   }),
   mihomo: mihomoRuntime
 });
 
 async function createSnapshot(): Promise<AppSnapshot> {
   const settings = await settingsStore.read();
-  const mihomoApi = createMihomoApiClient({ secret: settings.controllerSecret });
+  const mihomoApi = createMihomoApiClient({
+    secret: settings.controllerSecret,
+    controllerPort: runtimePorts.controllerPort
+  });
   const running = lifecycle.getStatus() === 'running';
   const [nodes, strategies, runtime, currentNode] = running
     ? await Promise.all([
@@ -100,7 +193,11 @@ async function createSnapshot(): Promise<AppSnapshot> {
       allowLan: settings.allowLan
     },
     runtime,
-    subscriptionUrl: settings.subscriptionUrl
+    subscriptionUrl: settings.subscriptionUrl,
+    diagnostics: {
+      lastError,
+      logs: appLogs.slice(-80)
+    }
   };
 }
 
@@ -117,23 +214,50 @@ function createDefaultStrategies(active: string): StrategyGroup[] {
   );
 }
 
+function createRuntimeMihomoApi(options: { secret: string }) {
+  return createMihomoApiClient({
+    ...options,
+    controllerPort: runtimePorts.controllerPort
+  });
+}
+
 function registerIpc() {
   ipcMain.handle(ipcChannels.getSnapshot, createSnapshot);
   ipcMain.handle(ipcChannels.start, async () => {
-    await lifecycle.start();
-    return createSnapshot();
+    try {
+      await lifecycle.start();
+      lastError = undefined;
+      return createSnapshot();
+    } catch (error) {
+      recordError('启动失败', error);
+      throw error;
+    }
   });
   ipcMain.handle(ipcChannels.stop, async () => {
-    await lifecycle.stop();
-    return createSnapshot();
+    try {
+      await lifecycle.stop();
+      return createSnapshot();
+    } catch (error) {
+      recordError('停止失败', error);
+      throw error;
+    }
   });
   ipcMain.handle(ipcChannels.repair, async () => {
-    await lifecycle.repair();
-    return createSnapshot();
+    try {
+      await lifecycle.repair();
+      lastError = undefined;
+      return createSnapshot();
+    } catch (error) {
+      recordError('修复失败', error);
+      throw error;
+    }
   });
   ipcMain.handle(ipcChannels.selectNode, async (_event, name: string) => {
     const settings = await settingsStore.read();
-    const mihomoApi = createMihomoApiClient({ secret: settings.controllerSecret });
+    const mihomoApi = createMihomoApiClient({
+      secret: settings.controllerSecret,
+      controllerPort: runtimePorts.controllerPort
+    });
     await mihomoApi.selectNode(name);
     await settingsStore.update({ strategy: 'manual' });
     return createSnapshot();
@@ -143,7 +267,7 @@ function registerIpc() {
       {
         settingsStore,
         lifecycle,
-        createMihomoApi: createMihomoApiClient,
+        createMihomoApi: createRuntimeMihomoApi,
         createSnapshot
       },
       strategy
@@ -154,7 +278,7 @@ function registerIpc() {
       {
         settingsStore,
         lifecycle,
-        createMihomoApi: createMihomoApiClient,
+        createMihomoApi: createRuntimeMihomoApi,
         createSnapshot
       },
       mode
@@ -165,7 +289,7 @@ function registerIpc() {
       {
         settingsStore,
         lifecycle,
-        createMihomoApi: createMihomoApiClient,
+        createMihomoApi: createRuntimeMihomoApi,
         createSnapshot
       },
       name
@@ -175,7 +299,7 @@ function registerIpc() {
     return testAllMihomoNodes({
       settingsStore,
       lifecycle,
-      createMihomoApi: createMihomoApiClient,
+      createMihomoApi: createRuntimeMihomoApi,
       createSnapshot
     });
   });
@@ -183,7 +307,7 @@ function registerIpc() {
     return closeMihomoConnections({
       settingsStore,
       lifecycle,
-      createMihomoApi: createMihomoApiClient,
+      createMihomoApi: createRuntimeMihomoApi,
       createSnapshot
     });
   });
@@ -191,7 +315,7 @@ function registerIpc() {
     return updateSubscriptionNodes({
       settingsStore,
       lifecycle,
-      createMihomoApi: createMihomoApiClient,
+      createMihomoApi: createRuntimeMihomoApi,
       createSnapshot
     });
   });
@@ -256,7 +380,7 @@ function refreshTrayMenu() {
 function createTray() {
   if (tray || process.platform !== 'win32') return;
 
-  tray = new Tray(windowIconPath);
+  tray = new Tray(trayIconPath);
   tray.setToolTip('YouYu');
   tray.on('click', showMainWindow);
   tray.on('double-click', showMainWindow);
@@ -265,16 +389,23 @@ function createTray() {
 
 async function createWindow() {
   const win = new BrowserWindow({
-    width: 1040,
-    height: 720,
-    minWidth: 820,
-    minHeight: 620,
+    width: 940,
+    height: 620,
+    minWidth: 900,
+    minHeight: 600,
+    useContentSize: true,
     title: 'YouYu',
     icon: windowIconPath,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#f5f0fb',
+      symbolColor: '#4c3f5d',
+      height: 30
+    },
     show: false,
     skipTaskbar: false,
     autoHideMenuBar: true,
-    backgroundColor: '#fbf9ff',
+    backgroundColor: '#f5f0fb',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
@@ -335,7 +466,8 @@ if (!gotSingleInstanceLock) {
     showMainWindow();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    await allocateRuntimePorts();
     registerIpc();
     createTray();
     void createWindow();

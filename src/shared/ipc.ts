@@ -24,6 +24,11 @@ export type RuntimeStats = {
   downloadTotal: number;
 };
 
+export type AppDiagnostics = {
+  lastError?: string;
+  logs: string[];
+};
+
 export type FeatureSettings = {
   systemProxyEnabled: boolean;
   dnsEnhanced: boolean;
@@ -50,6 +55,7 @@ export type AppSnapshot = {
   features: FeatureSettings;
   runtime: RuntimeStats;
   subscriptionUrl: string;
+  diagnostics: AppDiagnostics;
 };
 
 export type YouYuApi = {

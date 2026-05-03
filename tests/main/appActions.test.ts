@@ -25,6 +25,9 @@ function makeSnapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
       downloadTotal: 0
     },
     subscriptionUrl: 'https://example.com/sub',
+    diagnostics: {
+      logs: []
+    },
     ...overrides
   };
 }

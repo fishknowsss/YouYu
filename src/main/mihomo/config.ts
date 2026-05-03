@@ -13,6 +13,9 @@ export type MihomoConfigInput = {
   tunEnabled?: boolean;
   allowLan?: boolean;
   subscriptionConfigText?: string;
+  mixedPort?: number;
+  controllerPort?: number;
+  dnsPort?: number;
 };
 
 export function buildMihomoConfig(input: MihomoConfigInput): string {
@@ -97,11 +100,11 @@ export const strategyLabels: Record<StrategyKey, string> = {
 
 function buildRuntimeOptions(input: MihomoConfigInput) {
   const options: Record<string, unknown> = {
-    'mixed-port': 7890,
+    'mixed-port': input.mixedPort ?? 7890,
     'allow-lan': input.allowLan ?? false,
     mode: input.mode ?? 'rule',
     'log-level': 'warning',
-    'external-controller': '127.0.0.1:9090',
+    'external-controller': `127.0.0.1:${input.controllerPort ?? 9090}`,
     secret: input.secret,
     ipv6: false,
     'unified-delay': true,
@@ -116,7 +119,7 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
   if (input.dnsEnhanced ?? true) {
     options.dns = {
       enable: true,
-      listen: '127.0.0.1:1053',
+      listen: `127.0.0.1:${input.dnsPort ?? 1053}`,
       ipv6: false,
       'enhanced-mode': 'fake-ip',
       'fake-ip-range': '198.18.0.1/16',

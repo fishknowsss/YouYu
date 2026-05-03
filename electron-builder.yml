@@ -17,8 +17,12 @@ extraResources:
     to: mihomo
     filter:
       - "**/*"
+  - from: resources/default-subscription.txt
+    to: default-subscription.txt
   - from: build/icon.png
     to: assets/icon.png
+  - from: build/tray-icon.png
+    to: assets/tray-icon.png
 win:
   icon: build/icon.ico
   target:
@@ -29,7 +33,7 @@ win:
 nsis:
   oneClick: false
   perMachine: false
-  allowToChangeInstallationDirectory: true
+  allowToChangeInstallationDirectory: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: YouYu
@@ -41,6 +45,4 @@ nsis:
   uninstallerIcon: build/icon.ico
   installerSidebar: build/installerSidebar.bmp
   uninstallerSidebar: build/uninstallerSidebar.bmp
-  installerHeader: build/installerHeader.bmp
-  license: build/license_zh_CN.txt
   include: build/installer.nsh

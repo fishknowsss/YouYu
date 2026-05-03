@@ -28,7 +28,6 @@ export type MihomoApiClient = {
   updateProvider: () => Promise<void>;
 };
 
-const controllerUrl = 'http://127.0.0.1:9090';
 const selectorName = '节点选择';
 const providerName = 'airport';
 const delayTestUrl = 'https://www.gstatic.com/generate_204';
@@ -46,9 +45,11 @@ type MihomoDelayResponse = {
 
 export function createMihomoApiClient(options: {
   secret: string;
+  controllerPort?: number;
   fetcher?: Fetcher;
 }): MihomoApiClient {
   const fetcher = options.fetcher ?? fetch;
+  const controllerUrl = `http://127.0.0.1:${options.controllerPort ?? 9090}`;
 
   function headers(extra?: Record<string, string>) {
     return {
