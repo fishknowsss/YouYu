@@ -1,8 +1,0 @@
-{
-  "enabled": true,
-  "subscriptionUrl": "https://example.com/your-subscription",
-  "defaultNode": {
-    "keywords": ["香港", "HK", "Hong Kong"]
-  },
-  "version": 1
-}
