@@ -7,6 +7,7 @@ import { createMihomoApiClient } from './mihomo/api';
 import { strategyLabels, strategyTargets } from './mihomo/config';
 import { createMihomoRuntime } from './mihomo/process';
 import { createSystemProxyAdapter } from './platform/systemProxy';
+import { defaultRemoteConfigUrl, syncRemoteConfig } from './remoteConfig';
 import { SettingsStore } from './storage/settings';
 import {
   closeMihomoConnections,
@@ -54,6 +55,7 @@ const defaultSubscriptionPath = isDev
 const settingsStore = new SettingsStore(app.getPath('userData'), {
   defaultSubscriptionUrl: readDefaultSubscriptionUrl(defaultSubscriptionPath)
 });
+const remoteConfigUrl = process.env.YOUYU_REMOTE_CONFIG_URL?.trim() || defaultRemoteConfigUrl;
 const mihomoBinaryPath = isDev
   ? join(process.cwd(), 'resources/mihomo/win-x64/mihomo.exe')
   : join(process.resourcesPath, 'mihomo/win-x64/mihomo.exe');
@@ -269,9 +271,18 @@ async function withTrayRefresh<T>(task: () => Promise<T>): Promise<T> {
 }
 
 async function startProxy(): Promise<AppSnapshot> {
+  await syncRemoteSettings();
   await lifecycle.start();
   clearLastError();
   return createSnapshot();
+}
+
+async function syncRemoteSettings() {
+  return syncRemoteConfig({
+    url: remoteConfigUrl,
+    settingsStore,
+    logLine: appendLog
+  });
 }
 
 async function stopProxy(): Promise<AppSnapshot> {
@@ -384,6 +395,7 @@ function registerIpc() {
   });
   ipcMain.handle(ipcChannels.updateSubscription, async () => {
     return withTrayRefresh(async () => {
+      await syncRemoteSettings();
       return updateSubscriptionNodes({
         settingsStore,
         lifecycle,
@@ -584,6 +596,7 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(async () => {
     await allocateRuntimePorts();
+    await syncRemoteSettings();
     registerIpc();
     createTray();
     void createWindow();

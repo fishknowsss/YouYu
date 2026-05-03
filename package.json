@@ -16,7 +16,9 @@
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && electron-vite build",
     "dist:win": "npm run clean:release && npm run assets && npm run build && npm run cache:electron:win && node scripts/run-electron-builder.mjs && npm run validate:release",
+    "dist:win:in": "npm run clean:release && npm run assets && npm run build && npm run cache:electron:win && node scripts/run-electron-builder.mjs --internal && npm run validate:release:in",
     "validate:release": "tsx scripts/validate-windows-release.ts",
+    "validate:release:in": "tsx scripts/validate-windows-release.ts --internal",
     "smoke": "tsx scripts/smoke-test.ts"
   },
   "devDependencies": {

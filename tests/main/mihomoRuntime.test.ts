@@ -15,6 +15,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     mode: 'rule',
     strategy: 'auto',
     ruleProfile: 'smart',
+    defaultNodeKeywords: [],
     systemProxyEnabled: true,
     dnsEnhanced: true,
     snifferEnabled: true,
@@ -275,6 +276,53 @@ describe('createMihomoRuntime', () => {
       expect.objectContaining({
         method: 'PUT',
         body: JSON.stringify({ name: '🇯🇵 日本 09 家宽' })
+      })
+    );
+  });
+
+  it('uses remote default node keywords before the built-in fallback', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.killed = false;
+    child.kill = vi.fn();
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/version')) {
+        return Response.json({ version: 'test' });
+      }
+      if (path.endsWith('/proxies') && !init?.method) {
+        return Response.json({
+          proxies: {
+            selector: {
+              now: 'COMPATIBLE',
+              all: ['香港 01', 'Japan 09 Home']
+            },
+            '香港 01': {},
+            'Japan 09 Home': {}
+          }
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ defaultNodeKeywords: ['香港'] }),
+      spawnProcess: () => child as never
+    });
+
+    await runtime.start();
+
+    expect(fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/selector',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ name: '香港 01' })
       })
     );
   });

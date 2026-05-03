@@ -1,14 +1,27 @@
 import { spawn } from 'node:child_process';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const builderCli = join(process.cwd(), 'node_modules', 'electron-builder', 'cli.js');
+const internalBuild = process.argv.includes('--internal');
+const subscriptionSource = internalBuild
+  ? join(process.cwd(), 'resources', 'default-subscription.in.txt')
+  : join(process.cwd(), 'resources', 'default-subscription.txt');
+const generatedSubscription = join(process.cwd(), 'resources', 'generated', 'default-subscription.txt');
 const nodeOptions = [process.env.NODE_OPTIONS, '--disable-warning=DEP0190']
   .filter(Boolean)
   .join(' ');
 
+await prepareSubscriptionResource();
+
+const builderArgs = [builderCli, '--win', 'nsis', '--x64', '--publish', 'never'];
+if (internalBuild) {
+  builderArgs.push('-c.win.artifactName=YouYu-${version}-${arch}-in.${ext}');
+}
+
 const child = spawn(
   process.execPath,
-  [builderCli, '--win', 'nsis', '--x64', '--publish', 'never'],
+  builderArgs,
   {
     stdio: 'inherit',
     windowsHide: true,
@@ -31,3 +44,19 @@ child.once('error', (error) => {
   console.error(error);
   process.exit(1);
 });
+
+async function prepareSubscriptionResource() {
+  let subscription = '';
+  try {
+    subscription = await readFile(subscriptionSource, 'utf8');
+  } catch (error) {
+    if (internalBuild) {
+      throw new Error(
+        `Missing internal subscription file: ${subscriptionSource}. Create it locally; it is gitignored.`
+      );
+    }
+  }
+
+  await mkdir(join(process.cwd(), 'resources', 'generated'), { recursive: true });
+  await writeFile(generatedSubscription, subscription.trim() ? `${subscription.trim()}\n` : '', 'utf8');
+}

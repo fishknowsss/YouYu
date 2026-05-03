@@ -14,7 +14,7 @@ const requiredPaths = [
   'build/tray-icon.png',
   'build/installerSidebar.bmp',
   'build/installer.nsh',
-  'resources/default-subscription.txt',
+  'resources/generated/default-subscription.txt',
   'resources/mihomo/win-x64/mihomo.exe'
 ];
 

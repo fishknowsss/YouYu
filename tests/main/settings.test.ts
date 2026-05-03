@@ -24,6 +24,7 @@ describe('SettingsStore', () => {
     const second = await store.read();
 
     expect(first.subscriptionUrl).toBe('');
+    expect(first.defaultNodeKeywords).toEqual([]);
     expect(first.controllerSecret).toHaveLength(32);
     expect(second.controllerSecret).toBe(first.controllerSecret);
   });
@@ -38,5 +39,13 @@ describe('SettingsStore', () => {
     expect(after.subscriptionUrl).toBe('https://example.com/sub');
     expect(after.controllerSecret).toBe(before.controllerSecret);
   });
-});
 
+  it('normalizes remote default node keywords', async () => {
+    const store = await makeStore();
+
+    await store.update({ defaultNodeKeywords: [' 香港 ', '', 'HK', '香港'] });
+    const after = await store.read();
+
+    expect(after.defaultNodeKeywords).toEqual(['香港', 'HK']);
+  });
+});

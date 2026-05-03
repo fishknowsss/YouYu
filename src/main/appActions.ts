@@ -1,11 +1,11 @@
 import type { AppSettingsInput, AppSnapshot, MihomoMode, StrategyKey } from '../shared/ipc';
 import type { LifecycleController } from './lifecycle';
 import type { MihomoApiClient } from './mihomo/api';
-import type { AppSettings } from './storage/settings';
+import type { AppSettings, AppSettingsUpdate } from './storage/settings';
 
 type SettingsAccess = {
   read: () => Promise<AppSettings>;
-  update: (next: AppSettingsInput) => Promise<AppSettings>;
+  update: (next: AppSettingsUpdate) => Promise<AppSettings>;
 };
 
 type CreateMihomoApi = (options: { secret: string }) => Pick<
