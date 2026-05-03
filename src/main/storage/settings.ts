@@ -11,6 +11,10 @@ export type AppSettings = FeatureSettings & {
   ruleProfile: RuleProfile;
 };
 
+type SettingsStoreOptions = {
+  defaultSubscriptionUrl?: string;
+};
+
 const settingsFileName = 'settings.json';
 const validModes: MihomoMode[] = ['rule', 'global', 'direct'];
 const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-balance', 'direct'];
@@ -18,9 +22,11 @@ const validRuleProfiles: RuleProfile[] = ['smart', 'global', 'subscription'];
 
 export class SettingsStore {
   private readonly filePath: string;
+  private readonly defaultSubscriptionUrl: string;
 
-  constructor(private readonly baseDir: string) {
+  constructor(private readonly baseDir: string, options: SettingsStoreOptions = {}) {
     this.filePath = join(baseDir, settingsFileName);
+    this.defaultSubscriptionUrl = options.defaultSubscriptionUrl?.trim() ?? '';
   }
 
   async read(): Promise<AppSettings> {
@@ -72,7 +78,7 @@ export class SettingsStore {
 
   private createDefaults(): AppSettings {
     return {
-      subscriptionUrl: '',
+      subscriptionUrl: this.defaultSubscriptionUrl,
       controllerSecret: this.createSecret(),
       mode: 'rule',
       strategy: 'auto',

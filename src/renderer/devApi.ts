@@ -29,7 +29,10 @@ export function createDevYouYuApi(): YouYuApi {
       uploadTotal: 0,
       downloadTotal: 0
     },
-    subscriptionUrl: ''
+    subscriptionUrl: '',
+    diagnostics: {
+      logs: []
+    }
   };
 
   function withNodes(currentNode = snapshot.currentNode): ProxyNode[] {

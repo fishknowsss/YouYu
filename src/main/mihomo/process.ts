@@ -8,6 +8,8 @@ import { buildMihomoConfig } from './config';
 type SpawnedProcess = {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
   once(event: 'error', listener: (error: Error) => void): unknown;
+  stdout?: NodeJS.ReadableStream | null;
+  stderr?: NodeJS.ReadableStream | null;
   kill: () => unknown;
   killed: boolean;
 };
@@ -16,6 +18,8 @@ export type MihomoRuntimeOptions = {
   binaryPath: string;
   userDataDir: string;
   readSettings: () => Promise<AppSettings>;
+  getPorts?: () => { mixedPort: number; controllerPort: number; dnsPort?: number };
+  logLine?: (line: string) => void;
   spawnProcess?: (binaryPath: string, args: string[]) => SpawnedProcess;
   waitForReady?: (secret: string) => Promise<void>;
 };
@@ -24,11 +28,11 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForController(secret: string): Promise<void> {
-  const deadline = Date.now() + 5000;
+async function waitForController(secret: string, port: number): Promise<void> {
+  const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch('http://127.0.0.1:9090/version', {
+      const response = await fetch(`http://127.0.0.1:${port}/version`, {
         headers: {
           Authorization: `Bearer ${secret}`
         }
@@ -39,7 +43,7 @@ async function waitForController(secret: string): Promise<void> {
     }
     await sleep(200);
   }
-  throw new Error('mihomo controller not ready');
+  throw new Error(`mihomo controller not ready on 127.0.0.1:${port}`);
 }
 
 async function fetchSubscriptionConfigText(url: string): Promise<string | undefined> {
@@ -74,6 +78,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
 
     const workDir = join(options.userDataDir, 'mihomo');
     const configPath = join(workDir, 'config.yaml');
+    const ports = options.getPorts?.() ?? { mixedPort: 7890, controllerPort: 9090 };
     const subscriptionConfigText =
       settings.ruleProfile === 'subscription'
         ? await fetchSubscriptionConfigText(settings.subscriptionUrl)
@@ -92,12 +97,15 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         snifferEnabled: settings.snifferEnabled,
         tunEnabled: settings.tunEnabled,
         allowLan: settings.allowLan,
-        subscriptionConfigText
+        subscriptionConfigText,
+        mixedPort: ports.mixedPort,
+        controllerPort: ports.controllerPort,
+        dnsPort: ports.dnsPort
       }),
       'utf8'
     );
 
-    return { workDir, configPath, settings };
+    return { workDir, configPath, settings, ports };
   }
 
   return {
@@ -106,17 +114,51 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         return;
       }
 
-      const { workDir, configPath, settings } = await writeConfig();
+      const { workDir, configPath, settings, ports } = await writeConfig();
+      options.logLine?.(
+        `mihomo starting: mixed-port=${ports.mixedPort}, controller=${ports.controllerPort}, dns=${ports.dnsPort ?? 1053}`
+      );
       const spawnProcess =
         options.spawnProcess ??
         ((binaryPath: string, args: string[]) =>
           spawn(binaryPath, args, {
             windowsHide: true,
-            stdio: 'ignore'
+            stdio: ['ignore', 'pipe', 'pipe']
           }));
 
       const current = spawnProcess(options.binaryPath, ['-d', workDir, '-f', configPath]);
       child = current;
+      const recentOutput: string[] = [];
+      const rememberOutput = (line: string) => {
+        recentOutput.push(line);
+        if (recentOutput.length > 8) {
+          recentOutput.splice(0, recentOutput.length - 8);
+        }
+      };
+      const formatStartupFailure = (reason: string) => {
+        const detail = recentOutput.length > 0 ? `; recent mihomo output: ${recentOutput.join(' | ')}` : '';
+        return new Error(`mihomo exited before controller was ready: ${reason}${detail}`);
+      };
+      current.stdout?.on('data', (chunk) => {
+        String(chunk)
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .forEach((line) => {
+            rememberOutput(line);
+            options.logLine?.(`[mihomo] ${line}`);
+          });
+      });
+      current.stderr?.on('data', (chunk) => {
+        String(chunk)
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .forEach((line) => {
+            rememberOutput(line);
+            options.logLine?.(`[mihomo] ${line}`);
+          });
+      });
 
       let ready = false;
       const earlyFailure = new Promise<never>((_resolve, reject) => {
@@ -124,6 +166,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
           if (child === current) {
             child = null;
           }
+          options.logLine?.(`mihomo process error: ${error.message}`);
           reject(error);
         });
         current.once('exit', (code, signal) => {
@@ -133,16 +176,20 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
           if (!ready) {
             const reason =
               code === null ? `signal ${signal ?? 'unknown'}` : `exit code ${code.toString()}`;
-            reject(new Error(`mihomo exited before controller was ready: ${reason}`));
+            options.logLine?.(`mihomo exited before ready: ${reason}`);
+            reject(formatStartupFailure(reason));
           }
         });
       });
 
       await Promise.race([
-        (options.waitForReady ?? waitForController)(settings.controllerSecret),
+        options.waitForReady
+          ? options.waitForReady(settings.controllerSecret)
+          : waitForController(settings.controllerSecret, ports.controllerPort),
         earlyFailure
       ]);
       ready = true;
+      options.logLine?.('mihomo controller ready');
     },
     async stop() {
       const current = child;

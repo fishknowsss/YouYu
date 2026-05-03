@@ -28,7 +28,35 @@ describe('createLifecycleController', () => {
     });
 
     await expect(controller.start()).rejects.toThrow('boot failed');
-    expect(calls).toEqual(['proxy.enable', 'mihomo.start', 'proxy.restore', 'mihomo.stop']);
+    expect(calls).toEqual(['mihomo.start', 'proxy.restore', 'mihomo.stop']);
+  });
+
+  it('starts mihomo before enabling the system proxy', async () => {
+    const calls: string[] = [];
+    const controller = createLifecycleController({
+      proxy: {
+        enable: vi.fn(async () => {
+          calls.push('proxy.enable');
+        }),
+        restore: vi.fn(async () => {
+          calls.push('proxy.restore');
+        }),
+        repair: vi.fn(async () => {
+          calls.push('proxy.repair');
+        })
+      },
+      mihomo: {
+        start: vi.fn(async () => {
+          calls.push('mihomo.start');
+        }),
+        stop: vi.fn(async () => {
+          calls.push('mihomo.stop');
+        })
+      }
+    });
+
+    await controller.start();
+    expect(calls).toEqual(['mihomo.start', 'proxy.enable']);
   });
 
   it('restores system proxy before stopping mihomo', async () => {
@@ -57,10 +85,10 @@ describe('createLifecycleController', () => {
 
     await controller.start();
     await controller.stop();
-    expect(calls).toEqual(['proxy.enable', 'mihomo.start', 'proxy.restore', 'mihomo.stop']);
+    expect(calls).toEqual(['mihomo.start', 'proxy.enable', 'proxy.restore', 'mihomo.stop']);
   });
 
-  it('restarts mihomo without disabling the proxy when already running', async () => {
+  it('temporarily disables the proxy while restarting mihomo', async () => {
     const calls: string[] = [];
     const controller = createLifecycleController({
       proxy: {
@@ -87,7 +115,14 @@ describe('createLifecycleController', () => {
     await controller.start();
     await controller.restart();
 
-    expect(calls).toEqual(['proxy.enable', 'mihomo.start', 'mihomo.stop', 'mihomo.start']);
+    expect(calls).toEqual([
+      'mihomo.start',
+      'proxy.enable',
+      'proxy.restore',
+      'mihomo.stop',
+      'mihomo.start',
+      'proxy.enable'
+    ]);
   });
 
   it('does not enable the proxy again when start is called while running', async () => {
@@ -118,6 +153,6 @@ describe('createLifecycleController', () => {
     await controller.start();
     await controller.stop();
 
-    expect(calls).toEqual(['proxy.enable', 'mihomo.start', 'proxy.restore', 'mihomo.stop']);
+    expect(calls).toEqual(['mihomo.start', 'proxy.enable', 'proxy.restore', 'mihomo.stop']);
   });
 });

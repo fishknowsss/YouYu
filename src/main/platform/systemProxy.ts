@@ -25,6 +25,7 @@ export type SystemProxyOptions = {
   platform?: NodeJS.Platform;
   runCommand?: (command: Command) => Promise<string>;
   shouldManageProxy?: () => Promise<boolean>;
+  getProxyServer?: () => string;
 };
 
 async function defaultRunCommand(command: Command): Promise<string> {
@@ -47,6 +48,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
   const platform = options.platform ?? process.platform;
   const runCommand = options.runCommand ?? defaultRunCommand;
   const shouldManageProxy = options.shouldManageProxy ?? (async () => true);
+  const getProxyServer = options.getProxyServer ?? (() => '127.0.0.1:7890');
   let previous: PreviousProxyState | null = null;
   let enabledByApp = false;
 
@@ -126,7 +128,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
       previous = await queryPrevious();
       enabledByApp = true;
       try {
-        await setProxy(true, '127.0.0.1:7890');
+        await setProxy(true, getProxyServer());
       } catch (error) {
         await restorePrevious().catch(() => undefined);
         previous = null;

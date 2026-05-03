@@ -24,9 +24,21 @@ describe('buildMihomoConfig', () => {
       '负载均衡'
     ]);
     expect(config.dns.enable).toBe(true);
+    expect(config.dns.listen).toBe('127.0.0.1:1053');
     expect(config.sniffer.enable).toBe(true);
     expect(config.rules).toContain('DOMAIN-SUFFIX,cn,DIRECT');
     expect(config.rules).toContain('MATCH,节点选择');
+  });
+
+  it('uses the allocated dns listener port', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/sub',
+      secret: 'local-secret',
+      dnsPort: 1099
+    });
+    const config = parse(yamlText);
+
+    expect(config.dns.listen).toBe('127.0.0.1:1099');
   });
 
   it('can preserve a full airport config while injecting local runtime controls', () => {

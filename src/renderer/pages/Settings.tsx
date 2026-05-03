@@ -45,8 +45,8 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
     <div className="workspace">
       <div className="workspace-header">
         <div>
-          <span className="section-label">应用配置</span>
           <h1>设置</h1>
+          <p>订阅与网络开关</p>
         </div>
         <button className="secondary-button" onClick={onBack}>返回</button>
       </div>
@@ -122,7 +122,7 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
             修复
           </button>
         </div>
-        {message ? <p className="inline-message">{message}</p> : null}
+        <p className="inline-message">{message || ' '}</p>
       </section>
     </div>
   );

@@ -108,4 +108,34 @@ describe('createMihomoRuntime', () => {
 
     await expect(runtime.start()).rejects.toThrow('spawn failed');
   });
+
+  it('includes recent mihomo output when startup exits before readiness', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+      stderr: EventEmitter;
+    };
+    child.killed = false;
+    child.kill = vi.fn();
+    child.stderr = new EventEmitter();
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      spawnProcess: () => child as never,
+      waitForReady: vi.fn(
+        () =>
+          new Promise<void>(() => {
+            child.stderr.emit('data', 'listen tcp 127.0.0.1:1053: bind failed\n');
+            child.emit('exit', 1, null);
+          })
+      )
+    });
+
+    await expect(runtime.start()).rejects.toThrow(
+      'recent mihomo output: listen tcp 127.0.0.1:1053: bind failed'
+    );
+  });
 });
