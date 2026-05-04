@@ -1,6 +1,7 @@
 node_modules/
 out/
 release/
+release-archive/
 .playwright-mcp/
 .DS_Store
 *.log

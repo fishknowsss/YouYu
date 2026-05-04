@@ -330,7 +330,7 @@ function registerIpc() {
       controllerPort: runtimePorts.controllerPort
     });
     await mihomoApi.selectNode(name);
-    await settingsStore.update({ strategy: 'manual' });
+    await settingsStore.update({ strategy: 'manual', selectedNode: name });
     return createSnapshot();
   });
   ipcMain.handle(ipcChannels.selectStrategy, async (_event, strategy) => {

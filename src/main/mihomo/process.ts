@@ -45,8 +45,8 @@ const builtInProxyNames = new Set(['COMPATIBLE', 'DIRECT', 'PASS', 'REJECT', 'RE
 const managedGroupNames = new Set(['节点选择', '自动选择', '故障转移', '负载均衡']);
 const noticeNodeKeywords = ['失去支持', '更新你的代理客户端', '官网公告', '代理客户端'];
 const preferredDefaultNodeKeywordSets = [
-  ['日本', '09', '家宽'],
   ['日本', '08', '家宽'],
+  ['日本', '09', '家宽'],
   ['日本', '家宽']
 ];
 const subscriptionUserAgent = 'Clash Verge/2.3.2';
@@ -166,6 +166,15 @@ function pickDefaultNode(nodes: string[]): string | undefined {
   return sortDefaultCandidates(nodes)[0];
 }
 
+function pickStartupNode(nodes: string[], selectedNode: string): string | undefined {
+  const saved = selectedNode.trim();
+  if (saved && nodes.includes(saved)) {
+    return saved;
+  }
+
+  return pickDefaultNode(nodes);
+}
+
 function isNoticeNodeName(name: string): boolean {
   return noticeNodeKeywords.some((keyword) => name.includes(keyword));
 }
@@ -205,6 +214,7 @@ async function refreshProviders(port: number, secret: string): Promise<void> {
 async function waitForUsableProxies(
   secret: string,
   port: number,
+  selectedNode: string,
   logLine?: (line: string) => void
 ): Promise<void> {
   const deadline = Date.now() + 25000;
@@ -219,11 +229,15 @@ async function waitForUsableProxies(
     lastSummary = `selector=${selector?.name ?? 'missing'}, current=${currentNode || 'missing'}, nodes=${nodes.length}`;
 
     if (nodes.length > 0) {
-      const target = pickDefaultNode(nodes);
+      const target = pickStartupNode(nodes, selectedNode);
       if (target && (!currentNode || builtInProxyNames.has(currentNode) || currentNode !== target)) {
         const group = findDirectSelectorForNode(proxies, selector?.name ?? selectorName, target);
         await selectNode(port, secret, group, target);
-        logLine?.(`mihomo selected default node: ${target}`);
+        logLine?.(
+          selectedNode.trim() && target === selectedNode.trim()
+            ? `mihomo restored selected node: ${target}`
+            : `mihomo selected default node: ${target}`
+        );
       }
       return;
     }
@@ -428,6 +442,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
                   await waitForUsableProxies(
                     settings.controllerSecret,
                     ports.controllerPort,
+                    settings.selectedNode,
                     options.logLine
                   );
                 })(),

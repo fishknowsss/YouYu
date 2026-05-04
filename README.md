@@ -2,6 +2,8 @@
 
 YouYu 是一个 Windows 桌面代理工具，面向工作室内部成员。当前版本已经完成 Electron/Vite/TypeScript 项目骨架、品牌 UI、设置持久化、mihomo 配置生成、Windows x64 安装包构建链路，并内置 `mihomo-windows-amd64-v1`。
 
+打包、版本号、公开版和本地内置版规则见 [docs/release-packaging.md](docs/release-packaging.md)。修改 Windows 打包、订阅默认值、release 上传路径或版本号前，先看这份文档。
+
 ## 当前能力
 
 - 订阅拉取：托管 proxy-provider，也支持尝试读取机场完整 Clash/Mihomo 配置。
@@ -56,9 +58,19 @@ npm run smoke
 
 ## 打 Windows 安装包
 
+公开版用于 GitHub release，不内置订阅：
+
 ```bash
 npm run dist:win
 ```
+
+本地内置版只给本机或内部临时使用，文件名带 `-in`，不上传 GitHub：
+
+```bash
+npm run dist:win:in
+```
+
+两条命令都会先清空 `release/`。如果需要同时保留公开版和 `-in` 版，先把其中一个复制到 `release-archive/`，再运行另一个打包命令，最后复制回来。完整规则见 [docs/release-packaging.md](docs/release-packaging.md)。
 
 `dist:win` 会先生成品牌资源、完成生产构建，并通过 `@electron/get` 预缓存 Windows x64 Electron zip，随后再调用 electron-builder 生成 NSIS 安装包。这个流程可以避开下载缓存损坏导致的 `zip: not a valid zip file`。
 
@@ -68,6 +80,7 @@ npm run dist:win
 
 ```text
 release/YouYu-0.3.6-x64.exe
+release/YouYu-0.3.6-x64-in.exe
 ```
 
 ## Windows 测试重点
