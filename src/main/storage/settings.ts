@@ -9,10 +9,15 @@ export type AppSettings = FeatureSettings & {
   mode: MihomoMode;
   strategy: StrategyKey;
   ruleProfile: RuleProfile;
+  selectedNode: string;
 };
 
 type SettingsStoreOptions = {
   defaultSubscriptionUrl?: string;
+};
+
+type AppSettingsNormalizerInput = Omit<Partial<AppSettings>, 'selectedNode'> & {
+  selectedNode?: string | null;
 };
 
 const settingsFileName = 'settings.json';
@@ -53,7 +58,7 @@ export class SettingsStore {
     await writeFile(this.filePath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
   }
 
-  private normalize(value: Partial<AppSettings>): AppSettings {
+  private normalize(value: AppSettingsNormalizerInput): AppSettings {
     return {
       subscriptionUrl: typeof value.subscriptionUrl === 'string' ? value.subscriptionUrl : '',
       controllerSecret:
@@ -67,6 +72,7 @@ export class SettingsStore {
       ruleProfile: validRuleProfiles.includes(value.ruleProfile as RuleProfile)
         ? (value.ruleProfile as RuleProfile)
         : 'smart',
+      selectedNode: typeof value.selectedNode === 'string' ? value.selectedNode.trim() : '',
       systemProxyEnabled:
         typeof value.systemProxyEnabled === 'boolean' ? value.systemProxyEnabled : true,
       dnsEnhanced: typeof value.dnsEnhanced === 'boolean' ? value.dnsEnhanced : true,
@@ -83,6 +89,7 @@ export class SettingsStore {
       mode: 'rule',
       strategy: 'auto',
       ruleProfile: 'smart',
+      selectedNode: '',
       systemProxyEnabled: true,
       dnsEnhanced: true,
       snifferEnabled: true,

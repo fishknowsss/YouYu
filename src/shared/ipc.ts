@@ -42,6 +42,7 @@ export type AppSettingsInput = Partial<FeatureSettings> & {
   mode?: MihomoMode;
   strategy?: StrategyKey;
   ruleProfile?: RuleProfile;
+  selectedNode?: string | null;
 };
 
 export type AppSnapshot = {

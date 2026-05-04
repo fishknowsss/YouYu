@@ -15,6 +15,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     mode: 'rule',
     strategy: 'auto',
     ruleProfile: 'smart',
+    selectedNode: '',
     systemProxyEnabled: true,
     dnsEnhanced: true,
     snifferEnabled: true,
@@ -216,7 +217,7 @@ describe('createMihomoRuntime', () => {
     await expect(readFile(join(workDir, 'Country.mmdb'), 'utf8')).rejects.toThrow();
   });
 
-  it('prefers the Japanese 09 home node when mihomo starts on COMPATIBLE', async () => {
+  it('prefers the Japanese 08 home node when mihomo starts without a saved node', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);
     const child = new EventEmitter() as EventEmitter & {
@@ -274,7 +275,59 @@ describe('createMihomoRuntime', () => {
       'http://127.0.0.1:9090/proxies/%E8%87%AA%E5%8A%A8%E9%80%89%E6%8B%A9',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ name: '🇯🇵 日本 09 家宽' })
+        body: JSON.stringify({ name: '🇯🇵 日本 08 家宽' })
+      })
+    );
+  });
+
+  it('restores the saved node instead of replacing it with the default on startup', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.killed = false;
+    child.kill = vi.fn();
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/version')) {
+        return Response.json({ version: 'test' });
+      }
+      if (path.endsWith('/proxies') && !init?.method) {
+        return Response.json({
+          proxies: {
+            节点选择: {
+              now: '自动选择',
+              all: ['自动选择', 'DIRECT']
+            },
+            自动选择: {
+              now: 'COMPATIBLE',
+              all: ['香港 01', '🇯🇵 日本 08 家宽', '美国 01']
+            },
+            '香港 01': {},
+            '🇯🇵 日本 08 家宽': {},
+            '美国 01': {}
+          }
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ selectedNode: '美国 01' }),
+      spawnProcess: () => child as never
+    });
+
+    await runtime.start();
+
+    expect(fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/%E8%87%AA%E5%8A%A8%E9%80%89%E6%8B%A9',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ name: '美国 01' })
       })
     );
   });

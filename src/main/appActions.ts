@@ -69,7 +69,7 @@ export async function selectMihomoStrategy(
   deps: AppActionDeps,
   strategy: StrategyKey,
 ): Promise<AppSnapshot> {
-  const settings = await deps.settingsStore.update({ strategy });
+  const settings = await deps.settingsStore.update({ strategy, selectedNode: null });
   if (deps.lifecycle.getStatus() === 'running') {
     await deps.createMihomoApi({ secret: settings.controllerSecret }).selectStrategy(strategy);
   }

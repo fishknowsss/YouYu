@@ -39,6 +39,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     mode: 'rule',
     strategy: 'auto',
     ruleProfile: 'smart',
+    selectedNode: '',
     systemProxyEnabled: true,
     dnsEnhanced: true,
     snifferEnabled: true,
