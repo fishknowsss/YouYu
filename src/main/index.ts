@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, Tray, ipcMain, screen, type Rectangle } from 'electron';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -17,17 +17,31 @@ import {
   testMihomoNode,
   updateSubscriptionNodes
 } from './appActions';
-import { ipcChannels, type AppSnapshot, type StrategyGroup } from '../shared/ipc';
+import { ipcChannels, type AppSnapshot, type DesktopPetState, type StrategyGroup } from '../shared/ipc';
+
+declare const __YOUYU_DISABLE_PET__: boolean;
 
 const appId = 'studio.youyu.proxy';
 const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
+let petWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let trayMenu: Menu | null = null;
 let cleanupFinished = false;
 let cleanupStarted = false;
 let isQuitting = false;
 let trayBusy = false;
+let petAnimationTimer: ReturnType<typeof setTimeout> | undefined;
+let petDragTimer: ReturnType<typeof setInterval> | undefined;
+let petDragStart:
+  | {
+      cursorX: number;
+      cursorY: number;
+      windowX: number;
+      windowY: number;
+    }
+  | undefined;
+let petState: DesktopPetState = 'idle';
 let lifecycle: ReturnType<typeof createLifecycleController>;
 let runtimePorts = {
   mixedPort: 7890,
@@ -36,6 +50,12 @@ let runtimePorts = {
 };
 let lastError: string | undefined;
 const appLogs: string[] = [];
+const petFeatureEnabled = !__YOUYU_DISABLE_PET__;
+const petWindowSize = {
+  width: 190,
+  height: 212
+};
+const petDragFrameMs = 16;
 
 app.setName('YouYu');
 if (process.platform === 'win32') {
@@ -175,6 +195,7 @@ lifecycle = createLifecycleController({
   mihomo: mihomoRuntime,
   onStatusChange: () => {
     refreshTrayMenu();
+    syncPetStateToRuntime();
   }
 });
 
@@ -215,6 +236,7 @@ async function createSnapshot(): Promise<AppSnapshot> {
       dnsEnhanced: settings.dnsEnhanced,
       snifferEnabled: settings.snifferEnabled,
       tunEnabled: settings.tunEnabled,
+      strictRouteEnabled: settings.strictRouteEnabled,
       allowLan: settings.allowLan
     },
     runtime,
@@ -287,6 +309,18 @@ async function repairProxy(): Promise<AppSnapshot> {
 
 function registerIpc() {
   ipcMain.handle(ipcChannels.getSnapshot, createSnapshot);
+  ipcMain.handle(ipcChannels.wavePet, async () => {
+    return undefined;
+  });
+  ipcMain.handle(ipcChannels.startPetDrag, async () => {
+    startPetDrag();
+  });
+  ipcMain.handle(ipcChannels.stopPetDrag, async (_event, moved?: boolean) => {
+    return stopPetDrag({ settle: Boolean(moved) });
+  });
+  ipcMain.handle(ipcChannels.showMainWindow, async () => {
+    showMainWindow();
+  });
   ipcMain.handle(ipcChannels.start, async () => {
     return withTrayRefresh(async () => {
       try {
@@ -325,12 +359,15 @@ function registerIpc() {
   });
   ipcMain.handle(ipcChannels.selectNode, async (_event, name: string) => {
     const settings = await settingsStore.read();
+    await settingsStore.update({ strategy: 'manual', selectedNode: name });
+    if (lifecycle.getStatus() !== 'running') {
+      await lifecycle.start();
+    }
     const mihomoApi = createMihomoApiClient({
       secret: settings.controllerSecret,
       controllerPort: runtimePorts.controllerPort
     });
     await mihomoApi.selectNode(name);
-    await settingsStore.update({ strategy: 'manual', selectedNode: name });
     return createSnapshot();
   });
   ipcMain.handle(ipcChannels.selectStrategy, async (_event, strategy) => {
@@ -419,13 +456,279 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
+function sendPetState() {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  petWindow.webContents.send(ipcChannels.petStateUpdated, petState);
+}
+
+function setPetState(state: DesktopPetState, durationMs?: number) {
+  if (petState !== state) {
+    petState = state;
+    sendPetState();
+  }
+
+  if (petAnimationTimer) {
+    clearTimeout(petAnimationTimer);
+    petAnimationTimer = undefined;
+  }
+
+  if (durationMs) {
+    petAnimationTimer = setTimeout(() => {
+      petAnimationTimer = undefined;
+      syncPetStateToRuntime();
+    }, durationMs);
+  }
+}
+
+function syncPetStateToRuntime() {
+  if (!petFeatureEnabled) return;
+  if (petAnimationTimer) return;
+  if (petWindow && !petWindow.isDestroyed() && petWindow.isVisible()) {
+    const dockState = getPetDockState(petWindow.getBounds());
+    if (dockState) {
+      setPetState(dockState);
+      return;
+    }
+  }
+
+  const status = lifecycle.getStatus();
+  if (trayBusy) {
+    setPetState('focusWait');
+    return;
+  }
+
+  if (status === 'running') {
+    setPetState('happy');
+    return;
+  }
+
+  if (status === 'failed') {
+    setPetState('comfortSad');
+    return;
+  }
+
+  setPetState('idle');
+}
+
+function showPetWindow() {
+  if (!petFeatureEnabled) return;
+  if (!petWindow) {
+    void createPetWindow();
+    return;
+  }
+
+  petWindow.showInactive();
+  syncPetStateToRuntime();
+  refreshTrayMenu();
+}
+
+function hidePetWindow() {
+  if (!petFeatureEnabled) return;
+  if (!petWindow) return;
+  petWindow.hide();
+  setPetState('idle');
+  refreshTrayMenu();
+}
+
+function togglePetWindow() {
+  if (!petFeatureEnabled) return;
+  if (petWindow?.isVisible()) {
+    hidePetWindow();
+    return;
+  }
+
+  showPetWindow();
+}
+
+function showPetContextMenu() {
+  if (!petFeatureEnabled) return;
+  const menu = Menu.buildFromTemplate([
+    {
+      label: '打开',
+      click: showMainWindow
+    },
+    {
+      label: '右下贴边',
+      click: () => {
+        void dockPetToBottomRight();
+      }
+    },
+    {
+      label: '隐藏',
+      click: hidePetWindow
+    },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: () => {
+        isQuitting = true;
+        void cleanupBeforeExit();
+      }
+    }
+  ]);
+  menu.popup({ window: petWindow ?? undefined });
+}
+
+function getDefaultPetBounds() {
+  const display = screen.getPrimaryDisplay();
+  const area = display.workArea;
+  return getBottomRightEdgeBounds(area);
+}
+
+function getBottomRightEdgeBounds(area: Rectangle): Rectangle {
+  return {
+    width: petWindowSize.width,
+    height: petWindowSize.height,
+    x: area.x + area.width - petWindowSize.width,
+    y: area.y + area.height - petWindowSize.height
+  };
+}
+
+async function getPetStartBounds() {
+  const settings = await settingsStore.read();
+  if (!settings.petWindow) return getDefaultPetBounds();
+
+  return clampPetBounds({
+    ...petWindowSize,
+    x: settings.petWindow.x,
+    y: settings.petWindow.y
+  });
+}
+
+function clampPetBounds(bounds: Rectangle, area = screen.getDisplayMatching(bounds).workArea): Rectangle {
+  const maxX = area.x + area.width - bounds.width;
+  const maxY = area.y + area.height - bounds.height;
+
+  return {
+    ...bounds,
+    x: Math.min(Math.max(bounds.x, area.x), maxX),
+    y: Math.min(Math.max(bounds.y, area.y), maxY)
+  };
+}
+
+function getPetDockState(bounds: Rectangle): DesktopPetState | undefined {
+  const area = screen.getDisplayMatching(bounds).workArea;
+  const edgeDistance = 18;
+  const distances = [
+    { state: 'edgeLeft' as const, distance: Math.abs(bounds.x - area.x) },
+    {
+      state: 'edgeRight' as const,
+      distance: Math.abs(area.x + area.width - (bounds.x + bounds.width))
+    }
+  ].filter((candidate) => candidate.distance <= edgeDistance);
+
+  distances.sort((a, b) => a.distance - b.distance);
+  return distances[0]?.state;
+}
+
+function settlePetBounds(bounds: Rectangle): { bounds: Rectangle; dockState?: DesktopPetState } {
+  const area = screen.getDisplayMatching(bounds).workArea;
+  const edgeDistance = 44;
+  const maxX = area.x + area.width - bounds.width;
+  const maxY = area.y + area.height - bounds.height;
+  let x = Math.min(Math.max(bounds.x, area.x), maxX);
+  let y = Math.min(Math.max(bounds.y, area.y), maxY);
+
+  if (Math.abs(x - area.x) <= edgeDistance) {
+    x = area.x;
+  } else if (Math.abs(maxX - x) <= edgeDistance) {
+    x = maxX;
+  }
+
+  const nextBounds = {
+    ...bounds,
+    x,
+    y
+  };
+
+  return {
+    bounds: nextBounds,
+    dockState: getPetDockState(nextBounds)
+  };
+}
+
+function savePetBounds(bounds: Rectangle) {
+  void settingsStore.update({
+    petWindow: {
+      x: bounds.x,
+      y: bounds.y
+    }
+  });
+}
+
+function applyPetWindowShape(win: BrowserWindow) {
+  void win;
+}
+
+async function dockPetToBottomRight() {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  const area = screen.getDisplayMatching(petWindow.getBounds()).workArea;
+  const bounds = getBottomRightEdgeBounds(area);
+  petWindow.setBounds(bounds, false);
+  savePetBounds(bounds);
+  setPetState('edgeRight');
+}
+
+function startPetDrag() {
+  if (!petWindow || petDragTimer) return;
+
+  const cursor = screen.getCursorScreenPoint();
+  const bounds = petWindow.getBounds();
+  petDragStart = {
+    cursorX: cursor.x,
+    cursorY: cursor.y,
+    windowX: bounds.x,
+    windowY: bounds.y
+  };
+  petDragTimer = setInterval(() => {
+    if (!petWindow || !petDragStart) return;
+    const nextCursor = screen.getCursorScreenPoint();
+    const area = screen.getDisplayNearestPoint(nextCursor).workArea;
+    petWindow.setBounds(
+      clampPetBounds({
+        x: petDragStart.windowX + nextCursor.x - petDragStart.cursorX,
+        y: petDragStart.windowY + nextCursor.y - petDragStart.cursorY,
+        ...petWindowSize
+      }, area),
+      false
+    );
+  }, petDragFrameMs);
+}
+
+function stopPetDrag(options: { settle?: boolean } = {}): DesktopPetState | undefined {
+  const shouldSettle = Boolean(options.settle);
+  if (petDragTimer) {
+    clearInterval(petDragTimer);
+    petDragTimer = undefined;
+  }
+  petDragStart = undefined;
+
+  if (!petWindow || petWindow.isDestroyed()) return undefined;
+
+  if (shouldSettle) {
+    const settled = settlePetBounds(petWindow.getBounds());
+    petWindow.setBounds(settled.bounds, false);
+    savePetBounds(settled.bounds);
+    const nextState: DesktopPetState = settled.dockState ?? 'fallRecover';
+    if (settled.dockState) {
+      setPetState(settled.dockState);
+    } else {
+      syncPetStateToRuntime();
+    }
+    return nextState;
+  }
+
+  syncPetStateToRuntime();
+  return undefined;
+}
+
 function refreshTrayMenu() {
   if (!tray) return;
 
   const status = lifecycle.getStatus();
   const running = status === 'running';
   const failed = status === 'failed';
-  const statusLabel = trayBusy ? '处理中' : running ? '运行中' : failed ? '启动失败' : '已停止';
+  const statusLabel = trayBusy ? '处理中' : running ? '运行中' : failed ? '异常' : '已停止';
   const primaryLabel = running ? '停止代理' : '启动代理';
   tray.setToolTip(`YouYu - ${statusLabel}`);
   trayMenu = Menu.buildFromTemplate([
@@ -438,6 +741,14 @@ function refreshTrayMenu() {
       label: '打开 YouYu',
       click: showMainWindow
     },
+    ...(petFeatureEnabled
+      ? [
+          {
+            label: petWindow?.isVisible() ? '隐藏桌宠' : '显示桌宠',
+            click: togglePetWindow
+          }
+        ]
+      : []),
     {
       label: primaryLabel,
       enabled: !trayBusy,
@@ -479,6 +790,7 @@ async function runTrayAction(label: string, action: () => Promise<AppSnapshot>) 
   if (trayBusy) return;
   trayBusy = true;
   refreshTrayMenu();
+  syncPetStateToRuntime();
   try {
     const snapshot = await action();
     sendSnapshotToWindows(snapshot);
@@ -489,6 +801,7 @@ async function runTrayAction(label: string, action: () => Promise<AppSnapshot>) 
   } finally {
     trayBusy = false;
     refreshTrayMenu();
+    syncPetStateToRuntime();
   }
 }
 
@@ -559,9 +872,82 @@ async function createWindow() {
   }
 }
 
+async function createPetWindow() {
+  if (!petFeatureEnabled) return;
+  if (petWindow) {
+    showPetWindow();
+    return;
+  }
+
+  const bounds = await getPetStartBounds();
+  const win = new BrowserWindow({
+    ...bounds,
+    useContentSize: true,
+    title: 'YouYu 桌宠',
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    show: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  });
+  petWindow = win;
+  win.setAlwaysOnTop(true, 'floating');
+  applyPetWindowShape(win);
+
+  win.webContents.on('preload-error', (_event, preloadPath, error) => {
+    console.error(`pet preload failed: ${preloadPath}`, error);
+  });
+
+  win.webContents.on('context-menu', () => {
+    showPetContextMenu();
+  });
+
+  win.once('ready-to-show', () => {
+    win.showInactive();
+    sendPetState();
+    syncPetStateToRuntime();
+    refreshTrayMenu();
+  });
+
+  win.on('closed', () => {
+    if (petWindow === win) {
+      petWindow = null;
+    }
+    stopPetDrag();
+    refreshTrayMenu();
+  });
+
+  if (isDev && process.env.ELECTRON_RENDERER_URL) {
+    const url = new URL(process.env.ELECTRON_RENDERER_URL);
+    url.searchParams.set('view', 'pet');
+    await win.loadURL(url.toString());
+  } else {
+    await win.loadFile(join(__dirname, '../renderer/index.html'), {
+      query: { view: 'pet' }
+    });
+  }
+}
+
 async function cleanupBeforeExit() {
   if (cleanupStarted) return;
   cleanupStarted = true;
+  if (petFeatureEnabled) {
+    stopPetDrag({ settle: false });
+  }
   try {
     if (lifecycle.getStatus() !== 'stopped') {
       await lifecycle.stop();
@@ -587,6 +973,9 @@ if (!gotSingleInstanceLock) {
     registerIpc();
     createTray();
     void createWindow();
+    if (petFeatureEnabled) {
+      void createPetWindow();
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

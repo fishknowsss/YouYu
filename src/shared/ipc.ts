@@ -2,6 +2,28 @@ export type AppStatus = 'stopped' | 'running' | 'failed';
 export type MihomoMode = 'rule' | 'global' | 'direct';
 export type StrategyKey = 'manual' | 'auto' | 'fallback' | 'load-balance' | 'direct';
 export type RuleProfile = 'smart' | 'global' | 'subscription';
+export type PetWindowPosition = {
+  x: number;
+  y: number;
+};
+export type DesktopPetState =
+  | 'idle'
+  | 'walkRight'
+  | 'walkLeft'
+  | 'wave'
+  | 'jump'
+  | 'liftHold'
+  | 'drag'
+  | 'sleepWake'
+  | 'focusWait'
+  | 'happy'
+  | 'edgePeek'
+  | 'edgeLeft'
+  | 'edgeRight'
+  | 'fallRecover'
+  | 'annoyed'
+  | 'comfortSad'
+  | 'rewardObserve';
 
 export type ProxyNode = {
   name: string;
@@ -34,6 +56,7 @@ export type FeatureSettings = {
   dnsEnhanced: boolean;
   snifferEnabled: boolean;
   tunEnabled: boolean;
+  strictRouteEnabled: boolean;
   allowLan: boolean;
 };
 
@@ -43,6 +66,7 @@ export type AppSettingsInput = Partial<FeatureSettings> & {
   strategy?: StrategyKey;
   ruleProfile?: RuleProfile;
   selectedNode?: string | null;
+  petWindow?: PetWindowPosition | null;
 };
 
 export type AppSnapshot = {
@@ -62,6 +86,11 @@ export type AppSnapshot = {
 export type YouYuApi = {
   getSnapshot: () => Promise<AppSnapshot>;
   onSnapshotUpdated: (listener: (snapshot: AppSnapshot) => void) => () => void;
+  onPetStateUpdated: (listener: (state: DesktopPetState) => void) => () => void;
+  wavePet: () => Promise<void>;
+  startPetDrag: () => Promise<void>;
+  stopPetDrag: (moved?: boolean) => Promise<DesktopPetState | undefined>;
+  showMainWindow: () => Promise<void>;
   start: () => Promise<AppSnapshot>;
   stop: () => Promise<AppSnapshot>;
   repair: () => Promise<AppSnapshot>;
@@ -78,6 +107,11 @@ export type YouYuApi = {
 export const ipcChannels = {
   getSnapshot: 'youyu:get-snapshot',
   snapshotUpdated: 'youyu:snapshot-updated',
+  petStateUpdated: 'youyu:pet-state-updated',
+  wavePet: 'youyu:wave-pet',
+  startPetDrag: 'youyu:start-pet-drag',
+  stopPetDrag: 'youyu:stop-pet-drag',
+  showMainWindow: 'youyu:show-main-window',
   start: 'youyu:start',
   stop: 'youyu:stop',
   repair: 'youyu:repair',

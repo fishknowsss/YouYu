@@ -1,4 +1,4 @@
-import type { AppSnapshot, MihomoMode, ProxyNode, StrategyKey, YouYuApi } from '../shared/ipc';
+import type { AppSnapshot, DesktopPetState, MihomoMode, ProxyNode, StrategyKey, YouYuApi } from '../shared/ipc';
 
 const baseNodes: ProxyNode[] = [
   { name: '自动选择', delay: 92 },
@@ -9,6 +9,8 @@ const baseNodes: ProxyNode[] = [
 ];
 
 export function createDevYouYuApi(): YouYuApi {
+  let petState: DesktopPetState = 'idle';
+  const petListeners = new Set<(state: DesktopPetState) => void>();
   let snapshot: AppSnapshot = {
     status: 'stopped',
     currentNode: '自动选择',
@@ -16,12 +18,13 @@ export function createDevYouYuApi(): YouYuApi {
     strategies: createStrategies('auto'),
     mode: 'rule',
     strategy: 'auto',
-    ruleProfile: 'smart',
+    ruleProfile: 'subscription',
     features: {
       systemProxyEnabled: true,
-      dnsEnhanced: true,
+      dnsEnhanced: false,
       snifferEnabled: true,
-      tunEnabled: false,
+      tunEnabled: true,
+      strictRouteEnabled: true,
       allowLan: false
     },
     runtime: {
@@ -50,6 +53,11 @@ export function createDevYouYuApi(): YouYuApi {
     return structuredClone(snapshot);
   }
 
+  function publishPet(next: DesktopPetState) {
+    petState = next;
+    petListeners.forEach((listener) => listener(petState));
+  }
+
   function requireSubscription() {
     if (!snapshot.subscriptionUrl.trim()) {
       throw new Error('missing subscription url');
@@ -63,8 +71,32 @@ export function createDevYouYuApi(): YouYuApi {
     onSnapshotUpdated() {
       return () => undefined;
     },
+    onPetStateUpdated(listener) {
+      petListeners.add(listener);
+      listener(petState);
+      return () => {
+        petListeners.delete(listener);
+      };
+    },
+    async wavePet() {
+      publishPet('wave');
+      return undefined;
+    },
+    async startPetDrag() {
+      publishPet('drag');
+      return undefined;
+    },
+    async stopPetDrag(moved = false) {
+      const next = moved ? 'fallRecover' : snapshot.status === 'running' ? 'happy' : 'idle';
+      publishPet(next);
+      return next;
+    },
+    async showMainWindow() {
+      return undefined;
+    },
     async start() {
       requireSubscription();
+      publishPet('happy');
       return publish({
         status: 'running',
         nodes: withNodes(),
@@ -76,6 +108,7 @@ export function createDevYouYuApi(): YouYuApi {
       });
     },
     async stop() {
+      publishPet('idle');
       return publish({
         status: 'stopped',
         nodes: [],
@@ -87,6 +120,7 @@ export function createDevYouYuApi(): YouYuApi {
       });
     },
     async repair() {
+      publishPet('focusWait');
       return publish({
         status: 'stopped',
         nodes: [],
@@ -141,6 +175,7 @@ export function createDevYouYuApi(): YouYuApi {
     },
     async updateSubscription() {
       requireSubscription();
+      publishPet('happy');
       return publish({
         status: 'running',
         nodes: withNodes(),
@@ -166,6 +201,7 @@ export function createDevYouYuApi(): YouYuApi {
           dnsEnhanced: settings.dnsEnhanced ?? snapshot.features.dnsEnhanced,
           snifferEnabled: settings.snifferEnabled ?? snapshot.features.snifferEnabled,
           tunEnabled: settings.tunEnabled ?? snapshot.features.tunEnabled,
+          strictRouteEnabled: settings.strictRouteEnabled ?? snapshot.features.strictRouteEnabled,
           allowLan: settings.allowLan ?? snapshot.features.allowLan
         },
         nodes: snapshot.status === 'running' ? withNodes() : snapshot.nodes

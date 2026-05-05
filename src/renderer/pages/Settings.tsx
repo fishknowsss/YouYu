@@ -17,7 +17,7 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
   const [dnsEnhanced, setDnsEnhanced] = useState(snapshot.features.dnsEnhanced);
   const [snifferEnabled, setSnifferEnabled] = useState(snapshot.features.snifferEnabled);
   const [tunEnabled, setTunEnabled] = useState(snapshot.features.tunEnabled);
-  const [allowLan, setAllowLan] = useState(snapshot.features.allowLan);
+  const [strictRouteEnabled, setStrictRouteEnabled] = useState(snapshot.features.strictRouteEnabled);
 
   useEffect(() => {
     setSubscriptionUrl(snapshot.subscriptionUrl);
@@ -26,7 +26,7 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
     setDnsEnhanced(snapshot.features.dnsEnhanced);
     setSnifferEnabled(snapshot.features.snifferEnabled);
     setTunEnabled(snapshot.features.tunEnabled);
-    setAllowLan(snapshot.features.allowLan);
+    setStrictRouteEnabled(snapshot.features.strictRouteEnabled);
   }, [snapshot]);
 
   function save() {
@@ -37,7 +37,7 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
       dnsEnhanced,
       snifferEnabled,
       tunEnabled,
-      allowLan
+      strictRouteEnabled
     });
   }
 
@@ -108,10 +108,10 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
           <label className="toggle-row">
             <input
               type="checkbox"
-              checked={allowLan}
-              onChange={(event) => setAllowLan(event.target.checked)}
+              checked={strictRouteEnabled}
+              onChange={(event) => setStrictRouteEnabled(event.target.checked)}
             />
-            <span>局域网</span>
+            <span>严格路由</span>
           </label>
         </div>
         <div className="settings-actions">

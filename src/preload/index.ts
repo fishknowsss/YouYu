@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { ipcChannels, type YouYuApi } from '../shared/ipc';
+import { ipcChannels, type DesktopPetState, type YouYuApi } from '../shared/ipc';
 
 const api: YouYuApi = {
   getSnapshot: () => ipcRenderer.invoke(ipcChannels.getSnapshot),
@@ -10,6 +10,17 @@ const api: YouYuApi = {
     ipcRenderer.on(ipcChannels.snapshotUpdated, handler);
     return () => ipcRenderer.off(ipcChannels.snapshotUpdated, handler);
   },
+  onPetStateUpdated: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: DesktopPetState) => {
+      listener(state);
+    };
+    ipcRenderer.on(ipcChannels.petStateUpdated, handler);
+    return () => ipcRenderer.off(ipcChannels.petStateUpdated, handler);
+  },
+  wavePet: () => ipcRenderer.invoke(ipcChannels.wavePet),
+  startPetDrag: () => ipcRenderer.invoke(ipcChannels.startPetDrag),
+  stopPetDrag: (moved) => ipcRenderer.invoke(ipcChannels.stopPetDrag, moved),
+  showMainWindow: () => ipcRenderer.invoke(ipcChannels.showMainWindow),
   start: () => ipcRenderer.invoke(ipcChannels.start),
   stop: () => ipcRenderer.invoke(ipcChannels.stop),
   repair: () => ipcRenderer.invoke(ipcChannels.repair),

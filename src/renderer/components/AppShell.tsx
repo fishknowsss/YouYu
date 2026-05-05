@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react';
 import { BrandMark } from './BrandMark';
 
+declare const __YOUYU_APP_VERSION__: string;
+declare const __YOUYU_BUILD_CHANNEL__: 'standard' | 'no' | 'in' | string;
+
 export type PageKey = 'home' | 'nodes' | 'settings';
 export type UsageMode = 'easy' | 'advanced';
 
@@ -17,6 +20,7 @@ export function AppShell({ page, usageMode, children, onPageChange }: AppShellPr
     { key: 'nodes', label: '节点' },
     { key: 'settings', label: '设置' }
   ];
+  const versionLabel = getVersionLabel(__YOUYU_APP_VERSION__, __YOUYU_BUILD_CHANNEL__);
 
   return (
     <div className={`app-shell ${usageMode === 'easy' ? 'easy-shell' : 'advanced-shell'}`}>
@@ -40,9 +44,18 @@ export function AppShell({ page, usageMode, children, onPageChange }: AppShellPr
               </button>
             ))}
           </nav>
+          <div className="version-chip" aria-label={`版本 ${versionLabel}`}>
+            <span>{versionLabel}</span>
+          </div>
         </aside>
       )}
       <main className="main-surface">{children}</main>
     </div>
   );
+}
+
+function getVersionLabel(version: string, channel: string): string {
+  if (channel === 'in') return `v${version}-in`;
+  if (channel === 'no') return `v${version}-no`;
+  return `v${version}`;
 }

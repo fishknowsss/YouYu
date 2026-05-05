@@ -235,7 +235,7 @@ def icon_padding(size: int) -> int:
     return 20
 
 
-def write_png(path: Path, img):
+def png_bytes(img):
     height = len(img)
     width = len(img[0])
     raw = bytearray()
@@ -256,7 +256,11 @@ def write_png(path: Path, img):
     data += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
     data += chunk(b"IDAT", zlib.compress(bytes(raw), 9))
     data += chunk(b"IEND", b"")
-    path.write_bytes(data)
+    return data
+
+
+def write_png(path: Path, img):
+    path.write_bytes(png_bytes(img))
 
 
 def write_bmp(path: Path, img):
@@ -354,20 +358,9 @@ def vertical_gradient(width: int, height: int, top, bottom):
 
 
 def sidebar(path: Path, icon):
-    width = 164
-    height = 220
-    img = vertical_gradient(width, height, (249, 245, 255, 255), (232, 219, 250, 255))
-    draw_rect(img, 0, 0, width, height, (255, 255, 255, 26))
-    draw_rect(img, 0, 0, 5, height, PURPLE)
-    draw_circle(img, 138, 28, 60, (255, 255, 255, 74))
-    draw_circle(img, 18, 196, 66, (255, 255, 255, 62))
-    for offset, alpha in ((10, 28), (6, 36), (3, 44)):
-        draw_rounded_rect(img, 30 + offset, 60 + offset, 134 + offset, 164 + offset, 26, (118, 86, 159, alpha))
-    draw_rounded_rect(img, 29, 56, 135, 162, 28, (255, 255, 255, 205))
-    draw_rounded_rect(img, 38, 65, 126, 153, 24, (245, 237, 255, 245))
-    paste(img, fit_icon_subject(icon, 100, 0), 32, 59)
-    draw_rounded_rect(img, 42, 176, 122, 182, 3, (143, 88, 215, 210))
-    draw_rounded_rect(img, 52, 196, 112, 201, 3, (104, 88, 122, 190))
+    width = 1
+    height = 1
+    img = new_image(width, height, WHITE)
     write_bmp(path, img)
 
 

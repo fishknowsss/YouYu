@@ -1,26 +1,37 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import type { AppSettingsInput, FeatureSettings, MihomoMode, RuleProfile, StrategyKey } from '../../shared/ipc';
+import type {
+  AppSettingsInput,
+  FeatureSettings,
+  MihomoMode,
+  PetWindowPosition,
+  RuleProfile,
+  StrategyKey
+} from '../../shared/ipc';
 
 export type AppSettings = FeatureSettings & {
+  settingsVersion: number;
   subscriptionUrl: string;
   controllerSecret: string;
   mode: MihomoMode;
   strategy: StrategyKey;
   ruleProfile: RuleProfile;
   selectedNode: string;
+  petWindow?: PetWindowPosition;
 };
 
 type SettingsStoreOptions = {
   defaultSubscriptionUrl?: string;
 };
 
-type AppSettingsNormalizerInput = Omit<Partial<AppSettings>, 'selectedNode'> & {
+type AppSettingsNormalizerInput = Omit<Partial<AppSettings>, 'selectedNode' | 'petWindow'> & {
   selectedNode?: string | null;
+  petWindow?: PetWindowPosition | null;
 };
 
 const settingsFileName = 'settings.json';
+const currentSettingsVersion = 1;
 const validModes: MihomoMode[] = ['rule', 'global', 'direct'];
 const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-balance', 'direct'];
 const validRuleProfiles: RuleProfile[] = ['smart', 'global', 'subscription'];
@@ -59,7 +70,13 @@ export class SettingsStore {
   }
 
   private normalize(value: AppSettingsNormalizerInput): AppSettings {
+    const legacyRuleProfile =
+      typeof value.settingsVersion !== 'number' && value.ruleProfile === 'smart'
+        ? 'subscription'
+        : value.ruleProfile;
+
     return {
+      settingsVersion: currentSettingsVersion,
       subscriptionUrl: typeof value.subscriptionUrl === 'string' ? value.subscriptionUrl : '',
       controllerSecret:
         typeof value.controllerSecret === 'string' && value.controllerSecret.length >= 16
@@ -69,31 +86,42 @@ export class SettingsStore {
       strategy: validStrategies.includes(value.strategy as StrategyKey)
         ? (value.strategy as StrategyKey)
         : 'auto',
-      ruleProfile: validRuleProfiles.includes(value.ruleProfile as RuleProfile)
-        ? (value.ruleProfile as RuleProfile)
-        : 'smart',
+      ruleProfile: validRuleProfiles.includes(legacyRuleProfile as RuleProfile)
+        ? (legacyRuleProfile as RuleProfile)
+        : 'subscription',
       selectedNode: typeof value.selectedNode === 'string' ? value.selectedNode.trim() : '',
+      petWindow: normalizePetWindow(value.petWindow),
       systemProxyEnabled:
         typeof value.systemProxyEnabled === 'boolean' ? value.systemProxyEnabled : true,
-      dnsEnhanced: typeof value.dnsEnhanced === 'boolean' ? value.dnsEnhanced : true,
+      dnsEnhanced: typeof value.dnsEnhanced === 'boolean' ? value.dnsEnhanced : false,
       snifferEnabled: typeof value.snifferEnabled === 'boolean' ? value.snifferEnabled : true,
-      tunEnabled: typeof value.tunEnabled === 'boolean' ? value.tunEnabled : false,
-      allowLan: typeof value.allowLan === 'boolean' ? value.allowLan : false
+      tunEnabled:
+        typeof value.tunEnabled === 'boolean'
+          ? typeof value.strictRouteEnabled === 'boolean'
+            ? value.tunEnabled
+            : true
+          : true,
+      strictRouteEnabled:
+        typeof value.strictRouteEnabled === 'boolean' ? value.strictRouteEnabled : true,
+      allowLan: false
     };
   }
 
   private createDefaults(): AppSettings {
     return {
+      settingsVersion: currentSettingsVersion,
       subscriptionUrl: this.defaultSubscriptionUrl,
       controllerSecret: this.createSecret(),
       mode: 'rule',
       strategy: 'auto',
-      ruleProfile: 'smart',
+      ruleProfile: 'subscription',
       selectedNode: '',
+      petWindow: undefined,
       systemProxyEnabled: true,
-      dnsEnhanced: true,
+      dnsEnhanced: false,
       snifferEnabled: true,
-      tunEnabled: false,
+      tunEnabled: true,
+      strictRouteEnabled: true,
       allowLan: false
     };
   }
@@ -101,4 +129,16 @@ export class SettingsStore {
   private createSecret(): string {
     return randomBytes(16).toString('hex');
   }
+}
+
+function normalizePetWindow(value: unknown): PetWindowPosition | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+
+  const candidate = value as Partial<PetWindowPosition>;
+  if (!Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) return undefined;
+
+  return {
+    x: Math.round(candidate.x as number),
+    y: Math.round(candidate.y as number)
+  };
 }

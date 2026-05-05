@@ -10,6 +10,7 @@ let tempDirs: string[] = [];
 
 function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   return {
+    settingsVersion: 1,
     subscriptionUrl: 'https://example.com/sub',
     controllerSecret: 'local-secret',
     mode: 'rule',
@@ -19,7 +20,8 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     systemProxyEnabled: true,
     dnsEnhanced: true,
     snifferEnabled: true,
-    tunEnabled: false,
+    tunEnabled: true,
+    strictRouteEnabled: true,
     allowLan: false,
     ...overrides
   };
@@ -217,7 +219,7 @@ describe('createMihomoRuntime', () => {
     await expect(readFile(join(workDir, 'Country.mmdb'), 'utf8')).rejects.toThrow();
   });
 
-  it('prefers the Japanese 08 home node when mihomo starts without a saved node', async () => {
+  it('prefers the Taiwan 08 home node when mihomo starts without a saved node', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);
     const child = new EventEmitter() as EventEmitter & {
@@ -240,16 +242,16 @@ describe('createMihomoRuntime', () => {
             },
             自动选择: {
               now: 'COMPATIBLE',
-              all: ['香港 01', '🇯🇵 日本 08 家宽', '🇯🇵 日本 09 家宽']
+              all: ['香港 01', '🇹🇼 台湾 08 家宽', '🇹🇼 台湾 09 家宽']
             },
             '香港 01': {},
-            '🇯🇵 日本 08 家宽': {},
-            '🇯🇵 日本 09 家宽': {}
+            '🇹🇼 台湾 08 家宽': {},
+            '🇹🇼 台湾 09 家宽': {}
           }
         });
       }
       if (path.includes('/delay')) {
-        return Response.json({ delay: path.includes(encodeURIComponent('🇯🇵 日本 09 家宽')) ? 88 : 0 });
+        return Response.json({ delay: path.includes(encodeURIComponent('🇹🇼 台湾 09 家宽')) ? 88 : 0 });
       }
       return new Response(null, { status: 204 });
     });
@@ -275,7 +277,7 @@ describe('createMihomoRuntime', () => {
       'http://127.0.0.1:9090/proxies/%E8%87%AA%E5%8A%A8%E9%80%89%E6%8B%A9',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ name: '🇯🇵 日本 08 家宽' })
+        body: JSON.stringify({ name: '🇹🇼 台湾 08 家宽' })
       })
     );
   });
@@ -328,6 +330,133 @@ describe('createMihomoRuntime', () => {
       expect.objectContaining({
         method: 'PUT',
         body: JSON.stringify({ name: '美国 01' })
+      })
+    );
+  });
+
+  it('syncs subscription policy groups to the saved node on startup', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.killed = false;
+    child.kill = vi.fn();
+    let autoNow = 'node-hk';
+    let fallbackNow = 'node-hk';
+    let meslNow = 'Fallback';
+    let finalNow = 'MESL';
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path === 'https://example.com/sub') {
+        return new Response(undefined, { status: 404 });
+      }
+      if (path.endsWith('/version')) {
+        return Response.json({ version: 'test' });
+      }
+      if (path.endsWith('/proxies') && !init?.method) {
+        return Response.json({
+          proxies: {
+            Auto: {
+              now: autoNow,
+              all: ['node-hk', 'node-tw']
+            },
+            Fallback: {
+              now: fallbackNow,
+              all: ['node-hk', 'node-tw']
+            },
+            MESL: {
+              now: meslNow,
+              all: ['Fallback', 'Auto', 'node-hk', 'node-tw']
+            },
+            Final: {
+              now: finalNow,
+              all: ['MESL', 'Fallback', 'Auto', 'node-hk', 'node-tw']
+            },
+            'node-hk': {},
+            'node-tw': {}
+          }
+        });
+      }
+
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      if (path.endsWith('/proxies/Auto')) autoNow = body.name;
+      if (path.endsWith('/proxies/Fallback')) fallbackNow = body.name;
+      if (path.endsWith('/proxies/MESL')) meslNow = body.name;
+      if (path.endsWith('/proxies/Final')) finalNow = body.name;
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ selectedNode: 'node-tw' }),
+      spawnProcess: () => child as never
+    });
+
+    await runtime.start();
+
+    expect(autoNow).toBe('node-tw');
+    expect(fallbackNow).toBe('node-tw');
+    expect(meslNow).toBe('node-tw');
+    expect(finalNow).toBe('node-tw');
+  });
+
+  it('routes the top selector back through the group that contains the saved node', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.killed = false;
+    child.kill = vi.fn();
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/version')) {
+        return Response.json({ version: 'test' });
+      }
+      if (path.endsWith('/proxies') && !init?.method) {
+        return Response.json({
+          proxies: {
+            节点选择: {
+              now: 'DIRECT',
+              all: ['自动选择', 'DIRECT']
+            },
+            自动选择: {
+              now: '香港 01',
+              all: ['香港 01', '🇯🇵 日本 08 家宽']
+            },
+            '香港 01': {},
+            '🇯🇵 日本 08 家宽': {}
+          }
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ selectedNode: '🇯🇵 日本 08 家宽' }),
+      spawnProcess: () => child as never
+    });
+
+    await runtime.start();
+
+    expect(fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/%E8%87%AA%E5%8A%A8%E9%80%89%E6%8B%A9',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ name: '🇯🇵 日本 08 家宽' })
+      })
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ name: '自动选择' })
       })
     );
   });
