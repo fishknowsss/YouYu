@@ -1,4 +1,13 @@
-import type { AppSnapshot, DesktopPetState, MihomoMode, ProxyNode, StrategyKey, YouYuApi } from '../shared/ipc';
+import type {
+  AppSnapshot,
+  ConnectivityResult,
+  ConnectivityServiceKey,
+  DesktopPetState,
+  MihomoMode,
+  ProxyNode,
+  StrategyKey,
+  YouYuApi
+} from '../shared/ipc';
 
 const baseNodes: ProxyNode[] = [
   { name: '自动选择', delay: 92 },
@@ -6,6 +15,28 @@ const baseNodes: ProxyNode[] = [
   { name: '香港 02', delay: 151 },
   { name: '日本 01', delay: 96 },
   { name: '新加坡 01', delay: 138 }
+];
+
+const devConnectivity: Array<{
+  key: ConnectivityServiceKey;
+  name: string;
+  url: string;
+  category: ConnectivityResult['category'];
+  totalMs: number;
+  ip?: string;
+  region?: string;
+}> = [
+  { key: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com', category: 'ai', totalMs: 286, ip: '126.63.231.113', region: 'Japan' },
+  { key: 'claude', name: 'Claude', url: 'https://claude.ai', category: 'ai', totalMs: 312, ip: '126.63.231.113', region: 'Japan' },
+  { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai', totalMs: 248 },
+  { key: 'flow', name: 'Flow', url: 'https://labs.google/fx/tools/flow', category: 'special', totalMs: 338 },
+  { key: 'runway', name: 'Runway', url: 'https://app.runwayml.com', category: 'ai', totalMs: 428 },
+  { key: 'bytedance', name: '字节跳动', url: 'https://www.bytedance.com', category: 'global', totalMs: 198 },
+  { key: 'tencent', name: '腾讯', url: 'https://www.tencent.com', category: 'domestic', totalMs: 126 },
+  { key: 'google', name: 'Google', url: 'https://www.google.com', category: 'global', totalMs: 168 },
+  { key: 'x', name: 'X', url: 'https://x.com', category: 'global', totalMs: 226, ip: '216.236.40.177', region: 'Hong Kong' },
+  { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global', totalMs: 198, ip: '216.236.40.177', region: 'Hong Kong' },
+  { key: 'ehentai', name: 'E-Hentai', url: 'https://e-hentai.org', category: 'global', totalMs: 214, ip: '216.236.40.177', region: 'Hong Kong' }
 ];
 
 export function createDevYouYuApi(): YouYuApi {
@@ -165,6 +196,12 @@ export function createDevYouYuApi(): YouYuApi {
         }))
       });
     },
+    async testConnectivity(key) {
+      return createDevConnectivityResult(key);
+    },
+    async testAllConnectivity() {
+      return devConnectivity.map((service) => createDevConnectivityResult(service.key));
+    },
     async closeConnections() {
       return publish({
         runtime: {
@@ -207,6 +244,34 @@ export function createDevYouYuApi(): YouYuApi {
         nodes: snapshot.status === 'running' ? withNodes() : snapshot.nodes
       });
     }
+  };
+}
+
+function createDevConnectivityResult(key: ConnectivityServiceKey): ConnectivityResult {
+  const service = devConnectivity.find((item) => item.key === key) ?? devConnectivity[0];
+  return {
+    key: service.key,
+    name: service.name,
+    url: service.url,
+    category: service.category,
+    status: 'available',
+    statusText: '可用',
+    reachability: 'ok',
+    checkedAt: new Date().toISOString(),
+    httpCode: 200,
+    finalUrl: service.url,
+    region: service.region,
+    ip: service.ip,
+    colo: service.ip ? 'TPE' : undefined,
+    timings: {
+      connectMs: Math.max(18, service.totalMs - 210),
+      tlsMs: Math.max(42, service.totalMs - 160),
+      firstByteMs: Math.max(66, service.totalMs - 80),
+      totalMs: service.totalMs
+    },
+    rule: 'DOMAIN-SUFFIX',
+    rulePayload: service.key,
+    chains: ['MESL', '台湾 08 家宽']
   };
 }
 

@@ -5,7 +5,8 @@ import { join } from 'node:path';
 const builderCli = join(process.cwd(), 'node_modules', 'electron-builder', 'cli.js');
 const internalBuild = process.argv.includes('--internal');
 const noPetBuild = process.argv.includes('--no-pet');
-const subscriptionSource = internalBuild
+const bundledSubscriptionBuild = internalBuild || noPetBuild;
+const subscriptionSource = bundledSubscriptionBuild
   ? join(process.cwd(), 'resources', 'default-subscription.in.txt')
   : join(process.cwd(), 'resources', 'default-subscription.txt');
 const generatedSubscription = join(process.cwd(), 'resources', 'generated', 'default-subscription.txt');
@@ -54,9 +55,9 @@ async function prepareSubscriptionResource() {
   try {
     subscription = await readFile(subscriptionSource, 'utf8');
   } catch (error) {
-    if (internalBuild) {
+    if (bundledSubscriptionBuild) {
       throw new Error(
-        `Missing internal subscription file: ${subscriptionSource}. Create it locally; it is gitignored.`
+        `Missing bundled subscription file: ${subscriptionSource}. Create it locally; it is gitignored.`
       );
     }
   }

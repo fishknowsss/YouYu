@@ -5,6 +5,7 @@ const root = process.cwd();
 const releaseDir = join(root, 'release');
 const internalBuild = process.argv.includes('--internal');
 const noPetBuild = process.argv.includes('--no-pet');
+const bundledSubscriptionBuild = internalBuild || noPetBuild;
 
 const packageJson = (await import('../package.json', { with: { type: 'json' } })).default as {
   version?: string;
@@ -52,11 +53,11 @@ if (currentInstaller.size < 80 * 1024 * 1024) {
 }
 
 const bundledSubscription = (await readFile(bundledSubscriptionPath, 'utf8')).trim();
-if (!internalBuild && bundledSubscription) {
+if (!bundledSubscriptionBuild && bundledSubscription) {
   throw new Error('Public installer must not bundle a default subscription');
 }
-if (internalBuild && !bundledSubscription) {
-  throw new Error('Internal installer is missing the bundled default subscription');
+if (bundledSubscriptionBuild && !bundledSubscription) {
+  throw new Error(`${internalBuild ? 'Internal' : 'No-pet'} installer is missing the bundled default subscription`);
 }
 
 if (noPetBuild) {

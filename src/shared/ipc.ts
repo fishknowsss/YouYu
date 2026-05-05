@@ -46,6 +46,51 @@ export type RuntimeStats = {
   downloadTotal: number;
 };
 
+export type ConnectivityServiceKey =
+  | 'chatgpt'
+  | 'claude'
+  | 'gemini'
+  | 'flow'
+  | 'runway'
+  | 'bytedance'
+  | 'tencent'
+  | 'google'
+  | 'x'
+  | 'cloudflare'
+  | 'ehentai';
+
+export type ConnectivityStatus = 'untested' | 'available' | 'blocked' | 'timeout' | 'failed';
+export type ConnectivityReachability = 'ok' | 'guarded' | 'blocked' | 'unknown';
+export type ConnectivityCategory = 'domestic' | 'global' | 'ai' | 'special';
+
+export type ConnectivityTimings = {
+  connectMs?: number;
+  tlsMs?: number;
+  firstByteMs?: number;
+  totalMs?: number;
+};
+
+export type ConnectivityResult = {
+  key: ConnectivityServiceKey;
+  name: string;
+  url: string;
+  category?: ConnectivityCategory;
+  status: ConnectivityStatus;
+  statusText: string;
+  reachability?: ConnectivityReachability;
+  checkedAt?: string;
+  httpCode?: number;
+  finalUrl?: string;
+  region?: string;
+  ip?: string;
+  colo?: string;
+  timings: ConnectivityTimings;
+  rule?: string;
+  rulePayload?: string;
+  chains?: string[];
+  error?: string;
+};
+
 export type AppDiagnostics = {
   lastError?: string;
   logs: string[];
@@ -99,6 +144,8 @@ export type YouYuApi = {
   setMode: (mode: MihomoMode) => Promise<AppSnapshot>;
   testNode: (name: string) => Promise<AppSnapshot>;
   testAllNodes: () => Promise<AppSnapshot>;
+  testConnectivity: (key: ConnectivityServiceKey) => Promise<ConnectivityResult>;
+  testAllConnectivity: () => Promise<ConnectivityResult[]>;
   closeConnections: () => Promise<AppSnapshot>;
   updateSubscription: () => Promise<AppSnapshot>;
   saveSettings: (settings: AppSettingsInput) => Promise<AppSnapshot>;
@@ -120,6 +167,8 @@ export const ipcChannels = {
   setMode: 'youyu:set-mode',
   testNode: 'youyu:test-node',
   testAllNodes: 'youyu:test-all-nodes',
+  testConnectivity: 'youyu:test-connectivity',
+  testAllConnectivity: 'youyu:test-all-connectivity',
   closeConnections: 'youyu:close-connections',
   updateSubscription: 'youyu:update-subscription',
   saveSettings: 'youyu:save-settings'
