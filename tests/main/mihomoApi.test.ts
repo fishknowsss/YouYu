@@ -28,13 +28,14 @@ describe('createMihomoApiClient', () => {
   });
 
   it('selects a node through the 节点选择 group', async () => {
-    const fetcher = vi.fn(async (url: string | URL | Request) => {
+    let selected = '自动选择';
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       if (String(url).endsWith('/proxies')) {
         return Response.json({
           proxies: {
             节点选择: {
               type: 'Selector',
-              now: '自动选择',
+              now: selected,
               all: ['自动选择', '香港 01', '日本 01']
             },
             自动选择: { history: [{ delay: 92 }] },
@@ -43,13 +44,14 @@ describe('createMihomoApiClient', () => {
           }
         });
       }
+      selected = JSON.parse(String(init?.body ?? '{}')).name ?? selected;
       return new Response(null, { status: 204 });
     });
     const api = createMihomoApiClient({ secret: 'secret', fetcher });
 
     await api.selectNode('日本 01');
 
-    expect(fetcher).toHaveBeenLastCalledWith(
+    expect(fetcher).toHaveBeenCalledWith(
       'http://127.0.0.1:9090/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9',
       {
         method: 'PUT',
@@ -140,18 +142,20 @@ describe('createMihomoApiClient', () => {
   });
 
   it('selects a node through the nested group that contains it', async () => {
-    const fetcher = vi.fn(async (url: string | URL | Request) => {
+    let mainNow = 'Auto';
+    let autoNow = 'node-a';
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       if (String(url).endsWith('/proxies')) {
         return Response.json({
           proxies: {
             Main: {
               type: 'Selector',
-              now: 'Auto',
+              now: mainNow,
               all: ['Auto', 'DIRECT']
             },
             Auto: {
               type: 'URLTest',
-              now: 'node-a',
+              now: autoNow,
               all: ['node-a', 'node-b']
             },
             'node-a': {},
@@ -159,13 +163,16 @@ describe('createMihomoApiClient', () => {
           }
         });
       }
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      if (String(url).endsWith('/proxies/Auto')) autoNow = body.name;
+      if (String(url).endsWith('/proxies/Main')) mainNow = body.name;
       return new Response(null, { status: 204 });
     });
     const api = createMihomoApiClient({ secret: 'secret', fetcher });
 
     await api.selectNode('node-b');
 
-    expect(fetcher).toHaveBeenLastCalledWith('http://127.0.0.1:9090/proxies/Auto', {
+    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Auto', {
       method: 'PUT',
       headers: {
         Authorization: 'Bearer secret',
@@ -173,6 +180,189 @@ describe('createMihomoApiClient', () => {
       },
       body: JSON.stringify({ name: 'node-b' })
     });
+    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Main', {
+      method: 'PUT',
+      headers: {
+        Authorization: 'Bearer secret',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'Auto' })
+    });
+  });
+
+  it('moves the top selector away from DIRECT when selecting a nested node', async () => {
+    let mainNow = 'DIRECT';
+    let autoNow = 'node-a';
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: {
+              type: 'Selector',
+              now: mainNow,
+              all: ['Auto', 'DIRECT']
+            },
+            Auto: {
+              type: 'URLTest',
+              now: autoNow,
+              all: ['node-a', 'node-b']
+            },
+            'node-a': {},
+            'node-b': {}
+          }
+        });
+      }
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      if (String(url).endsWith('/proxies/Auto')) autoNow = body.name;
+      if (String(url).endsWith('/proxies/Main')) mainNow = body.name;
+      return new Response(null, { status: 204 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(api.getCurrentNode()).resolves.toBe('DIRECT');
+    await api.selectNode('node-b');
+
+    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Auto', {
+      method: 'PUT',
+      headers: {
+        Authorization: 'Bearer secret',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'node-b' })
+    });
+    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Main', {
+      method: 'PUT',
+      headers: {
+        Authorization: 'Bearer secret',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'Auto' })
+    });
+  });
+
+  it('selects a node through multi-level airport groups in stable top-level order', async () => {
+    let mainNow = 'DIRECT';
+    let regionNow = 'Auto JP';
+    let autoNow = 'node-a';
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: {
+              type: 'Selector',
+              now: mainNow,
+              all: ['Region JP', 'Region US', 'DIRECT']
+            },
+            'Region JP': {
+              type: 'Selector',
+              now: regionNow,
+              all: ['Auto JP', 'node-c']
+            },
+            'Region US': {
+              type: 'Selector',
+              now: 'node-b',
+              all: ['node-b']
+            },
+            'Auto JP': {
+              type: 'URLTest',
+              now: autoNow,
+              all: ['node-a', 'node-target']
+            },
+            'node-a': {},
+            'node-b': {},
+            'node-c': {},
+            'node-target': {}
+          }
+        });
+      }
+
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      if (String(url).endsWith('/proxies/Auto%20JP')) autoNow = body.name;
+      if (String(url).endsWith('/proxies/Region%20JP')) regionNow = body.name;
+      if (String(url).endsWith('/proxies/Main')) mainNow = body.name;
+      return new Response(null, { status: 204 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await api.selectNode('node-target');
+
+    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Auto%20JP', {
+      method: 'PUT',
+      headers: {
+        Authorization: 'Bearer secret',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'node-target' })
+    });
+    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Region%20JP', {
+      method: 'PUT',
+      headers: {
+        Authorization: 'Bearer secret',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'Auto JP' })
+    });
+    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Main', {
+      method: 'PUT',
+      headers: {
+        Authorization: 'Bearer secret',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'Region JP' })
+    });
+  });
+
+  it('syncs subscription policy groups when selecting a node', async () => {
+    let autoNow = 'node-hk';
+    let fallbackNow = 'node-hk';
+    let meslNow = 'Fallback';
+    let finalNow = 'MESL';
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Auto: {
+              type: 'URLTest',
+              now: autoNow,
+              all: ['node-hk', 'node-tw']
+            },
+            Fallback: {
+              type: 'Fallback',
+              now: fallbackNow,
+              all: ['node-hk', 'node-tw']
+            },
+            MESL: {
+              type: 'Selector',
+              now: meslNow,
+              all: ['Fallback', 'Auto', 'node-hk', 'node-tw']
+            },
+            Final: {
+              type: 'Selector',
+              now: finalNow,
+              all: ['MESL', 'Fallback', 'Auto', 'node-hk', 'node-tw']
+            },
+            'node-hk': {},
+            'node-tw': {}
+          }
+        });
+      }
+
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      if (path.endsWith('/proxies/Auto')) autoNow = body.name;
+      if (path.endsWith('/proxies/Fallback')) fallbackNow = body.name;
+      if (path.endsWith('/proxies/MESL')) meslNow = body.name;
+      if (path.endsWith('/proxies/Final')) finalNow = body.name;
+      return new Response(null, { status: 204 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await api.selectNode('node-tw');
+
+    expect(autoNow).toBe('node-tw');
+    expect(fallbackNow).toBe('node-tw');
+    expect(meslNow).toBe('node-tw');
+    expect(finalNow).toBe('node-tw');
   });
 
   it('tests node delay through the mihomo delay endpoint', async () => {

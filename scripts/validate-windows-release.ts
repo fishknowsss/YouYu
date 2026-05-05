@@ -4,6 +4,7 @@ import { join } from 'node:path';
 const root = process.cwd();
 const releaseDir = join(root, 'release');
 const internalBuild = process.argv.includes('--internal');
+const noPetBuild = process.argv.includes('--no-pet');
 
 const packageJson = (await import('../package.json', { with: { type: 'json' } })).default as {
   version?: string;
@@ -13,7 +14,7 @@ if (!packageJson.version) {
   throw new Error('Missing package version');
 }
 
-const expectedInstallerName = `YouYu-${packageJson.version}-x64${internalBuild ? '-in' : ''}.exe`;
+const expectedInstallerName = `YouYu-${packageJson.version}-x64${internalBuild ? '-in' : noPetBuild ? '-no' : ''}.exe`;
 const expectedInstallerPath = join(releaseDir, expectedInstallerName);
 const bundledSubscriptionPath = join(releaseDir, 'win-unpacked', 'resources', 'default-subscription.txt');
 
@@ -32,6 +33,9 @@ if (exeEntries.length !== 1 || exeEntries[0] !== expectedInstallerName) {
 
 if (!internalBuild && exeEntries.some((entry) => /-in\.exe$/i.test(entry))) {
   throw new Error(`Public release must not contain internal installer: ${exeEntries.join(', ')}`);
+}
+if (!noPetBuild && exeEntries.some((entry) => /-no\.exe$/i.test(entry))) {
+  throw new Error(`Standard release must not contain no-pet installer: ${exeEntries.join(', ')}`);
 }
 
 const confusingEntries = entries
@@ -53,6 +57,14 @@ if (!internalBuild && bundledSubscription) {
 }
 if (internalBuild && !bundledSubscription) {
   throw new Error('Internal installer is missing the bundled default subscription');
+}
+
+if (noPetBuild) {
+  const rendererAssets = await readdir(join(root, 'out', 'renderer', 'assets'));
+  const petAssets = rendererAssets.filter((entry) => /spritesheet/i.test(entry));
+  if (petAssets.length > 0) {
+    throw new Error(`No-pet build must not include pet spritesheets: ${petAssets.join(', ')}`);
+  }
 }
 
 console.log(`validated Windows x64 installer: ${expectedInstallerName}`);

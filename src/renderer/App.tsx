@@ -17,12 +17,13 @@ const emptySnapshot: AppSnapshot = {
   ],
   mode: 'rule',
   strategy: 'auto',
-  ruleProfile: 'smart',
+  ruleProfile: 'subscription',
   features: {
     systemProxyEnabled: true,
-    dnsEnhanced: true,
+    dnsEnhanced: false,
     snifferEnabled: true,
-    tunEnabled: false,
+    tunEnabled: true,
+    strictRouteEnabled: true,
     allowLan: false
   },
   runtime: {
@@ -39,11 +40,12 @@ const emptySnapshot: AppSnapshot = {
 const easyStartSettings: AppSettingsInput = {
   mode: 'rule',
   strategy: 'auto',
-  ruleProfile: 'smart',
+  ruleProfile: 'subscription',
   systemProxyEnabled: true,
-  dnsEnhanced: true,
+  dnsEnhanced: false,
   snifferEnabled: true,
-  tunEnabled: false,
+  tunEnabled: true,
+  strictRouteEnabled: true,
   allowLan: false
 };
 const actionTimeoutMs = 75000;

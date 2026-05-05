@@ -45,9 +45,9 @@ const builtInProxyNames = new Set(['COMPATIBLE', 'DIRECT', 'PASS', 'REJECT', 'RE
 const managedGroupNames = new Set(['节点选择', '自动选择', '故障转移', '负载均衡']);
 const noticeNodeKeywords = ['失去支持', '更新你的代理客户端', '官网公告', '代理客户端'];
 const preferredDefaultNodeKeywordSets = [
-  ['日本', '08', '家宽'],
-  ['日本', '09', '家宽'],
-  ['日本', '家宽']
+  ['台湾', '08', '家宽'],
+  ['台湾', '09', '家宽'],
+  ['台湾', '家宽']
 ];
 const subscriptionUserAgent = 'Clash Verge/2.3.2';
 
@@ -142,12 +142,63 @@ function resolveCurrentNode(proxies: Record<string, MihomoProxyItem>, selector: 
   return nestedCurrent && nestedCurrent !== current ? nestedCurrent : current;
 }
 
-function findDirectSelectorForNode(proxies: Record<string, MihomoProxyItem>, fallbackSelector: string, node: string) {
-  if (proxies[fallbackSelector]?.all?.includes(node)) {
-    return fallbackSelector;
+function resolveSelectionSteps(
+  proxies: Record<string, MihomoProxyItem>,
+  fallbackSelector: string,
+  node: string
+): Array<{ group: string; name: string }> {
+  return resolveSelectionStepsForGroup(proxies, fallbackSelector, node) ?? [{ group: fallbackSelector, name: node }];
+}
+
+function resolveSelectionStepsForGroup(
+  proxies: Record<string, MihomoProxyItem>,
+  group: string,
+  node: string
+): Array<{ group: string; name: string }> | null {
+  const topLevel = proxies[group]?.all ?? [];
+  if (topLevel.includes(node)) {
+    return [{ group, name: node }];
   }
 
-  return Object.entries(proxies).find(([_name, item]) => item.all?.includes(node))?.[0] ?? fallbackSelector;
+  const nested = Object.entries(proxies).find(([_name, item]) => item.all?.includes(node));
+  if (!nested) {
+    return null;
+  }
+
+  const [nestedGroup] = nested;
+  const steps = [{ group: nestedGroup, name: node }];
+  if (nestedGroup !== group && topLevel.includes(nestedGroup)) {
+    steps.push({ group, name: nestedGroup });
+  }
+  return steps;
+}
+
+function collectSyncedSelectionSteps(
+  proxies: Record<string, MihomoProxyItem>,
+  target: string,
+  primarySteps: Array<{ group: string; name: string }>
+): Array<{ group: string; name: string; required: boolean }> {
+  const stepsByGroup = new Map<string, { group: string; name: string; required: boolean }>();
+  for (const step of primarySteps) {
+    stepsByGroup.set(step.group, { ...step, required: true });
+  }
+
+  for (const [group, item] of Object.entries(proxies)) {
+    if (!item.all?.length || builtInProxyNames.has(group)) {
+      continue;
+    }
+
+    const steps = resolveSelectionStepsForGroup(proxies, group, target);
+    for (const step of steps ?? []) {
+      const existing = stepsByGroup.get(step.group);
+      if (existing?.required) {
+        continue;
+      }
+      stepsByGroup.set(step.group, { ...step, required: false });
+    }
+  }
+
+  return [...stepsByGroup.values()];
 }
 
 function sortDefaultCandidates(nodes: string[]): string[] {
@@ -231,8 +282,16 @@ async function waitForUsableProxies(
     if (nodes.length > 0) {
       const target = pickStartupNode(nodes, selectedNode);
       if (target && (!currentNode || builtInProxyNames.has(currentNode) || currentNode !== target)) {
-        const group = findDirectSelectorForNode(proxies, selector?.name ?? selectorName, target);
-        await selectNode(port, secret, group, target);
+        const primarySteps = resolveSelectionSteps(proxies, selector?.name ?? selectorName, target);
+        const steps = collectSyncedSelectionSteps(proxies, target, primarySteps);
+        for (const step of steps) {
+          const task = selectNode(port, secret, step.group, step.name);
+          if (step.required) {
+            await task;
+          } else {
+            await task.catch(() => undefined);
+          }
+        }
         logLine?.(
           selectedNode.trim() && target === selectedNode.trim()
             ? `mihomo restored selected node: ${target}`
@@ -311,6 +370,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         dnsEnhanced: settings.dnsEnhanced,
         snifferEnabled: settings.snifferEnabled,
         tunEnabled: settings.tunEnabled,
+        strictRouteEnabled: settings.strictRouteEnabled,
         allowLan: settings.allowLan,
         subscriptionConfigText,
         mixedPort: ports.mixedPort,

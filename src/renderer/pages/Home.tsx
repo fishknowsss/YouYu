@@ -63,13 +63,15 @@ function AdvancedHome(props: HomeProps) {
   const running = props.snapshot.status === 'running';
   const failed = props.snapshot.status === 'failed';
   const statusLabel = getStatusLabel(props.snapshot.status);
+  const totalTraffic = formatBytes(props.snapshot.runtime.uploadTotal + props.snapshot.runtime.downloadTotal);
+  const logLines = props.snapshot.diagnostics.logs.slice(-7);
 
   return (
     <div className="workspace advanced-workspace">
       <header className="workspace-header">
         <div>
           <h1>控制台</h1>
-          <p>模式与运行状态</p>
+          <p>代理状态与模式</p>
         </div>
         <div className="header-actions">
           <button className="secondary-button mode-return-button" onClick={() => props.onUsageModeChange('easy')}>
@@ -82,8 +84,8 @@ function AdvancedHome(props: HomeProps) {
       <section className={`home-board advanced-board ${running ? 'is-running' : ''} ${failed ? 'is-failed' : ''}`}>
         <div className="connection-card">
           <div className="connection-identity">
-            <BrandMark size="md" />
             <div>
+              <span>当前节点</span>
               <h2 title={props.snapshot.currentNode}>{props.snapshot.currentNode}</h2>
             </div>
           </div>
@@ -98,7 +100,7 @@ function AdvancedHome(props: HomeProps) {
         </div>
 
         <section className="panel mode-panel">
-          <h2>模式</h2>
+          <h2>代理模式</h2>
           <div className="mode-strip" aria-label="代理模式">
             {modeOptions.map((mode) => (
               <button
@@ -114,29 +116,34 @@ function AdvancedHome(props: HomeProps) {
         </section>
 
         <section className="panel runtime-panel">
-          <h2>运行</h2>
-          <div className="metric-row">
-            <span className="label">模式</span>
-            <strong>{formatMode(props.snapshot.mode)}</strong>
-          </div>
-          <div className="metric-row">
-            <span className="label">连接</span>
-            <strong>{props.snapshot.runtime.activeConnections}</strong>
-          </div>
-          <div className="metric-row">
-            <span className="label">流量</span>
-            <strong>{formatBytes(props.snapshot.runtime.uploadTotal + props.snapshot.runtime.downloadTotal)}</strong>
+          <h2>运行数据</h2>
+          <div className="metric-grid">
+            <div className="metric-row">
+              <span className="label">模式</span>
+              <strong>{formatMode(props.snapshot.mode)}</strong>
+            </div>
+            <div className="metric-row">
+              <span className="label">连接</span>
+              <strong>{props.snapshot.runtime.activeConnections}</strong>
+            </div>
+            <div className="metric-row">
+              <span className="label">流量</span>
+              <strong>{totalTraffic}</strong>
+            </div>
           </div>
         </section>
 
         <section className="panel diagnostics-panel">
-          <h2>诊断</h2>
+          <div className="panel-title-row">
+            <h2>诊断</h2>
+            <span>{props.snapshot.diagnostics.logs.length} 条</span>
+          </div>
           {props.snapshot.diagnostics.lastError && (
             <p className="diagnostics-error">{props.snapshot.diagnostics.lastError}</p>
           )}
           <div className="diagnostics-log">
-            {props.snapshot.diagnostics.logs.length ? (
-              props.snapshot.diagnostics.logs.slice(-8).map((line) => <span key={line}>{line}</span>)
+            {logLines.length ? (
+              logLines.map((line, index) => <span key={`${index}-${line}`}>{line}</span>)
             ) : (
               <span>暂无日志</span>
             )}

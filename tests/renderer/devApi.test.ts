@@ -8,7 +8,13 @@ describe('createDevYouYuApi', () => {
     expect(await api.getSnapshot()).toMatchObject({
       status: 'stopped',
       currentNode: '自动选择',
-      subscriptionUrl: ''
+      subscriptionUrl: '',
+      ruleProfile: 'subscription',
+      features: {
+        dnsEnhanced: false,
+        tunEnabled: true,
+        strictRouteEnabled: true
+      }
     });
 
     await api.saveSettings({ subscriptionUrl: 'https://example.com/sub' });

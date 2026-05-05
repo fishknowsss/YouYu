@@ -1,6 +1,6 @@
 appId: studio.youyu.proxy
 productName: YouYu
-compression: maximum
+compression: normal
 electronLanguages:
   - zh-CN
   - en-US
@@ -25,6 +25,7 @@ extraResources:
     to: assets/tray-icon.png
 win:
   icon: build/icon.ico
+  requestedExecutionLevel: requireAdministrator
   target:
     - target: nsis
       arch:
@@ -43,6 +44,4 @@ nsis:
     - zh_CN
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
-  installerSidebar: build/installerSidebar.bmp
-  uninstallerSidebar: build/uninstallerSidebar.bmp
   include: build/installer.nsh

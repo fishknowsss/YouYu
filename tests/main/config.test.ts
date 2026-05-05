@@ -25,24 +25,45 @@ describe('buildMihomoConfig', () => {
       '故障转移',
       '负载均衡'
     ]);
-    expect(config.dns.enable).toBe(true);
-    expect(config.dns.listen).toBe('127.0.0.1:1053');
-    expect(config.dns.fallback).toBeUndefined();
-    expect(config.dns['fallback-filter']).toBeUndefined();
+    expect(config.dns).toBeUndefined();
     expect(config.sniffer.enable).toBe(true);
+    expect(config.rules[0]).toBe('DOMAIN-SUFFIX,flow.google.com,节点选择');
     expect(config.rules).toContain('DOMAIN-SUFFIX,cn,DIRECT');
     expect(config.rules).toContain('MATCH,节点选择');
   });
 
-  it('uses the allocated dns listener port', () => {
+  it('injects local DNS only when DNS enhancement is enabled', () => {
     const yamlText = buildMihomoConfig({
       subscriptionUrl: 'https://example.com/sub',
       secret: 'local-secret',
+      dnsEnhanced: true,
       dnsPort: 1099
     });
     const config = parse(yamlText);
 
+    expect(config.dns.enable).toBe(true);
     expect(config.dns.listen).toBe('127.0.0.1:1099');
+    expect(config.dns.fallback).toBeUndefined();
+    expect(config.dns['fallback-filter']).toBeUndefined();
+  });
+
+  it('enables TUN with strict routing when requested', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/sub',
+      secret: 'local-secret',
+      tunEnabled: true,
+      strictRouteEnabled: true
+    });
+    const config = parse(yamlText);
+
+    expect(config.tun).toMatchObject({
+      enable: true,
+      stack: 'mixed',
+      'auto-route': true,
+      'auto-detect-interface': true,
+      'strict-route': true
+    });
+    expect(config.tun['dns-hijack']).toEqual(['any:53', 'tcp://any:53']);
   });
 
   it('inlines subscription proxies before mihomo starts', () => {
@@ -57,7 +78,7 @@ proxies:
     port: 8388
     cipher: aes-128-gcm
     password: pass
-  - name: 🇯🇵 日本 09 家宽
+  - name: 🇹🇼 台湾 08 家宽
     type: ss
     server: 127.0.0.1
     port: 8389
@@ -70,14 +91,14 @@ proxies:
     expect(config['proxy-providers']).toBeUndefined();
     expect(config.proxies.map((proxy: { name: string }) => proxy.name)).toEqual([
       '香港 01',
-      '🇯🇵 日本 09 家宽'
+      '🇹🇼 台湾 08 家宽'
     ]);
     expect(config['proxy-groups'][0]).toMatchObject({
       name: '节点选择',
       type: 'select'
     });
-    expect(config['proxy-groups'][0].proxies[1]).toBe('🇯🇵 日本 09 家宽');
-    expect(config['proxy-groups'][1].proxies[0]).toBe('🇯🇵 日本 09 家宽');
+    expect(config['proxy-groups'][0].proxies[1]).toBe('🇹🇼 台湾 08 家宽');
+    expect(config['proxy-groups'][1].proxies[0]).toBe('🇹🇼 台湾 08 家宽');
     expect(config.rules).toContain('MATCH,节点选择');
   });
 
@@ -159,6 +180,22 @@ rules:
     expect(config.secret).toBe('local-secret');
     expect(config.dns.fallback).toBeUndefined();
     expect(config.dns['fallback-filter']).toBeUndefined();
-    expect(config.rules).toEqual(['DOMAIN-SUFFIX,example.com,PROXY', 'MATCH,DIRECT']);
+    expect(config.rules).toEqual([
+      'DOMAIN-SUFFIX,flow.google.com,PROXY',
+      'DOMAIN-SUFFIX,labs.google,PROXY',
+      'DOMAIN-SUFFIX,google.com,PROXY',
+      'DOMAIN-SUFFIX,google,PROXY',
+      'DOMAIN-SUFFIX,googleapis.com,PROXY',
+      'DOMAIN-SUFFIX,googleusercontent.com,PROXY',
+      'DOMAIN-SUFFIX,gstatic.com,PROXY',
+      'DOMAIN-SUFFIX,ggpht.com,PROXY',
+      'DOMAIN-SUFFIX,googlevideo.com,PROXY',
+      'DOMAIN-SUFFIX,ytimg.com,PROXY',
+      'DOMAIN-SUFFIX,withgoogle.com,PROXY',
+      'DOMAIN-SUFFIX,firebaseapp.com,PROXY',
+      'DOMAIN-SUFFIX,firebaseio.com,PROXY',
+      'DOMAIN-SUFFIX,example.com,PROXY',
+      'MATCH,DIRECT'
+    ]);
   });
 });

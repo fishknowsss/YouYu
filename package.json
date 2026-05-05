@@ -1,6 +1,6 @@
 {
   "name": "youyu",
-  "version": "0.4.25",
+  "version": "0.6.1",
   "private": true,
   "author": "118 Studio",
   "description": "YouYu Windows proxy desktop app",
@@ -14,11 +14,15 @@
     "clean:release": "node scripts/clean-release.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck && electron-vite build",
+    "build": "node scripts/run-build.mjs",
+    "build:in": "node scripts/run-build.mjs --internal",
+    "build:no-pet": "node scripts/run-build.mjs --no-pet",
     "dist:win": "npm run clean:release && npm run assets && npm run build && npm run cache:electron:win && node scripts/run-electron-builder.mjs && npm run validate:release",
-    "dist:win:in": "npm run clean:release && npm run assets && npm run build && npm run cache:electron:win && node scripts/run-electron-builder.mjs --internal && npm run validate:release:in",
+    "dist:win:in": "npm run clean:release && npm run assets && npm run build:in && npm run cache:electron:win && node scripts/run-electron-builder.mjs --internal && npm run validate:release:in",
+    "dist:win:no": "npm run clean:release && npm run assets && npm run build:no-pet && npm run cache:electron:win && node scripts/run-electron-builder.mjs --no-pet && npm run validate:release:no",
     "validate:release": "tsx scripts/validate-windows-release.ts",
     "validate:release:in": "tsx scripts/validate-windows-release.ts --internal",
+    "validate:release:no": "tsx scripts/validate-windows-release.ts --no-pet",
     "smoke": "tsx scripts/smoke-test.ts"
   },
   "devDependencies": {

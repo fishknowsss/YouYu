@@ -16,7 +16,8 @@ function makeSnapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
       systemProxyEnabled: true,
       dnsEnhanced: true,
       snifferEnabled: true,
-      tunEnabled: false,
+      tunEnabled: true,
+      strictRouteEnabled: true,
       allowLan: false
     },
     runtime: {
@@ -34,6 +35,7 @@ function makeSnapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
 
 function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   return {
+    settingsVersion: 1,
     subscriptionUrl: 'https://example.com/sub',
     controllerSecret: 'secret',
     mode: 'rule',
@@ -43,7 +45,8 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     systemProxyEnabled: true,
     dnsEnhanced: true,
     snifferEnabled: true,
-    tunEnabled: false,
+    tunEnabled: true,
+    strictRouteEnabled: true,
     allowLan: false,
     ...overrides
   };

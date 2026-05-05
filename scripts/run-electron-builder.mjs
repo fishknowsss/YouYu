@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 const builderCli = join(process.cwd(), 'node_modules', 'electron-builder', 'cli.js');
 const internalBuild = process.argv.includes('--internal');
+const noPetBuild = process.argv.includes('--no-pet');
 const subscriptionSource = internalBuild
   ? join(process.cwd(), 'resources', 'default-subscription.in.txt')
   : join(process.cwd(), 'resources', 'default-subscription.txt');
@@ -17,6 +18,8 @@ await prepareSubscriptionResource();
 const builderArgs = [builderCli, '--win', 'nsis', '--x64', '--publish', 'never'];
 if (internalBuild) {
   builderArgs.push('-c.win.artifactName=YouYu-${version}-${arch}-in.${ext}');
+} else if (noPetBuild) {
+  builderArgs.push('-c.win.artifactName=YouYu-${version}-${arch}-no.${ext}');
 }
 
 const child = spawn(
@@ -27,6 +30,7 @@ const child = spawn(
     windowsHide: true,
     env: {
       ...process.env,
+      YOUYU_DISABLE_PET: noPetBuild ? '1' : process.env.YOUYU_DISABLE_PET,
       NODE_OPTIONS: nodeOptions
     }
   }

@@ -1,0 +1,313 @@
+{
+  "frame": {
+    "width": 192,
+    "height": 208
+  },
+  "background": "transparent",
+  "source": "Rich version: preserves most liked no-mouth concept poses, plus original base walking frames. Clear original mouth frames are not used.",
+  "rules": {
+    "noOriginalMouthFrames": true,
+    "rewardInterpretedAsHoldObserveNotEating": true,
+    "stateAwareScaleAndBaseline": true,
+    "transparentBackground": true
+  },
+  "atlases": {
+    "main": {
+      "file": "main-spritesheet.png",
+      "webp": "main-spritesheet.webp",
+      "rows": {
+        "idle": {
+          "row": 0,
+          "frames": 6,
+          "sourceKeys": [
+            "a_no_mouth_r1c1",
+            "a_no_mouth_r1c2",
+            "a_no_mouth_r1c3",
+            "a_no_mouth_r1c4",
+            "a_no_mouth_r1c5",
+            "a_no_mouth_r1c6"
+          ],
+          "profiles": [
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "normal"
+          ]
+        },
+        "walkRight": {
+          "row": 1,
+          "frames": 6,
+          "sourceKeys": [
+            "base_r5c1",
+            "base_r5c2",
+            "base_r5c3",
+            "base_r5c4",
+            "base_r5c5",
+            "base_r5c6"
+          ],
+          "profiles": [
+            "walk",
+            "walk",
+            "walk",
+            "walk",
+            "walk",
+            "walk"
+          ]
+        },
+        "walkLeft": {
+          "row": 2,
+          "frames": 6,
+          "sourceKeys": [
+            "base_r5c1",
+            "base_r5c2",
+            "base_r5c3",
+            "base_r5c4",
+            "base_r5c5",
+            "base_r5c6"
+          ],
+          "profiles": [
+            "walk",
+            "walk",
+            "walk",
+            "walk",
+            "walk",
+            "walk"
+          ]
+        },
+        "wave": {
+          "row": 3,
+          "frames": 6,
+          "sourceKeys": [
+            "a_no_mouth_r2c1",
+            "a_no_mouth_r2c2",
+            "a_no_mouth_r2c3",
+            "a_no_mouth_r2c4",
+            "a_no_mouth_r2c5",
+            "a_no_mouth_r2c6"
+          ],
+          "profiles": [
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "normal"
+          ]
+        },
+        "jump": {
+          "row": 4,
+          "frames": 6,
+          "sourceKeys": [
+            "a_no_mouth_r3c1",
+            "a_no_mouth_r3c2",
+            "a_no_mouth_r3c3",
+            "a_no_mouth_r3c4",
+            "a_no_mouth_r3c5",
+            "a_no_mouth_r3c6"
+          ],
+          "profiles": [
+            "very_low",
+            "normal",
+            "normal",
+            "normal",
+            "very_low",
+            "normal"
+          ]
+        },
+        "drag": {
+          "row": 5,
+          "frames": 6,
+          "sourceKeys": [
+            "a_no_mouth_r4c1",
+            "a_no_mouth_r4c2",
+            "a_no_mouth_r4c3",
+            "a_no_mouth_r4c4",
+            "a_no_mouth_r4c5",
+            "a_no_mouth_r4c6"
+          ],
+          "profiles": [
+            "normal",
+            "tall",
+            "tall",
+            "tall",
+            "normal",
+            "normal"
+          ]
+        },
+        "sleepWake": {
+          "row": 6,
+          "frames": 6,
+          "sourceKeys": [
+            "b_no_mouth_r1c1",
+            "b_no_mouth_r1c2",
+            "b_no_mouth_r1c3",
+            "b_no_mouth_r1c4",
+            "b_no_mouth_r1c5",
+            "b_no_mouth_r1c6"
+          ],
+          "profiles": [
+            "normal",
+            "low",
+            "low",
+            "low",
+            "normal",
+            "normal"
+          ]
+        },
+        "focusWait": {
+          "row": 7,
+          "frames": 6,
+          "sourceKeys": [
+            "b_no_mouth_r4c1",
+            "b_no_mouth_r4c2",
+            "b_no_mouth_r4c3",
+            "b_no_mouth_r4c4",
+            "b_no_mouth_r4c5",
+            "b_no_mouth_r4c6"
+          ],
+          "profiles": [
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "normal"
+          ]
+        },
+        "happy": {
+          "row": 8,
+          "frames": 6,
+          "sourceKeys": [
+            "c_no_mouth_r1c1",
+            "c_no_mouth_r1c2",
+            "c_no_mouth_r1c3",
+            "c_no_mouth_r1c4",
+            "c_no_mouth_r1c5",
+            "c_no_mouth_r1c6"
+          ],
+          "profiles": [
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "normal"
+          ]
+        }
+      }
+    },
+    "extra": {
+      "file": "extra-spritesheet.png",
+      "webp": "extra-spritesheet.webp",
+      "rows": {
+        "edgePeek": {
+          "row": 0,
+          "frames": 6,
+          "sourceKeys": [
+            "b_no_mouth_r2c1",
+            "b_no_mouth_r2c2",
+            "b_no_mouth_r2c3",
+            "b_no_mouth_r2c4",
+            "b_no_mouth_r2c5",
+            "b_no_mouth_r2c6"
+          ],
+          "profiles": [
+            "edge",
+            "edge",
+            "very_low",
+            "edge",
+            "very_low",
+            "normal"
+          ]
+        },
+        "fallRecover": {
+          "row": 1,
+          "frames": 6,
+          "sourceKeys": [
+            "b_no_mouth_r3c1",
+            "b_no_mouth_r3c2",
+            "b_no_mouth_r3c3",
+            "b_no_mouth_r3c4",
+            "b_no_mouth_r3c5",
+            "b_no_mouth_r3c6"
+          ],
+          "profiles": [
+            "normal",
+            "normal",
+            "very_low",
+            "normal",
+            "normal",
+            "normal"
+          ]
+        },
+        "annoyed": {
+          "row": 2,
+          "frames": 6,
+          "sourceKeys": [
+            "c_no_mouth_r2c1",
+            "c_no_mouth_r2c2",
+            "c_no_mouth_r2c3",
+            "c_no_mouth_r2c4",
+            "c_no_mouth_r2c5",
+            "c_no_mouth_r2c6"
+          ],
+          "profiles": [
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "normal"
+          ]
+        },
+        "comfortSad": {
+          "row": 3,
+          "frames": 6,
+          "sourceKeys": [
+            "c_no_mouth_r3c1",
+            "c_no_mouth_r3c2",
+            "c_no_mouth_r3c3",
+            "c_no_mouth_r3c4",
+            "c_no_mouth_r3c5",
+            "c_no_mouth_r3c6"
+          ],
+          "profiles": [
+            "normal",
+            "normal",
+            "very_low",
+            "very_low",
+            "normal",
+            "normal"
+          ]
+        },
+        "rewardObserve": {
+          "row": 4,
+          "frames": 6,
+          "sourceKeys": [
+            "c_no_mouth_r4c1",
+            "c_no_mouth_r4c2",
+            "c_no_mouth_r4c3",
+            "c_no_mouth_r4c4",
+            "c_no_mouth_r4c5",
+            "c_no_mouth_r4c6"
+          ],
+          "profiles": [
+            "normal",
+            "normal",
+            "reward",
+            "reward",
+            "reward",
+            "normal"
+          ]
+        }
+      }
+    }
+  },
+  "qa": {
+    "mainChecker": "qa/main-spritesheet-checker.png",
+    "extraChecker": "qa/extra-spritesheet-checker.png",
+    "allCandidates": "qa/all-candidates-checker.png"
+  }
+}

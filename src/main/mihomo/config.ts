@@ -1,8 +1,25 @@
 import YAML from 'yaml';
 import type { MihomoMode, RuleProfile, StrategyKey } from '../../shared/ipc';
 
-const preferredDefaultNodeKeywords = ['日本', '09', '家宽'];
+const selectorName = '节点选择';
+const preferredDefaultNodeKeywords = ['台湾', '08', '家宽'];
 const noticeNodeKeywords = ['失去支持', '更新你的代理客户端', '官网公告', '代理客户端'];
+const aiFlowDomains = [
+  'flow.google.com',
+  'labs.google',
+  'google.com',
+  'google',
+  'googleapis.com',
+  'googleusercontent.com',
+  'gstatic.com',
+  'ggpht.com',
+  'googlevideo.com',
+  'ytimg.com',
+  'withgoogle.com',
+  'firebaseapp.com',
+  'firebaseio.com'
+];
+const routableProxyGroupTypes = new Set(['select', 'url-test', 'fallback', 'load-balance', 'relay']);
 
 export type MihomoConfigInput = {
   subscriptionUrl: string;
@@ -14,6 +31,7 @@ export type MihomoConfigInput = {
   dnsEnhanced?: boolean;
   snifferEnabled?: boolean;
   tunEnabled?: boolean;
+  strictRouteEnabled?: boolean;
   allowLan?: boolean;
   subscriptionConfigText?: string;
   mixedPort?: number;
@@ -87,7 +105,7 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
         lazy: true
       }
     ],
-    rules: buildManagedRules(input.ruleProfile ?? 'smart')
+    rules: buildManagedRules(input.ruleProfile ?? 'subscription')
   };
 
   return YAML.stringify(config);
@@ -153,7 +171,7 @@ function buildInlineSubscriptionConfig(input: MihomoConfigInput): string | null 
           lazy: true
         }
       ],
-      rules: buildManagedRules(input.ruleProfile ?? 'smart')
+      rules: buildManagedRules(input.ruleProfile ?? 'subscription')
     };
 
     return YAML.stringify(config);
@@ -214,7 +232,7 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
     }
   };
 
-  if (input.dnsEnhanced ?? true) {
+  if (input.dnsEnhanced === true) {
     options.dns = {
       enable: true,
       listen: `127.0.0.1:${input.dnsPort ?? 1053}`,
@@ -257,22 +275,23 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
     options.tun = {
       enable: true,
       stack: 'mixed',
-      'dns-hijack': ['any:53'],
+      'dns-hijack': ['any:53', 'tcp://any:53'],
       'auto-route': true,
       'auto-detect-interface': true,
-      'strict-route': false
+      'strict-route': input.strictRouteEnabled ?? true
     };
   }
 
   return options;
 }
 
-function buildManagedRules(ruleProfile: RuleProfile) {
+function buildManagedRules(ruleProfile: RuleProfile, proxyTarget = selectorName) {
   if (ruleProfile === 'global') {
-    return ['MATCH,节点选择'];
+    return [...buildAiFlowProxyRules(proxyTarget), `MATCH,${proxyTarget}`];
   }
 
   return [
+    ...buildAiFlowProxyRules(proxyTarget),
     'DOMAIN-SUFFIX,local,DIRECT',
     'DOMAIN-SUFFIX,localhost,DIRECT',
     'DOMAIN-SUFFIX,cn,DIRECT',
@@ -289,7 +308,7 @@ function buildManagedRules(ruleProfile: RuleProfile) {
     'IP-CIDR,192.168.0.0/16,DIRECT,no-resolve',
     'IP-CIDR,127.0.0.0/8,DIRECT,no-resolve',
     'IP-CIDR,169.254.0.0/16,DIRECT,no-resolve',
-    'MATCH,节点选择'
+    `MATCH,${proxyTarget}`
   ];
 }
 
@@ -313,10 +332,11 @@ function buildSubscriptionConfig(input: MihomoConfigInput): string | null {
     Object.assign(merged, runtimeOptions);
     sanitizeDnsConfig(merged);
 
+    const proxyTarget = findPrimaryProxyTarget(merged) ?? selectorName;
     if (!Array.isArray(merged.rules) || merged.rules.length === 0) {
-      merged.rules = buildManagedRules('smart');
+      merged.rules = buildManagedRules('smart', proxyTarget);
     } else {
-      merged.rules = normalizeSubscriptionRules(merged.rules);
+      merged.rules = normalizeSubscriptionRules(merged.rules, proxyTarget);
     }
 
     return YAML.stringify(merged);
@@ -333,15 +353,22 @@ function removeSubscriptionListenerPorts(config: Record<string, unknown>) {
   delete config['mixed-port'];
 }
 
-function normalizeSubscriptionRules(rules: unknown[]): unknown[] {
-  return rules.filter((rule) => {
-    if (typeof rule !== 'string') {
-      return true;
-    }
+function normalizeSubscriptionRules(rules: unknown[], proxyTarget: string): unknown[] {
+  return [
+    ...buildAiFlowProxyRules(proxyTarget),
+    ...rules.filter((rule) => {
+      if (typeof rule !== 'string') {
+        return true;
+      }
 
-    const normalizedRule = rule.trim().toUpperCase();
-    return !normalizedRule.startsWith('GEOIP,') && !normalizedRule.startsWith('GEOSITE,');
-  });
+      const normalizedRule = rule.trim().toUpperCase();
+      return (
+        !normalizedRule.startsWith('GEOIP,') &&
+        !normalizedRule.startsWith('GEOSITE,') &&
+        !isAiFlowRule(normalizedRule)
+      );
+    })
+  ];
 }
 
 function sanitizeDnsConfig(config: Record<string, unknown>) {
@@ -355,4 +382,39 @@ function sanitizeDnsConfig(config: Record<string, unknown>) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function buildAiFlowProxyRules(proxyTarget: string): string[] {
+  return aiFlowDomains.map((domain) => `DOMAIN-SUFFIX,${domain},${proxyTarget}`);
+}
+
+function isAiFlowRule(normalizedRule: string): boolean {
+  const parts = normalizedRule.split(',').map((part) => part.trim().toLowerCase());
+  if (parts.length < 2) {
+    return false;
+  }
+
+  const [type, domain] = parts;
+  return (type === 'domain' || type === 'domain-suffix') && aiFlowDomains.includes(domain);
+}
+
+function findPrimaryProxyTarget(config: Record<string, unknown>): string | null {
+  const groups = config['proxy-groups'];
+  if (!Array.isArray(groups)) {
+    return null;
+  }
+
+  for (const group of groups) {
+    if (!isRecord(group) || typeof group.name !== 'string') {
+      continue;
+    }
+
+    const type = typeof group.type === 'string' ? group.type : '';
+    const hasProxySource = Array.isArray(group.proxies) || Array.isArray(group.use);
+    if (hasProxySource && routableProxyGroupTypes.has(type)) {
+      return group.name;
+    }
+  }
+
+  return null;
 }

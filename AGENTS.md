@@ -21,6 +21,7 @@
 
 - Before coding, propose layout and component tree for UI work.
 - After coding, self-check against all forbidden UI/copy patterns.
+- For code or resource changes that are being delivered locally, read `docs/release-packaging.md`, bump the patch version, and produce the documented Windows installers unless the user explicitly says not to package.
 
 ## Packaging Rules
 
@@ -28,5 +29,6 @@
 - Public GitHub builds must use `npm run dist:win` and produce `release/YouYu-<version>-x64.exe`.
 - Public builds must not contain a bundled subscription. `scripts/validate-windows-release.ts` enforces an empty bundled `default-subscription.txt`.
 - Local internal builds must use `npm run dist:win:in` and produce `release/YouYu-<version>-x64-in.exe`.
+- Local no-desktop-pet builds must use `npm run dist:win:no` and produce `release/YouYu-<version>-x64-no.exe`.
 - The internal subscription source is `resources/default-subscription.in.txt`; it is local-only and gitignored. Never commit it.
-- Both `dist:win` and `dist:win:in` run `clean:release`, so each command deletes the previous `release/` output. If both installers are needed locally, copy one aside before running the other.
+- `dist:win`, `dist:win:in`, and `dist:win:no` run `clean:release`, so each command deletes the previous `release/` output. If multiple installers are needed locally, copy each `.exe` and `.blockmap` pair aside before running the next build.

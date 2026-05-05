@@ -1,0 +1,10 @@
+{
+  "id": "youyu",
+  "displayName": "Youyu",
+  "description": "Transparent desktop pet atlas pack for YouYu.",
+  "manifestPath": "spritesheet-manifest.json",
+  "atlases": {
+    "main": "main-spritesheet.webp",
+    "extra": "extra-spritesheet.webp"
+  }
+}
