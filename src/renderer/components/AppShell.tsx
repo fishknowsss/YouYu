@@ -4,7 +4,7 @@ import { BrandMark } from './BrandMark';
 declare const __YOUYU_APP_VERSION__: string;
 declare const __YOUYU_BUILD_CHANNEL__: 'standard' | 'no' | 'in' | string;
 
-export type PageKey = 'home' | 'nodes' | 'settings';
+export type PageKey = 'home' | 'nodes' | 'test' | 'settings';
 export type UsageMode = 'easy' | 'advanced';
 
 type AppShellProps = {
@@ -18,6 +18,7 @@ export function AppShell({ page, usageMode, children, onPageChange }: AppShellPr
   const navItems: Array<{ key: PageKey; label: string }> = [
     { key: 'home', label: '首页' },
     { key: 'nodes', label: '节点' },
+    { key: 'test', label: '测试' },
     { key: 'settings', label: '设置' }
   ];
   const versionLabel = getVersionLabel(__YOUYU_APP_VERSION__, __YOUYU_BUILD_CHANNEL__);

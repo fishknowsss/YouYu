@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { createLifecycleController, type MihomoRuntime } from './lifecycle';
+import { testAllConnectivity, testConnectivity } from './connectivity';
 import { createMihomoApiClient } from './mihomo/api';
 import { strategyLabels, strategyTargets } from './mihomo/config';
 import { createMihomoRuntime } from './mihomo/process';
@@ -414,6 +415,25 @@ function registerIpc() {
       lifecycle,
       createMihomoApi: createRuntimeMihomoApi,
       createSnapshot
+    });
+  });
+  ipcMain.handle(ipcChannels.testConnectivity, async (_event, key) => {
+    return testConnectivity(
+      {
+        getMixedPort: () => runtimePorts.mixedPort,
+        getControllerPort: () => runtimePorts.controllerPort,
+        getControllerSecret: async () => (await settingsStore.read()).controllerSecret,
+        isRunning: () => lifecycle.getStatus() === 'running'
+      },
+      key
+    );
+  });
+  ipcMain.handle(ipcChannels.testAllConnectivity, async () => {
+    return testAllConnectivity({
+      getMixedPort: () => runtimePorts.mixedPort,
+      getControllerPort: () => runtimePorts.controllerPort,
+      getControllerSecret: async () => (await settingsStore.read()).controllerSecret,
+      isRunning: () => lifecycle.getStatus() === 'running'
     });
   });
   ipcMain.handle(ipcChannels.closeConnections, async () => {

@@ -4,6 +4,7 @@ import { AppShell, type PageKey, type UsageMode } from './components/AppShell';
 import { Home } from './pages/Home';
 import { NodeSelect } from './pages/NodeSelect';
 import { Settings } from './pages/Settings';
+import { TestPage } from './pages/TestPage';
 
 const emptySnapshot: AppSnapshot = {
   status: 'stopped',
@@ -212,6 +213,7 @@ export function App() {
           onRefresh={() => runAction((api) => api.updateSubscription(), '已更新')}
         />
       )}
+      {page === 'test' && <TestPage snapshot={snapshot} />}
       {page === 'settings' && (
         <Settings
           snapshot={snapshot}
