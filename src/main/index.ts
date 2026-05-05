@@ -1,7 +1,9 @@
 import { app, BrowserWindow, Menu, Tray, ipcMain, screen, type Rectangle } from 'electron';
+import { execFile, execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { promisify } from 'node:util';
 import { createLifecycleController, type MihomoRuntime } from './lifecycle';
 import { createMihomoApiClient } from './mihomo/api';
 import { strategyLabels, strategyTargets } from './mihomo/config';
@@ -24,6 +26,8 @@ declare const __YOUYU_DISABLE_PET__: boolean;
 const appId = 'studio.youyu.proxy';
 const isDev = !app.isPackaged;
 const startHidden = process.argv.includes('--hidden') || process.argv.includes('--startup');
+const startupTaskName = 'YouYu';
+const execFileAsync = promisify(execFile);
 let mainWindow: BrowserWindow | null = null;
 let petWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -541,26 +545,102 @@ function togglePetWindow() {
   showPetWindow();
 }
 
-function isLaunchAtLoginEnabled(): boolean {
-  return app.getLoginItemSettings({ path: process.execPath, args: ['--hidden'] }).openAtLogin;
+function querySchtasks(args: string[]): boolean {
+  if (process.platform !== 'win32') return false;
+  try {
+    execFileSync('schtasks.exe', args, { stdio: 'ignore', windowsHide: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-function setLaunchAtLogin(enabled: boolean) {
+async function runSchtasks(args: string[]): Promise<boolean> {
+  if (process.platform !== 'win32') return false;
+  try {
+    await execFileAsync('schtasks.exe', args, { windowsHide: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLaunchAtLoginEnabled(): boolean {
+  if (process.platform !== 'win32') {
+    return app.getLoginItemSettings({ path: process.execPath, args: ['--hidden'] }).openAtLogin;
+  }
+
+  return querySchtasks(['/Query', '/TN', startupTaskName]);
+}
+
+function clearLegacyLaunchAtLogin() {
   app.setLoginItemSettings({
-    openAtLogin: enabled,
-    openAsHidden: enabled,
+    openAtLogin: false,
+    openAsHidden: false,
     path: process.execPath,
-    args: enabled ? ['--hidden'] : []
+    args: ['--hidden']
   });
 }
 
-function toggleLaunchAtLogin(enabled: boolean) {
+function isLegacyLaunchAtLoginEnabled(): boolean {
+  return app.getLoginItemSettings({ path: process.execPath, args: ['--hidden'] }).openAtLogin;
+}
+
+async function setLaunchAtLogin(enabled: boolean) {
+  clearLegacyLaunchAtLogin();
+
+  if (process.platform !== 'win32') {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      openAsHidden: enabled,
+      path: process.execPath,
+      args: enabled ? ['--hidden'] : []
+    });
+    return;
+  }
+
+  if (!enabled) {
+    await runSchtasks(['/Delete', '/TN', startupTaskName, '/F']);
+    return;
+  }
+
+  const taskCommand = `"${process.execPath}" --hidden`;
+  const created = await runSchtasks([
+    '/Create',
+    '/TN',
+    startupTaskName,
+    '/SC',
+    'ONLOGON',
+    '/TR',
+    taskCommand,
+    '/RL',
+    'HIGHEST',
+    '/F'
+  ]);
+
+  if (!created) {
+    throw new Error('无法写入 Windows 计划任务');
+  }
+}
+
+async function toggleLaunchAtLogin(enabled: boolean) {
   try {
-    setLaunchAtLogin(enabled);
+    await setLaunchAtLogin(enabled);
   } catch (error) {
     recordError('设置开机自启失败', error);
   } finally {
     refreshTrayMenu();
+  }
+}
+
+async function migrateLegacyLaunchAtLogin() {
+  if (process.platform !== 'win32') return;
+  if (!isLegacyLaunchAtLoginEnabled() || isLaunchAtLoginEnabled()) return;
+
+  try {
+    await setLaunchAtLogin(true);
+  } catch (error) {
+    recordError('迁移开机自启失败', error);
   }
 }
 
@@ -752,6 +832,7 @@ function refreshTrayMenu() {
   const status = lifecycle.getStatus();
   const running = status === 'running';
   const failed = status === 'failed';
+  const launchAtLogin = isLaunchAtLoginEnabled();
   const statusLabel = trayBusy ? '处理中' : running ? '运行中' : failed ? '异常' : '已停止';
   const primaryLabel = running ? '停止代理' : '启动代理';
   tray.setToolTip(`YouYu - ${statusLabel}`);
@@ -768,9 +849,9 @@ function refreshTrayMenu() {
     {
       label: '开机自启',
       type: 'checkbox',
-      checked: isLaunchAtLoginEnabled(),
+      checked: launchAtLogin,
       click: (menuItem) => {
-        toggleLaunchAtLogin(menuItem.checked);
+        void toggleLaunchAtLogin(menuItem.checked);
       }
     },
     ...(petFeatureEnabled
@@ -1006,6 +1087,7 @@ if (!gotSingleInstanceLock) {
     await allocateRuntimePorts();
     registerIpc();
     createTray();
+    void migrateLegacyLaunchAtLogin();
     void createWindow();
     if (petFeatureEnabled) {
       void createPetWindow();
