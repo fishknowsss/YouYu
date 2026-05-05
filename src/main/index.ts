@@ -23,6 +23,7 @@ declare const __YOUYU_DISABLE_PET__: boolean;
 
 const appId = 'studio.youyu.proxy';
 const isDev = !app.isPackaged;
+const startHidden = process.argv.includes('--hidden') || process.argv.includes('--startup');
 let mainWindow: BrowserWindow | null = null;
 let petWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -540,6 +541,29 @@ function togglePetWindow() {
   showPetWindow();
 }
 
+function isLaunchAtLoginEnabled(): boolean {
+  return app.getLoginItemSettings({ path: process.execPath, args: ['--hidden'] }).openAtLogin;
+}
+
+function setLaunchAtLogin(enabled: boolean) {
+  app.setLoginItemSettings({
+    openAtLogin: enabled,
+    openAsHidden: enabled,
+    path: process.execPath,
+    args: enabled ? ['--hidden'] : []
+  });
+}
+
+function toggleLaunchAtLogin(enabled: boolean) {
+  try {
+    setLaunchAtLogin(enabled);
+  } catch (error) {
+    recordError('设置开机自启失败', error);
+  } finally {
+    refreshTrayMenu();
+  }
+}
+
 function showPetContextMenu() {
   if (!petFeatureEnabled) return;
   const menu = Menu.buildFromTemplate([
@@ -741,6 +765,14 @@ function refreshTrayMenu() {
       label: '打开 YouYu',
       click: showMainWindow
     },
+    {
+      label: '开机自启',
+      type: 'checkbox',
+      checked: isLaunchAtLoginEnabled(),
+      click: (menuItem) => {
+        toggleLaunchAtLogin(menuItem.checked);
+      }
+    },
     ...(petFeatureEnabled
       ? [
           {
@@ -849,8 +881,10 @@ async function createWindow() {
   });
 
   win.once('ready-to-show', () => {
-    win.show();
-    win.focus();
+    if (!startHidden) {
+      win.show();
+      win.focus();
+    }
   });
 
   win.on('close', (event) => {
