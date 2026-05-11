@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
-import type { AppSettingsInput, AppSnapshot, MihomoMode } from '../shared/ipc';
+﻿import { useEffect, useState } from 'react';
+import type { AppSettingsInput, AppSnapshot, MihomoMode, TrafficRegistrationInput } from '../shared/ipc';
 import { AppShell, type PageKey, type UsageMode } from './components/AppShell';
 import { Home } from './pages/Home';
 import { NodeSelect } from './pages/NodeSelect';
+import { PetPreviewPage } from './pages/PetPreviewPage';
 import { Settings } from './pages/Settings';
 import { TestPage } from './pages/TestPage';
 
@@ -25,12 +26,22 @@ const emptySnapshot: AppSnapshot = {
     snifferEnabled: true,
     tunEnabled: true,
     strictRouteEnabled: true,
-    allowLan: false
+    allowLan: false,
+    subscriptionRefreshIntervalHours: 12
   },
   runtime: {
     activeConnections: 0,
     uploadTotal: 0,
     downloadTotal: 0
+  },
+  traffic: {
+    totalUpload: 0,
+    totalDownload: 0,
+    todayUpload: 0,
+    todayDownload: 0,
+    pendingUpload: 0,
+    pendingDownload: 0,
+    reportStatus: 'idle'
   },
   subscriptionUrl: '',
   diagnostics: {
@@ -47,7 +58,8 @@ const easyStartSettings: AppSettingsInput = {
   snifferEnabled: true,
   tunEnabled: true,
   strictRouteEnabled: true,
-  allowLan: false
+  allowLan: false,
+  subscriptionRefreshIntervalHours: 12
 };
 const actionTimeoutMs = 75000;
 
@@ -56,7 +68,10 @@ export function App() {
   const [usageMode, setUsageMode] = useState<UsageMode>(readUsageMode);
   const [snapshot, setSnapshot] = useState<AppSnapshot>(emptySnapshot);
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState('');
   const [message, setMessage] = useState('');
+  const [snapshotLoaded, setSnapshotLoaded] = useState(false);
+  const registered = Boolean(snapshot.trafficIdentity);
 
   useEffect(() => {
     void runAction((api) => api.getSnapshot(), '');
@@ -65,6 +80,7 @@ export function App() {
   useEffect(() => {
     const dispose = window.youyu?.onSnapshotUpdated((next) => {
       setSnapshot(next);
+      setSnapshotLoaded(true);
       setBusy(false);
     });
     return dispose;
@@ -113,7 +129,11 @@ export function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [usageMode]);
 
-  async function runAction(action: (api: NonNullable<Window['youyu']>) => Promise<AppSnapshot>, doneMessage: string) {
+  async function runAction(
+    action: (api: NonNullable<Window['youyu']>) => Promise<AppSnapshot>,
+    doneMessage: string,
+    workingMessage = ''
+  ) {
     const api = window.youyu;
     if (!api) {
       setSnapshot((current) => ({ ...current, status: 'failed' }));
@@ -122,17 +142,21 @@ export function App() {
     }
 
     setBusy(true);
+    setBusyLabel(workingMessage);
     setMessage('');
     try {
       const next = await withTimeout(action(api), actionTimeoutMs);
       setSnapshot(next);
+      setSnapshotLoaded(true);
       setMessage(doneMessage);
     } catch (error) {
       const next = await api.getSnapshot().catch(() => snapshot);
       setSnapshot(next.status === 'running' ? next : { ...next, status: 'failed' });
+      setSnapshotLoaded(true);
       setMessage(getActionErrorMessage(error));
     } finally {
       setBusy(false);
+      setBusyLabel('');
     }
   }
 
@@ -151,6 +175,7 @@ export function App() {
     }
 
     setBusy(true);
+    setBusyLabel('启动中');
     setMessage('');
     try {
       const next = await withTimeout(
@@ -164,13 +189,16 @@ export function App() {
         actionTimeoutMs
       );
       setSnapshot(next);
-      setMessage('快速连接已启动');
+      setSnapshotLoaded(true);
+      setMessage('已启动');
     } catch (error) {
       const next = await api.getSnapshot().catch(() => snapshot);
       setSnapshot(next.status === 'running' ? next : { ...next, status: 'failed' });
+      setSnapshotLoaded(true);
       setMessage(getActionErrorMessage(error));
     } finally {
       setBusy(false);
+      setBusyLabel('');
     }
   }
 
@@ -182,54 +210,120 @@ export function App() {
   }
 
   return (
-    <AppShell
-      page={page}
-      usageMode={usageMode}
-      onPageChange={setPage}
-    >
-      {page === 'home' && (
-        <Home
-          usageMode={usageMode}
-          snapshot={snapshot}
+    <>
+      <AppShell
+        page={page}
+        usageMode={usageMode}
+        onPageChange={setPage}
+      >
+        {page === 'home' && (
+          <Home
+            usageMode={usageMode}
+            snapshot={snapshot}
+            busy={busy}
+            message={message}
+            onQuickStart={quickStart}
+            onStart={() => runAction((api) => api.start(), '已启动', '启动中')}
+            onStop={() => runAction((api) => api.stop(), '已停止')}
+            onRepair={() => runAction((api) => api.repair(), '已修复', '修复中')}
+            onModeChange={(mode: MihomoMode) => runAction((api) => api.setMode(mode), '模式已切换')}
+            onUsageModeChange={changeUsageMode}
+          />
+        )}
+        {page === 'nodes' && (
+          <NodeSelect
+            snapshot={snapshot}
+            busy={busy}
+            message={message}
+            onBack={() => setPage('home')}
+            onSelect={(name) => runAction((api) => api.selectNode(name), '已切换')}
+            onTestNode={(name) => runAction((api) => api.testNode(name), '测速完成')}
+            onTestAll={() => runAction((api) => api.testAllNodes(), '测速完成')}
+            onRefresh={() => runAction((api) => api.updateSubscription(), '已更新', '更新中')}
+          />
+        )}
+        {page === 'test' && <TestPage snapshot={snapshot} />}
+        {page === 'petPreview' && <PetPreviewPage />}
+        {page === 'settings' && (
+          <Settings
+            snapshot={snapshot}
+            busy={busy}
+            message={message}
+            onBack={() => setPage('home')}
+            onRepair={() => runAction((api) => api.repair(), '已修复', '修复中')}
+            onSave={(settings: AppSettingsInput) => runAction((api) => api.saveSettings(settings), '已保存')}
+          />
+        )}
+      </AppShell>
+      {snapshotLoaded && !registered && (
+        <RegistrationGate
           busy={busy}
           message={message}
-          onQuickStart={quickStart}
-          onStart={() => runAction((api) => api.start(), '已启动')}
-          onStop={() => runAction((api) => api.stop(), '已停止')}
-          onRepair={() => runAction((api) => api.repair(), '已修复')}
-          onModeChange={(mode: MihomoMode) => runAction((api) => api.setMode(mode), '模式已切换')}
-          onUsageModeChange={changeUsageMode}
+          onRegister={(input) => runAction((api) => api.registerTrafficIdentity(input), '已登记', '登记中')}
         />
       )}
-      {page === 'nodes' && (
-        <NodeSelect
-          snapshot={snapshot}
-          busy={busy}
-          message={message}
-          onBack={() => setPage('home')}
-          onSelect={(name) => runAction((api) => api.selectNode(name), '已切换')}
-          onTestNode={(name) => runAction((api) => api.testNode(name), '测速完成')}
-          onTestAll={() => runAction((api) => api.testAllNodes(), '测速完成')}
-          onRefresh={() => runAction((api) => api.updateSubscription(), '已更新')}
-        />
+      {busyLabel === '修复中' && (
+        <div className="busy-overlay" aria-live="polite" aria-label="修复中">
+          <div className="busy-spinner" />
+          <span>修复中</span>
+        </div>
       )}
-      {page === 'test' && <TestPage snapshot={snapshot} />}
-      {page === 'settings' && (
-        <Settings
-          snapshot={snapshot}
-          busy={busy}
-          message={message}
-          onBack={() => setPage('home')}
-          onRepair={() => runAction((api) => api.repair(), '已修复')}
-          onSave={(settings: AppSettingsInput) => runAction((api) => api.saveSettings(settings), '已保存')}
-        />
-      )}
-    </AppShell>
+    </>
   );
 }
 
 function readUsageMode(): UsageMode {
   return 'easy';
+}
+
+function RegistrationGate({
+  busy,
+  message,
+  onRegister
+}: {
+  busy: boolean;
+  message: string;
+  onRegister: (input: TrafficRegistrationInput) => void;
+}) {
+  const [name, setName] = useState('');
+  const [passphrase, setPassphrase] = useState('');
+
+  function submit() {
+    onRegister({ name, passphrase });
+  }
+
+  return (
+    <div className="registration-gate" role="dialog" aria-modal="true" aria-labelledby="registration-title">
+      <section className="registration-dialog">
+        <div>
+          <h1 id="registration-title">使用登记</h1>
+          <p>填写姓名后开始使用</p>
+        </div>
+        <label className="field">
+          <span>姓名</span>
+          <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+        </label>
+        <label className="field">
+          <span>口令</span>
+          <input
+            type="password"
+            value={passphrase}
+            onChange={(event) => setPassphrase(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') submit();
+            }}
+          />
+        </label>
+        <button className="wide-button" disabled={busy} onClick={submit}>
+          登记
+        </button>
+        <div className="registration-status" aria-live="polite">
+          {busy && <span className="registration-spinner" aria-hidden="true" />}
+          <span>{busy ? '登记中' : message}</span>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -251,6 +345,14 @@ function getActionErrorMessage(error: unknown): string {
   if (message.includes('operation timed out')) return '启动超时';
   if (message.includes('missing subscription url')) return '先填写订阅地址';
   if (message.includes('核心接口未加载')) return '核心接口未加载';
+  if (message.includes('traffic endpoint not configured')) return '先配置后台地址';
+  if (message.includes('traffic identity required')) return '先完成登记';
+  if (message.includes('missing traffic user name')) return '先填写姓名';
+  if (message.includes('missing traffic passphrase')) return '先填写口令';
+  if (message.includes('traffic activation failed: 403')) return '口令不对';
+  if (message.includes('traffic activation failed: 5')) return '后台暂时不可用';
+  if (message.includes('traffic request timed out')) return '连接后台超时';
+  if (message.includes('fetch failed') || message.includes('Failed to fetch')) return '连接后台失败';
   if (message.includes('mihomo api failed')) return '更新失败';
   if (message.includes('mihomo controller')) return '启动失败';
   return '操作失败';

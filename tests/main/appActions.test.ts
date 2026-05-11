@@ -18,12 +18,22 @@ function makeSnapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
       snifferEnabled: true,
       tunEnabled: true,
       strictRouteEnabled: true,
-      allowLan: false
+      allowLan: false,
+      subscriptionRefreshIntervalHours: 12
     },
     runtime: {
       activeConnections: 0,
       uploadTotal: 0,
       downloadTotal: 0
+    },
+    traffic: {
+      totalUpload: 0,
+      totalDownload: 0,
+      todayUpload: 0,
+      todayDownload: 0,
+      pendingUpload: 0,
+      pendingDownload: 0,
+      reportStatus: 'idle'
     },
     subscriptionUrl: 'https://example.com/sub',
     diagnostics: {
@@ -48,6 +58,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     tunEnabled: true,
     strictRouteEnabled: true,
     allowLan: false,
+    subscriptionRefreshIntervalHours: 12,
     ...overrides
   };
 }
@@ -89,7 +100,7 @@ describe('app actions', () => {
     expect(updateProvider).not.toHaveBeenCalled();
   });
 
-  it('restarts mihomo to refresh the inlined subscription when already running', async () => {
+  it('updates the running provider without restarting when mihomo accepts it', async () => {
     const updateProvider = vi.fn(async () => undefined);
     const stop = vi.fn(async () => undefined);
     const start = vi.fn(async () => undefined);
@@ -110,9 +121,37 @@ describe('app actions', () => {
       createSnapshot: async () => makeSnapshot()
     });
 
+    expect(updateProvider).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('restarts mihomo to refresh an inlined subscription when provider update fails', async () => {
+    const updateProvider = vi.fn(async () => {
+      throw new Error('missing provider');
+    });
+    const stop = vi.fn(async () => undefined);
+    const start = vi.fn(async () => undefined);
+
+    await updateSubscriptionNodes({
+      settingsStore: {
+        read: async () => makeSettings(),
+        update: vi.fn()
+      },
+      lifecycle: {
+        getStatus: () => 'running',
+        start,
+        stop,
+        restart: vi.fn(),
+        repair: vi.fn()
+      },
+      createMihomoApi: () => makeMihomoApi({ updateProvider }),
+      createSnapshot: async () => makeSnapshot()
+    });
+
+    expect(updateProvider).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledOnce();
-    expect(updateProvider).not.toHaveBeenCalled();
   });
 
   it('fully restarts mihomo after saving settings while running', async () => {

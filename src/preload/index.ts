@@ -33,7 +33,8 @@ const api: YouYuApi = {
   testAllConnectivity: () => ipcRenderer.invoke(ipcChannels.testAllConnectivity),
   closeConnections: () => ipcRenderer.invoke(ipcChannels.closeConnections),
   updateSubscription: () => ipcRenderer.invoke(ipcChannels.updateSubscription),
-  saveSettings: (settings) => ipcRenderer.invoke(ipcChannels.saveSettings, settings)
+  saveSettings: (settings) => ipcRenderer.invoke(ipcChannels.saveSettings, settings),
+  registerTrafficIdentity: (input) => ipcRenderer.invoke(ipcChannels.registerTrafficIdentity, input)
 };
 
 contextBridge.exposeInMainWorld('youyu', api);

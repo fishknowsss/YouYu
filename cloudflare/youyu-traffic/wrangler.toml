@@ -1,0 +1,8 @@
+name = "youyu-traffic"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "youyu_traffic"
+database_id = "eaf565fc-38bd-4483-bbbf-517f31c751fb"

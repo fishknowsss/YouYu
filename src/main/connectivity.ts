@@ -51,6 +51,24 @@ type MihomoConnectionsResponse = {
 
 export const connectivityServices: ConnectivityService[] = [
   {
+    key: 'steam',
+    name: 'Steam',
+    url: 'https://store.steampowered.com',
+    probeUrl: 'https://store.steampowered.com',
+    host: 'store.steampowered.com',
+    category: 'special',
+    kind: 'http'
+  },
+  {
+    key: 'steamNetwork',
+    name: 'Steam 联机',
+    url: 'https://api.steampowered.com',
+    probeUrl: 'https://api.steampowered.com/ISteamDirectory/GetCMList/v1/?cellid=0&format=json',
+    host: 'api.steampowered.com',
+    category: 'special',
+    kind: 'http'
+  },
+  {
     key: 'chatgpt',
     name: 'ChatGPT',
     url: 'https://chatgpt.com',
@@ -96,15 +114,6 @@ export const connectivityServices: ConnectivityService[] = [
     kind: 'http'
   },
   {
-    key: 'bytedance',
-    name: '字节跳动',
-    url: 'https://www.bytedance.com',
-    probeUrl: 'https://www.bytedance.com',
-    host: 'www.bytedance.com',
-    category: 'global',
-    kind: 'http'
-  },
-  {
     key: 'tencent',
     name: '腾讯',
     url: 'https://www.tencent.com',
@@ -121,15 +130,6 @@ export const connectivityServices: ConnectivityService[] = [
     host: 'www.google.com',
     category: 'global',
     kind: 'http'
-  },
-  {
-    key: 'x',
-    name: 'X',
-    url: 'https://x.com',
-    probeUrl: 'https://x.com/cdn-cgi/trace',
-    host: 'x.com',
-    category: 'global',
-    kind: 'trace'
   },
   {
     key: 'cloudflare',

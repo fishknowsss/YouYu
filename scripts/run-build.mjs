@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const noPetBuild = process.argv.includes('--no-pet');
@@ -7,6 +8,11 @@ const tscCli = join(process.cwd(), 'node_modules', 'typescript', 'bin', 'tsc');
 const electronViteCli = join(process.cwd(), 'node_modules', 'electron-vite', 'bin', 'electron-vite.js');
 const buildChannel = noPetBuild ? 'no' : internalBuild ? 'in' : 'standard';
 
+await Promise.all([
+  rm(join(process.cwd(), 'out', 'main'), { recursive: true, force: true }),
+  rm(join(process.cwd(), 'out', 'preload'), { recursive: true, force: true }),
+  rm(join(process.cwd(), 'out', 'renderer'), { recursive: true, force: true })
+]);
 await run(process.execPath, [tscCli, '--noEmit']);
 await run(process.execPath, [electronViteCli, 'build'], {
   YOUYU_BUILD_CHANNEL: buildChannel,

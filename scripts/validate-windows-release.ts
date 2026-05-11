@@ -17,9 +17,12 @@ if (!packageJson.version) {
 
 const expectedInstallerName = `YouYu-${packageJson.version}-x64${internalBuild ? '-in' : noPetBuild ? '-no' : ''}.exe`;
 const expectedInstallerPath = join(releaseDir, expectedInstallerName);
+const expectedBlockmapPath = join(releaseDir, `${expectedInstallerName}.blockmap`);
 const bundledSubscriptionPath = join(releaseDir, 'win-unpacked', 'resources', 'default-subscription.txt');
+const trafficApiUrlPath = join(releaseDir, 'win-unpacked', 'resources', 'traffic-api-url.txt');
 
 await access(expectedInstallerPath);
+await access(expectedBlockmapPath);
 
 const entries = await readdir(releaseDir, { withFileTypes: true });
 const exeEntries = entries
@@ -38,7 +41,6 @@ if (!internalBuild && exeEntries.some((entry) => /-in\.exe$/i.test(entry))) {
 if (!noPetBuild && exeEntries.some((entry) => /-no\.exe$/i.test(entry))) {
   throw new Error(`Standard release must not contain no-pet installer: ${exeEntries.join(', ')}`);
 }
-
 const confusingEntries = entries
   .filter((entry) => /arm64|ia32/i.test(entry.name))
   .map((entry) => entry.name);
@@ -58,6 +60,11 @@ if (!bundledSubscriptionBuild && bundledSubscription) {
 }
 if (bundledSubscriptionBuild && !bundledSubscription) {
   throw new Error(`${internalBuild ? 'Internal' : 'No-pet'} installer is missing the bundled default subscription`);
+}
+
+const trafficApiUrl = (await readFile(trafficApiUrlPath, 'utf8')).trim();
+if (!/^https:\/\/\S+$/i.test(trafficApiUrl)) {
+  throw new Error('Windows installer is missing a valid traffic API URL');
 }
 
 if (noPetBuild) {

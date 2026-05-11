@@ -35,6 +35,8 @@ const currentSettingsVersion = 1;
 const validModes: MihomoMode[] = ['rule', 'global', 'direct'];
 const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-balance', 'direct'];
 const validRuleProfiles: RuleProfile[] = ['smart', 'global', 'subscription'];
+const defaultSubscriptionRefreshIntervalHours = 12;
+const validSubscriptionRefreshIntervalHours = [0, 6, 12, 24];
 
 export class SettingsStore {
   private readonly filePath: string;
@@ -103,7 +105,10 @@ export class SettingsStore {
           : true,
       strictRouteEnabled:
         typeof value.strictRouteEnabled === 'boolean' ? value.strictRouteEnabled : true,
-      allowLan: false
+      allowLan: false,
+      subscriptionRefreshIntervalHours: normalizeSubscriptionRefreshInterval(
+        value.subscriptionRefreshIntervalHours
+      )
     };
   }
 
@@ -122,13 +127,20 @@ export class SettingsStore {
       snifferEnabled: true,
       tunEnabled: true,
       strictRouteEnabled: true,
-      allowLan: false
+      allowLan: false,
+      subscriptionRefreshIntervalHours: defaultSubscriptionRefreshIntervalHours
     };
   }
 
   private createSecret(): string {
     return randomBytes(16).toString('hex');
   }
+}
+
+function normalizeSubscriptionRefreshInterval(value: unknown): number {
+  return validSubscriptionRefreshIntervalHours.includes(value as number)
+    ? (value as number)
+    : defaultSubscriptionRefreshIntervalHours;
 }
 
 function normalizePetWindow(value: unknown): PetWindowPosition | undefined {

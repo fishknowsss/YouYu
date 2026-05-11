@@ -46,16 +46,39 @@ export type RuntimeStats = {
   downloadTotal: number;
 };
 
+export type TrafficIdentity = {
+  userId: string;
+  deviceId: string;
+  name: string;
+  deviceName?: string;
+  registeredAt: string;
+  lastReportedAt?: string;
+  verificationStatus?: 'verified' | 'pending';
+};
+
+export type PersistentTrafficStats = {
+  totalUpload: number;
+  totalDownload: number;
+  todayUpload: number;
+  todayDownload: number;
+  pendingUpload: number;
+  pendingDownload: number;
+  lastUpdatedAt?: string;
+  lastReportedAt?: string;
+  reportStatus: 'idle' | 'synced' | 'pending' | 'failed' | 'not-configured';
+  reportError?: string;
+};
+
 export type ConnectivityServiceKey =
+  | 'steam'
+  | 'steamNetwork'
   | 'chatgpt'
   | 'claude'
   | 'gemini'
   | 'flow'
   | 'runway'
-  | 'bytedance'
   | 'tencent'
   | 'google'
-  | 'x'
   | 'cloudflare'
   | 'ehentai';
 
@@ -103,6 +126,7 @@ export type FeatureSettings = {
   tunEnabled: boolean;
   strictRouteEnabled: boolean;
   allowLan: boolean;
+  subscriptionRefreshIntervalHours: number;
 };
 
 export type AppSettingsInput = Partial<FeatureSettings> & {
@@ -112,6 +136,11 @@ export type AppSettingsInput = Partial<FeatureSettings> & {
   ruleProfile?: RuleProfile;
   selectedNode?: string | null;
   petWindow?: PetWindowPosition | null;
+};
+
+export type TrafficRegistrationInput = {
+  name: string;
+  passphrase: string;
 };
 
 export type AppSnapshot = {
@@ -124,6 +153,8 @@ export type AppSnapshot = {
   ruleProfile: RuleProfile;
   features: FeatureSettings;
   runtime: RuntimeStats;
+  traffic: PersistentTrafficStats;
+  trafficIdentity?: TrafficIdentity;
   subscriptionUrl: string;
   diagnostics: AppDiagnostics;
 };
@@ -149,6 +180,7 @@ export type YouYuApi = {
   closeConnections: () => Promise<AppSnapshot>;
   updateSubscription: () => Promise<AppSnapshot>;
   saveSettings: (settings: AppSettingsInput) => Promise<AppSnapshot>;
+  registerTrafficIdentity: (input: TrafficRegistrationInput) => Promise<AppSnapshot>;
 };
 
 export const ipcChannels = {
@@ -171,5 +203,6 @@ export const ipcChannels = {
   testAllConnectivity: 'youyu:test-all-connectivity',
   closeConnections: 'youyu:close-connections',
   updateSubscription: 'youyu:update-subscription',
-  saveSettings: 'youyu:save-settings'
+  saveSettings: 'youyu:save-settings',
+  registerTrafficIdentity: 'youyu:register-traffic-identity'
 } as const;

@@ -110,7 +110,7 @@ export function createLifecycleController(deps: {
     },
     async repair() {
       await enqueue(async () => {
-        const results = await Promise.allSettled([deps.proxy.repair(), deps.mihomo.stop()]);
+        const results = await Promise.allSettled([deps.mihomo.stop(), deps.proxy.repair()]);
         setStatus('stopped');
 
         const failure = results.find((result) => result.status === 'rejected');

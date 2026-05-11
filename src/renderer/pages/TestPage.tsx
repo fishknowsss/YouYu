@@ -23,21 +23,21 @@ const services: Array<{
   url: string;
   category: ConnectivityCategory;
 }> = [
+  { key: 'steam', name: 'Steam', url: 'https://store.steampowered.com', category: 'special' },
+  { key: 'steamNetwork', name: 'Steam 联机', url: 'https://api.steampowered.com', category: 'special' },
   { key: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com', category: 'ai' },
   { key: 'claude', name: 'Claude', url: 'https://claude.ai', category: 'ai' },
   { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai' },
   { key: 'flow', name: 'Flow', url: 'https://labs.google/fx/tools/flow', category: 'special' },
   { key: 'runway', name: 'Runway', url: 'https://app.runwayml.com', category: 'ai' },
-  { key: 'bytedance', name: '字节跳动', url: 'https://www.bytedance.com', category: 'global' },
   { key: 'tencent', name: '腾讯', url: 'https://www.tencent.com', category: 'domestic' },
   { key: 'google', name: 'Google', url: 'https://www.google.com', category: 'global' },
-  { key: 'x', name: 'X', url: 'https://x.com', category: 'global' },
   { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global' },
   { key: 'ehentai', name: 'E-Hentai', url: 'https://e-hentai.org', category: 'global' }
 ];
 
 let cachedResults: TestResults | undefined;
-let cachedActiveKey: ConnectivityServiceKey = 'chatgpt';
+let cachedActiveKey: ConnectivityServiceKey = 'steam';
 
 export function TestPage({ snapshot }: TestPageProps) {
   const [results, setResults] = useState<TestResults>(() => getCachedResults());
@@ -97,7 +97,7 @@ export function TestPage({ snapshot }: TestPageProps) {
         }
         return next;
       });
-      selectActiveKey('chatgpt');
+      selectActiveKey('steam');
     } finally {
       setBusyAll(false);
       commitResults((current) => markAllTesting(current, false));

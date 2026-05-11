@@ -64,6 +64,7 @@ function AdvancedHome(props: HomeProps) {
   const failed = props.snapshot.status === 'failed';
   const statusLabel = getStatusLabel(props.snapshot.status);
   const totalTraffic = formatBytes(props.snapshot.runtime.uploadTotal + props.snapshot.runtime.downloadTotal);
+  const persistedTraffic = formatBytes(props.snapshot.traffic.totalUpload + props.snapshot.traffic.totalDownload);
   const logLines = props.snapshot.diagnostics.logs.slice(-7);
 
   return (
@@ -130,6 +131,10 @@ function AdvancedHome(props: HomeProps) {
               <span className="label">流量</span>
               <strong>{totalTraffic}</strong>
             </div>
+            <div className="metric-row">
+              <span className="label">累计</span>
+              <strong>{persistedTraffic}</strong>
+            </div>
           </div>
         </section>
 
@@ -174,5 +179,6 @@ function formatMode(mode: MihomoMode): string {
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)}GB`;
 }

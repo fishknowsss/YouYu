@@ -26,15 +26,15 @@ const devConnectivity: Array<{
   ip?: string;
   region?: string;
 }> = [
+  { key: 'steam', name: 'Steam', url: 'https://store.steampowered.com', category: 'special', totalMs: 142, ip: '23.203.232.145', region: 'Japan' },
+  { key: 'steamNetwork', name: 'Steam 联机', url: 'https://api.steampowered.com', category: 'special', totalMs: 166, ip: '23.203.232.145', region: 'Japan' },
   { key: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com', category: 'ai', totalMs: 286, ip: '126.63.231.113', region: 'Japan' },
   { key: 'claude', name: 'Claude', url: 'https://claude.ai', category: 'ai', totalMs: 312, ip: '126.63.231.113', region: 'Japan' },
   { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai', totalMs: 248 },
   { key: 'flow', name: 'Flow', url: 'https://labs.google/fx/tools/flow', category: 'special', totalMs: 338 },
   { key: 'runway', name: 'Runway', url: 'https://app.runwayml.com', category: 'ai', totalMs: 428 },
-  { key: 'bytedance', name: '字节跳动', url: 'https://www.bytedance.com', category: 'global', totalMs: 198 },
   { key: 'tencent', name: '腾讯', url: 'https://www.tencent.com', category: 'domestic', totalMs: 126 },
   { key: 'google', name: 'Google', url: 'https://www.google.com', category: 'global', totalMs: 168 },
-  { key: 'x', name: 'X', url: 'https://x.com', category: 'global', totalMs: 226, ip: '216.236.40.177', region: 'Hong Kong' },
   { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global', totalMs: 198, ip: '216.236.40.177', region: 'Hong Kong' },
   { key: 'ehentai', name: 'E-Hentai', url: 'https://e-hentai.org', category: 'global', totalMs: 214, ip: '216.236.40.177', region: 'Hong Kong' }
 ];
@@ -56,12 +56,22 @@ export function createDevYouYuApi(): YouYuApi {
       snifferEnabled: true,
       tunEnabled: true,
       strictRouteEnabled: true,
-      allowLan: false
+      allowLan: false,
+      subscriptionRefreshIntervalHours: 12
     },
     runtime: {
       activeConnections: 0,
       uploadTotal: 0,
       downloadTotal: 0
+    },
+    traffic: {
+      totalUpload: 0,
+      totalDownload: 0,
+      todayUpload: 0,
+      todayDownload: 0,
+      pendingUpload: 0,
+      pendingDownload: 0,
+      reportStatus: 'idle'
     },
     subscriptionUrl: '',
     diagnostics: {
@@ -239,9 +249,30 @@ export function createDevYouYuApi(): YouYuApi {
           snifferEnabled: settings.snifferEnabled ?? snapshot.features.snifferEnabled,
           tunEnabled: settings.tunEnabled ?? snapshot.features.tunEnabled,
           strictRouteEnabled: settings.strictRouteEnabled ?? snapshot.features.strictRouteEnabled,
-          allowLan: settings.allowLan ?? snapshot.features.allowLan
+          allowLan: settings.allowLan ?? snapshot.features.allowLan,
+          subscriptionRefreshIntervalHours:
+            settings.subscriptionRefreshIntervalHours ??
+            snapshot.features.subscriptionRefreshIntervalHours
         },
         nodes: snapshot.status === 'running' ? withNodes() : snapshot.nodes
+      });
+    },
+    async registerTrafficIdentity(input) {
+      const name = input.name.trim();
+      if (!name) throw new Error('missing traffic user name');
+      if (!input.passphrase.trim()) throw new Error('missing traffic passphrase');
+      return publish({
+        trafficIdentity: {
+          userId: `dev-${name}`,
+          deviceId: 'dev-device',
+          name,
+          deviceName: 'Dev PC',
+          registeredAt: new Date().toISOString()
+        },
+        traffic: {
+          ...snapshot.traffic,
+          reportStatus: 'synced'
+        }
       });
     }
   };

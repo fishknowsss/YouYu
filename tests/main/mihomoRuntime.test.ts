@@ -23,6 +23,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     tunEnabled: true,
     strictRouteEnabled: true,
     allowLan: false,
+    subscriptionRefreshIntervalHours: 12,
     ...overrides
   };
 }
@@ -219,7 +220,7 @@ describe('createMihomoRuntime', () => {
     await expect(readFile(join(workDir, 'Country.mmdb'), 'utf8')).rejects.toThrow();
   });
 
-  it('prefers the Taiwan 08 home node when mihomo starts without a saved node', async () => {
+  it('selects the auto strategy group when mihomo starts without a saved node', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);
     const child = new EventEmitter() as EventEmitter & {
@@ -274,15 +275,15 @@ describe('createMihomoRuntime', () => {
       })
     );
     expect(fetch).toHaveBeenCalledWith(
-      'http://127.0.0.1:9090/proxies/%E8%87%AA%E5%8A%A8%E9%80%89%E6%8B%A9',
+      'http://127.0.0.1:9090/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ name: '🇹🇼 台湾 08 家宽' })
+        body: JSON.stringify({ name: '自动选择' })
       })
     );
   });
 
-  it('restores the saved node instead of replacing it with the default on startup', async () => {
+  it('keeps the auto strategy group ahead of a saved node on startup', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);
     const child = new EventEmitter() as EventEmitter & {
@@ -326,10 +327,10 @@ describe('createMihomoRuntime', () => {
     await runtime.start();
 
     expect(fetch).toHaveBeenCalledWith(
-      'http://127.0.0.1:9090/proxies/%E8%87%AA%E5%8A%A8%E9%80%89%E6%8B%A9',
+      'http://127.0.0.1:9090/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ name: '美国 01' })
+        body: JSON.stringify({ name: '自动选择' })
       })
     );
   });
@@ -403,7 +404,7 @@ describe('createMihomoRuntime', () => {
     expect(finalNow).toBe('node-tw');
   });
 
-  it('routes the top selector back through the group that contains the saved node', async () => {
+  it('routes the top selector back through the auto strategy group', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);
     const child = new EventEmitter() as EventEmitter & {
@@ -446,13 +447,6 @@ describe('createMihomoRuntime', () => {
     await runtime.start();
 
     expect(fetch).toHaveBeenCalledWith(
-      'http://127.0.0.1:9090/proxies/%E8%87%AA%E5%8A%A8%E9%80%89%E6%8B%A9',
-      expect.objectContaining({
-        method: 'PUT',
-        body: JSON.stringify({ name: '🇯🇵 日本 08 家宽' })
-      })
-    );
-    expect(fetch).toHaveBeenCalledWith(
       'http://127.0.0.1:9090/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9',
       expect.objectContaining({
         method: 'PUT',
@@ -460,4 +454,5 @@ describe('createMihomoRuntime', () => {
       })
     );
   });
+
 });

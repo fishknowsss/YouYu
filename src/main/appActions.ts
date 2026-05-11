@@ -48,9 +48,12 @@ export async function updateSubscriptionNodes(deps: AppActionDeps): Promise<AppS
   const wasStopped = deps.lifecycle.getStatus() !== 'running';
   if (wasStopped) {
     await deps.lifecycle.start();
+    return deps.createSnapshot();
   }
 
-  if (!wasStopped) {
+  try {
+    await deps.createMihomoApi({ secret: settings.controllerSecret }).updateProvider();
+  } catch {
     await deps.lifecycle.stop();
     await deps.lifecycle.start();
   }

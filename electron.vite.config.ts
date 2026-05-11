@@ -42,6 +42,10 @@ export default defineConfig({
             {
               find: './PetApp',
               replacement: resolve(__dirname, 'src/renderer/NoPetApp.tsx')
+            },
+            {
+              find: './pages/PetPreviewPage',
+              replacement: resolve(__dirname, 'src/renderer/pages/NoPetPreviewPage.tsx')
             }
           ]
         : []

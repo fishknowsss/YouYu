@@ -106,6 +106,14 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
     await notifySettingsChanged();
   }
 
+  async function resetWinHttpProxy() {
+    await runCommand({ file: 'netsh.exe', args: ['winhttp', 'reset', 'proxy'] });
+  }
+
+  async function flushDnsCache() {
+    await runCommand({ file: 'ipconfig.exe', args: ['/flushdns'] });
+  }
+
   async function restorePrevious() {
     if (!previous) {
       await setProxy(false);
@@ -145,9 +153,14 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
     },
     async repair() {
       if (platform !== 'win32') return;
-      await setProxy(false);
+      const results = await Promise.allSettled([setProxy(false), resetWinHttpProxy(), flushDnsCache()]);
       previous = null;
       enabledByApp = false;
+
+      const failure = results.find((result) => result.status === 'rejected');
+      if (failure?.status === 'rejected') {
+        throw failure.reason;
+      }
     }
   };
 }

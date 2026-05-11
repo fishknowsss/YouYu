@@ -18,6 +18,9 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
   const [snifferEnabled, setSnifferEnabled] = useState(snapshot.features.snifferEnabled);
   const [tunEnabled, setTunEnabled] = useState(snapshot.features.tunEnabled);
   const [strictRouteEnabled, setStrictRouteEnabled] = useState(snapshot.features.strictRouteEnabled);
+  const [subscriptionRefreshIntervalHours, setSubscriptionRefreshIntervalHours] = useState(
+    snapshot.features.subscriptionRefreshIntervalHours
+  );
 
   useEffect(() => {
     setSubscriptionUrl(snapshot.subscriptionUrl);
@@ -27,6 +30,7 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
     setSnifferEnabled(snapshot.features.snifferEnabled);
     setTunEnabled(snapshot.features.tunEnabled);
     setStrictRouteEnabled(snapshot.features.strictRouteEnabled);
+    setSubscriptionRefreshIntervalHours(snapshot.features.subscriptionRefreshIntervalHours);
   }, [snapshot]);
 
   function save() {
@@ -37,7 +41,8 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
       dnsEnhanced,
       snifferEnabled,
       tunEnabled,
-      strictRouteEnabled
+      strictRouteEnabled,
+      subscriptionRefreshIntervalHours
     });
   }
 
@@ -48,7 +53,9 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
           <h1>设置</h1>
           <p>订阅与网络开关</p>
         </div>
-        <button className="secondary-button" onClick={onBack}>返回</button>
+        <button className="secondary-button" onClick={onBack}>
+          返回
+        </button>
       </div>
       <section className="panel settings-panel">
         <div className="form-grid">
@@ -62,13 +69,22 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
           </label>
           <label className="field">
             <span>规则来源</span>
-            <select
-              value={ruleProfile}
-              onChange={(event) => setRuleProfile(event.target.value as RuleProfile)}
-            >
+            <select value={ruleProfile} onChange={(event) => setRuleProfile(event.target.value as RuleProfile)}>
               <option value="smart">智能分流</option>
               <option value="global">全部代理</option>
               <option value="subscription">机场配置</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>后台刷新</span>
+            <select
+              value={subscriptionRefreshIntervalHours}
+              onChange={(event) => setSubscriptionRefreshIntervalHours(Number(event.target.value))}
+            >
+              <option value={0}>关闭</option>
+              <option value={6}>6 小时</option>
+              <option value={12}>12 小时</option>
+              <option value={24}>24 小时</option>
             </select>
           </label>
         </div>
@@ -82,11 +98,7 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
             <span>系统代理</span>
           </label>
           <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={dnsEnhanced}
-              onChange={(event) => setDnsEnhanced(event.target.checked)}
-            />
+            <input type="checkbox" checked={dnsEnhanced} onChange={(event) => setDnsEnhanced(event.target.checked)} />
             <span>DNS 增强</span>
           </label>
           <label className="toggle-row">
@@ -98,11 +110,7 @@ export function Settings({ snapshot, busy, message, onBack, onRepair, onSave }: 
             <span>流量嗅探</span>
           </label>
           <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={tunEnabled}
-              onChange={(event) => setTunEnabled(event.target.checked)}
-            />
+            <input type="checkbox" checked={tunEnabled} onChange={(event) => setTunEnabled(event.target.checked)} />
             <span>TUN</span>
           </label>
           <label className="toggle-row">

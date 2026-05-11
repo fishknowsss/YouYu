@@ -13,7 +13,8 @@ describe('createDevYouYuApi', () => {
       features: {
         dnsEnhanced: false,
         tunEnabled: true,
-        strictRouteEnabled: true
+        strictRouteEnabled: true,
+        subscriptionRefreshIntervalHours: 12
       }
     });
 

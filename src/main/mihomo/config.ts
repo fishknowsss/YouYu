@@ -19,7 +19,39 @@ const aiFlowDomains = [
   'firebaseapp.com',
   'firebaseio.com'
 ];
+const steamAccelerationDomains = [
+  'steampowered.com',
+  'api.steampowered.com',
+  'steamcommunity.com',
+  'steamstatic.com',
+  'steamcontent.com',
+  'steamserver.net',
+  'steam-chat.com',
+  'steamgames.com',
+  'steamusercontent.com',
+  'valvesoftware.com',
+  'steamcdn-a.akamaihd.net',
+  'steamstore-a.akamaihd.net',
+  'steamuserimages-a.akamaihd.net'
+];
+const gamingFakeIpFilterDomains = [
+  '*.steampowered.com',
+  '*.steamcommunity.com',
+  '*.steamstatic.com',
+  '*.steamcontent.com',
+  '*.steamserver.net',
+  '*.steam-chat.com',
+  '*.steamgames.com',
+  '*.steamusercontent.com',
+  '*.valvesoftware.com',
+  'steamcdn-a.akamaihd.net',
+  'steamstore-a.akamaihd.net',
+  'steamuserimages-a.akamaihd.net',
+  'stun.*.*'
+];
 const routableProxyGroupTypes = new Set(['select', 'url-test', 'fallback', 'load-balance', 'relay']);
+const nodeHealthCheckIntervalSeconds = 1800;
+const autoSelectToleranceMs = 150;
 
 export type MihomoConfigInput = {
   subscriptionUrl: string;
@@ -65,7 +97,7 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
         'health-check': {
           enable: true,
           url: 'https://www.gstatic.com/generate_204',
-          interval: 300,
+          interval: nodeHealthCheckIntervalSeconds,
           timeout: 5000,
           lazy: true
         }
@@ -83,8 +115,8 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
         type: 'url-test',
         use: ['airport'],
         url: 'https://www.gstatic.com/generate_204',
-        interval: 300,
-        tolerance: 50,
+        interval: nodeHealthCheckIntervalSeconds,
+        tolerance: autoSelectToleranceMs,
         lazy: true
       },
       {
@@ -92,7 +124,7 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
         type: 'fallback',
         use: ['airport'],
         url: 'https://www.gstatic.com/generate_204',
-        interval: 300,
+        interval: nodeHealthCheckIntervalSeconds,
         lazy: true
       },
       {
@@ -101,7 +133,7 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
         strategy: 'consistent-hashing',
         use: ['airport'],
         url: 'https://www.gstatic.com/generate_204',
-        interval: 300,
+        interval: nodeHealthCheckIntervalSeconds,
         lazy: true
       }
     ],
@@ -149,8 +181,8 @@ function buildInlineSubscriptionConfig(input: MihomoConfigInput): string | null 
           type: 'url-test',
           proxies: orderedProxyNames,
           url: 'https://www.gstatic.com/generate_204',
-          interval: 300,
-          tolerance: 50,
+          interval: nodeHealthCheckIntervalSeconds,
+          tolerance: autoSelectToleranceMs,
           lazy: true
         },
         {
@@ -158,7 +190,7 @@ function buildInlineSubscriptionConfig(input: MihomoConfigInput): string | null 
           type: 'fallback',
           proxies: orderedProxyNames,
           url: 'https://www.gstatic.com/generate_204',
-          interval: 300,
+          interval: nodeHealthCheckIntervalSeconds,
           lazy: true
         },
         {
@@ -166,7 +198,7 @@ function buildInlineSubscriptionConfig(input: MihomoConfigInput): string | null 
           type: 'load-balance',
           proxies: orderedProxyNames,
           url: 'https://www.gstatic.com/generate_204',
-          interval: 300,
+          interval: nodeHealthCheckIntervalSeconds,
           strategy: 'consistent-hashing',
           lazy: true
         }
@@ -244,7 +276,8 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
         '*.local',
         'localhost.ptlogin2.qq.com',
         'dns.msftncsi.com',
-        'www.msftconnecttest.com'
+        'www.msftconnecttest.com',
+        ...gamingFakeIpFilterDomains
       ],
       'default-nameserver': ['223.5.5.5', '119.29.29.29'],
       nameserver: ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query', '1.1.1.1']
@@ -287,11 +320,11 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
 
 function buildManagedRules(ruleProfile: RuleProfile, proxyTarget = selectorName) {
   if (ruleProfile === 'global') {
-    return [...buildAiFlowProxyRules(proxyTarget), `MATCH,${proxyTarget}`];
+    return [...buildPriorityProxyRules(proxyTarget), `MATCH,${proxyTarget}`];
   }
 
   return [
-    ...buildAiFlowProxyRules(proxyTarget),
+    ...buildPriorityProxyRules(proxyTarget),
     'DOMAIN-SUFFIX,local,DIRECT',
     'DOMAIN-SUFFIX,localhost,DIRECT',
     'DOMAIN-SUFFIX,cn,DIRECT',
@@ -304,10 +337,13 @@ function buildManagedRules(ruleProfile: RuleProfile, proxyTarget = selectorName)
     'DOMAIN-SUFFIX,alicdn.com,DIRECT',
     'DOMAIN-SUFFIX,163.com,DIRECT',
     'IP-CIDR,10.0.0.0/8,DIRECT,no-resolve',
+    'IP-CIDR,100.64.0.0/10,DIRECT,no-resolve',
     'IP-CIDR,172.16.0.0/12,DIRECT,no-resolve',
     'IP-CIDR,192.168.0.0/16,DIRECT,no-resolve',
     'IP-CIDR,127.0.0.0/8,DIRECT,no-resolve',
     'IP-CIDR,169.254.0.0/16,DIRECT,no-resolve',
+    'IP-CIDR,224.0.0.0/4,DIRECT,no-resolve',
+    'IP-CIDR,255.255.255.255/32,DIRECT,no-resolve',
     `MATCH,${proxyTarget}`
   ];
 }
@@ -333,11 +369,7 @@ function buildSubscriptionConfig(input: MihomoConfigInput): string | null {
     sanitizeDnsConfig(merged);
 
     const proxyTarget = findPrimaryProxyTarget(merged) ?? selectorName;
-    if (!Array.isArray(merged.rules) || merged.rules.length === 0) {
-      merged.rules = buildManagedRules('smart', proxyTarget);
-    } else {
-      merged.rules = normalizeSubscriptionRules(merged.rules, proxyTarget);
-    }
+    merged.rules = buildRulesForFullSubscription(input.ruleProfile ?? 'subscription', merged.rules, proxyTarget);
 
     return YAML.stringify(merged);
   } catch {
@@ -355,7 +387,7 @@ function removeSubscriptionListenerPorts(config: Record<string, unknown>) {
 
 function normalizeSubscriptionRules(rules: unknown[], proxyTarget: string): unknown[] {
   return [
-    ...buildAiFlowProxyRules(proxyTarget),
+    ...buildPriorityProxyRules(proxyTarget),
     ...rules.filter((rule) => {
       if (typeof rule !== 'string') {
         return true;
@@ -365,10 +397,26 @@ function normalizeSubscriptionRules(rules: unknown[], proxyTarget: string): unkn
       return (
         !normalizedRule.startsWith('GEOIP,') &&
         !normalizedRule.startsWith('GEOSITE,') &&
-        !isAiFlowRule(normalizedRule)
+        !isPriorityProxyRule(normalizedRule)
       );
     })
   ];
+}
+
+function buildRulesForFullSubscription(
+  ruleProfile: RuleProfile,
+  rules: unknown,
+  proxyTarget: string
+): unknown[] {
+  if (ruleProfile === 'global') {
+    return buildManagedRules('global', proxyTarget);
+  }
+
+  if (ruleProfile === 'smart' || !Array.isArray(rules) || rules.length === 0) {
+    return buildManagedRules('smart', proxyTarget);
+  }
+
+  return normalizeSubscriptionRules(rules, proxyTarget);
 }
 
 function sanitizeDnsConfig(config: Record<string, unknown>) {
@@ -384,18 +432,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function buildAiFlowProxyRules(proxyTarget: string): string[] {
-  return aiFlowDomains.map((domain) => `DOMAIN-SUFFIX,${domain},${proxyTarget}`);
+function buildPriorityProxyRules(proxyTarget: string): string[] {
+  return [...aiFlowDomains, ...steamAccelerationDomains].map((domain) => `DOMAIN-SUFFIX,${domain},${proxyTarget}`);
 }
 
-function isAiFlowRule(normalizedRule: string): boolean {
+function isPriorityProxyRule(normalizedRule: string): boolean {
   const parts = normalizedRule.split(',').map((part) => part.trim().toLowerCase());
   if (parts.length < 2) {
     return false;
   }
 
   const [type, domain] = parts;
-  return (type === 'domain' || type === 'domain-suffix') && aiFlowDomains.includes(domain);
+  return (
+    (type === 'domain' || type === 'domain-suffix') &&
+    [...aiFlowDomains, ...steamAccelerationDomains].includes(domain)
+  );
 }
 
 function findPrimaryProxyTarget(config: Record<string, unknown>): string | null {

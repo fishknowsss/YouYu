@@ -19,6 +19,8 @@ extraResources:
       - "**/*"
   - from: resources/generated/default-subscription.txt
     to: default-subscription.txt
+  - from: resources/traffic-api-url.txt
+    to: traffic-api-url.txt
   - from: build/icon.png
     to: assets/icon.png
   - from: build/tray-icon.png

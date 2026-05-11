@@ -21,17 +21,19 @@
 - `resources/default-subscription.txt`
   - 被 Git 跟踪。
   - 必须保持为空。
-  - 只有标准版会读取它，校验脚本要求标准版包内订阅为空。
+  - 只有标准版读取它，校验脚本要求标准版包内订阅为空。
 - `resources/default-subscription.in.txt`
   - 本机私有文件。
   - 必须被 `.gitignore` 命中。
-  - 保存真实内置订阅。
+  - 保存内部版和无桌宠版使用的真实内置订阅。
   - 不能提交，不能上传 GitHub，不能放进公开 release。
 - `resources/generated/default-subscription.txt`
   - 打包脚本临时生成。
   - 必须被 `.gitignore` 命中。
   - `dist:win` 从空的 `resources/default-subscription.txt` 生成。
-  - `dist:win:in` 和 `dist:win:no` 从本机私有的 `resources/default-subscription.in.txt` 生成。
+  - `dist:win:in` 和 `dist:win:no` 从 `resources/default-subscription.in.txt` 生成。
+
+如果真实订阅曾经进入 GitHub commit、Actions artifact 或 release asset，要当作已经泄露处理，必须更换订阅 token。删除文件或重写历史只能止血，不能让旧 token 重新安全。
 
 ## 三包打包流程
 
@@ -139,8 +141,8 @@ release/YouYu-<version>-x64-no.exe
 
 打包前先确认 `package.json` 的 `version`。
 
-- 小修小改递增 patch，例如 `0.6.6` -> `0.6.7`。
-- 较大功能或行为变化递增 minor，例如 `0.5.x` -> `0.6.0`。
+- 小修小改递增 patch，例如 `0.7.7` -> `0.7.8`。
+- 较大功能或行为变化递增 minor，例如 `0.7.x` -> `0.8.0`。
 - 只有用户明确要求大版本时才递增 major。
 
 安装包文件名由 `package.json` 版本自动决定：
@@ -169,8 +171,6 @@ release/YouYu-<version>-x64-no.exe
 ```
 
 本机 `release/` 里可以同时保留三个安装包；上传或发布时要明确只选择不带 `-in`、不带 `-no` 的标准版。
-
-如果真实订阅曾经进入 GitHub commit、Actions artifact 或 release asset，要当作已经泄露处理，必须更换订阅 token。删除文件或重写历史只能止血，不能让旧 token 重新变安全。
 
 ## 快速检查
 

@@ -58,4 +58,21 @@ describe('createSystemProxyAdapter', () => {
     expect(proxyEnableQueries).toHaveLength(1);
     expect(calls.some((call) => call.includes('ProxyServer /t REG_SZ /d old:8080'))).toBe(true);
   });
+
+  it('repairs Windows proxy, WinHTTP proxy, and DNS cache', async () => {
+    const calls: string[] = [];
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        calls.push(`${command.file} ${command.args.join(' ')}`);
+        return '';
+      }
+    });
+
+    await proxy.repair();
+
+    expect(calls.some((call) => call.includes('ProxyEnable /t REG_DWORD /d 0'))).toBe(true);
+    expect(calls.some((call) => call.includes('netsh.exe winhttp reset proxy'))).toBe(true);
+    expect(calls.some((call) => call.includes('ipconfig.exe /flushdns'))).toBe(true);
+  });
 });

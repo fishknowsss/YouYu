@@ -5,12 +5,12 @@ import { getPetAnimation } from '../pet/atlas';
 
 type PetSpriteProps = {
   state: DesktopPetState;
+  scale?: number;
 };
 
-export function PetSprite({ state }: PetSpriteProps) {
+export function PetSprite({ state, scale = 0.78 }: PetSpriteProps) {
   const animation = getPetAnimation(state);
   const [frame, setFrame] = useState(0);
-  const scale = 0.78;
 
   useEffect(() => {
     let timer: number | undefined;

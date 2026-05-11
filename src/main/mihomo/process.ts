@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import type { MihomoRuntime } from '../lifecycle';
 import type { AppSettings } from '../storage/settings';
-import { buildMihomoConfig } from './config';
+import { buildMihomoConfig, strategyTargets } from './config';
 
 type SpawnedProcess = {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
@@ -266,6 +266,7 @@ async function waitForUsableProxies(
   secret: string,
   port: number,
   selectedNode: string,
+  strategy: AppSettings['strategy'],
   logLine?: (line: string) => void
 ): Promise<void> {
   const deadline = Date.now() + 25000;
@@ -280,7 +281,11 @@ async function waitForUsableProxies(
     lastSummary = `selector=${selector?.name ?? 'missing'}, current=${currentNode || 'missing'}, nodes=${nodes.length}`;
 
     if (nodes.length > 0) {
-      const target = pickStartupNode(nodes, selectedNode);
+      const strategyTarget = strategy === 'manual' ? undefined : strategyTargets[strategy];
+      const target =
+        strategyTarget && selector?.item.all?.includes(strategyTarget)
+          ? strategyTarget
+          : pickStartupNode(nodes, selectedNode);
       if (target && (!currentNode || builtInProxyNames.has(currentNode) || currentNode !== target)) {
         const primarySteps = resolveSelectionSteps(proxies, selector?.name ?? selectorName, target);
         const steps = collectSyncedSelectionSteps(proxies, target, primarySteps);
@@ -293,7 +298,9 @@ async function waitForUsableProxies(
           }
         }
         logLine?.(
-          selectedNode.trim() && target === selectedNode.trim()
+          strategyTarget && target === strategyTarget
+            ? `mihomo selected strategy: ${target}`
+            : selectedNode.trim() && target === selectedNode.trim()
             ? `mihomo restored selected node: ${target}`
             : `mihomo selected default node: ${target}`
         );
@@ -503,6 +510,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
                     settings.controllerSecret,
                     ports.controllerPort,
                     settings.selectedNode,
+                    settings.strategy,
                     options.logLine
                   );
                 })(),

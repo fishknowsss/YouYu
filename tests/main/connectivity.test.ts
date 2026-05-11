@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCurlMetrics, parseTraceData } from '../../src/main/connectivity';
+import { connectivityServices, parseCurlMetrics, parseTraceData } from '../../src/main/connectivity';
 
 describe('parseCurlMetrics', () => {
   it('reads curl timing output and keeps the response body', () => {
@@ -38,5 +38,21 @@ describe('parseTraceData', () => {
       loc: 'JP',
       colo: 'NRT'
     });
+  });
+});
+
+describe('connectivityServices', () => {
+  it('keeps Steam checks first and removes ByteDance', () => {
+    expect(connectivityServices[0]).toMatchObject({
+      key: 'steam',
+      name: 'Steam',
+      host: 'store.steampowered.com'
+    });
+    expect(connectivityServices[1]).toMatchObject({
+      key: 'steamNetwork',
+      name: 'Steam 联机',
+      host: 'api.steampowered.com'
+    });
+    expect(connectivityServices.map((service) => service.key)).not.toContain('bytedance');
   });
 });

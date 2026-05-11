@@ -30,6 +30,7 @@ describe('SettingsStore', () => {
     expect(first.dnsEnhanced).toBe(false);
     expect(first.tunEnabled).toBe(true);
     expect(first.strictRouteEnabled).toBe(true);
+    expect(first.subscriptionRefreshIntervalHours).toBe(12);
     expect(second.controllerSecret).toBe(first.controllerSecret);
   });
 
@@ -69,7 +70,8 @@ describe('SettingsStore', () => {
         dnsEnhanced: true,
         snifferEnabled: true,
         tunEnabled: false,
-        allowLan: false
+        allowLan: false,
+        subscriptionRefreshIntervalHours: 99
       })
     );
 
@@ -79,7 +81,17 @@ describe('SettingsStore', () => {
     expect(migrated.tunEnabled).toBe(true);
     expect(migrated.strictRouteEnabled).toBe(true);
     expect(migrated.ruleProfile).toBe('subscription');
+    expect(migrated.subscriptionRefreshIntervalHours).toBe(12);
     expect(migrated.settingsVersion).toBe(1);
+  });
+
+  it('persists allowed subscription refresh intervals', async () => {
+    const store = await makeStore();
+
+    await store.update({ subscriptionRefreshIntervalHours: 6 });
+    const after = await store.read();
+
+    expect(after.subscriptionRefreshIntervalHours).toBe(6);
   });
 
   it('migrates missing rule profile to the airport config default', async () => {

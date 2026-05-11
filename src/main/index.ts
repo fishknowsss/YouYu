@@ -11,6 +11,9 @@ import { strategyLabels, strategyTargets } from './mihomo/config';
 import { createMihomoRuntime } from './mihomo/process';
 import { createSystemProxyAdapter } from './platform/systemProxy';
 import { SettingsStore } from './storage/settings';
+import { TrafficReporter } from './traffic/reporter';
+import { TrafficStore } from './traffic/store';
+import { TrafficTracker } from './traffic/tracker';
 import {
   closeMihomoConnections,
   saveSubscriptionSettings,
@@ -39,6 +42,7 @@ let isQuitting = false;
 let trayBusy = false;
 let petAnimationTimer: ReturnType<typeof setTimeout> | undefined;
 let petDragTimer: ReturnType<typeof setInterval> | undefined;
+let subscriptionRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 let petDragStart:
   | {
       cursorX: number;
@@ -77,8 +81,29 @@ const userDataDir = app.getPath('userData');
 const defaultSubscriptionPath = isDev
   ? join(process.cwd(), 'resources/default-subscription.txt')
   : join(process.resourcesPath, 'default-subscription.txt');
+const trafficApiUrlPath = isDev
+  ? join(process.cwd(), 'resources/traffic-api-url.txt')
+  : join(process.resourcesPath, 'traffic-api-url.txt');
+const appVersion = readPackageVersion();
 const settingsStore = new SettingsStore(app.getPath('userData'), {
   defaultSubscriptionUrl: readDefaultSubscriptionUrl(defaultSubscriptionPath)
+});
+const trafficStore = new TrafficStore(app.getPath('userData'));
+const trafficReporter = new TrafficReporter({
+  store: trafficStore,
+  endpoint: readOptionalText(trafficApiUrlPath),
+  appVersion,
+  getProxyUrl: getRuntimeTrafficProxyUrl,
+  onError: (error) => appendLog(`流量上报失败: ${formatError(error)}`)
+});
+const trafficTracker = new TrafficTracker({
+  store: trafficStore,
+  isRunning: () => lifecycle.getStatus() === 'running',
+  readRuntimeStats: async () => {
+    const settings = await settingsStore.read();
+    return createRuntimeMihomoApi({ secret: settings.controllerSecret }).getRuntimeStats();
+  },
+  onError: (error) => appendLog(`流量统计失败: ${formatError(error)}`)
 });
 const mihomoBinaryPath = isDev
   ? join(process.cwd(), 'resources/mihomo/win-x64/mihomo.exe')
@@ -117,9 +142,23 @@ const mihomoRuntime: MihomoRuntime =
       };
 
 function readDefaultSubscriptionUrl(path: string): string {
+  return readOptionalText(path);
+}
+
+function readOptionalText(path: string): string {
   if (!existsSync(path)) return '';
 
   return readFileSync(path, 'utf8').trim();
+}
+
+function readPackageVersion(): string {
+  try {
+    const packagePath = isDev ? join(process.cwd(), 'package.json') : join(process.resourcesPath, 'package.json');
+    const parsed = JSON.parse(readFileSync(packagePath, 'utf8')) as { version?: string };
+    return parsed.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
 }
 
 function appendLog(message: string) {
@@ -138,6 +177,34 @@ function formatError(error: unknown): string {
 function recordError(context: string, error: unknown) {
   lastError = `${context}: ${formatError(error)}`;
   appendLog(lastError);
+}
+
+function getRuntimeTrafficProxyUrl(): string | undefined {
+  return lifecycle?.getStatus() === 'running' ? `http://127.0.0.1:${runtimePorts.mixedPort}` : undefined;
+}
+
+function shouldRetryRegistrationViaProxy(error: unknown): boolean {
+  const message = formatError(error);
+  if (message.includes('traffic endpoint not configured')) return false;
+  if (message.includes('traffic activation failed: 400')) return false;
+  if (message.includes('traffic activation failed: 403')) return false;
+  if (/traffic activation failed: (408|429|5\d\d)/.test(message)) return true;
+  return [
+    'fetch failed',
+    'Failed to fetch',
+    'traffic request timed out',
+    'traffic proxy connect timed out',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'ENOTFOUND',
+    'EAI_AGAIN'
+  ].some((needle) => message.includes(needle));
+}
+
+function isTrafficActivationAuthFailure(error: unknown): boolean {
+  const message = formatError(error);
+  return message.includes('traffic activation failed: 400') || message.includes('traffic activation failed: 403');
 }
 
 function clearLastError() {
@@ -202,8 +269,62 @@ lifecycle = createLifecycleController({
   onStatusChange: () => {
     refreshTrayMenu();
     syncPetStateToRuntime();
+    scheduleSubscriptionRefresh();
   }
 });
+
+function clearSubscriptionRefreshTimer() {
+  if (subscriptionRefreshTimer) {
+    clearTimeout(subscriptionRefreshTimer);
+    subscriptionRefreshTimer = undefined;
+  }
+}
+
+function scheduleSubscriptionRefresh() {
+  clearSubscriptionRefreshTimer();
+  if (lifecycle.getStatus() !== 'running') return;
+
+  void settingsStore
+    .read()
+    .then((settings) => {
+      const intervalHours = settings.subscriptionRefreshIntervalHours;
+      if (!settings.subscriptionUrl.trim() || intervalHours <= 0 || lifecycle.getStatus() !== 'running') {
+        return;
+      }
+
+      subscriptionRefreshTimer = setTimeout(() => {
+        void refreshSubscriptionInBackground();
+      }, intervalHours * 60 * 60 * 1000);
+    })
+    .catch((error) => {
+      recordError('订阅刷新计划失败', error);
+    });
+}
+
+async function refreshSubscriptionInBackground() {
+  if (lifecycle.getStatus() !== 'running') {
+    scheduleSubscriptionRefresh();
+    return;
+  }
+
+  try {
+    appendLog('后台刷新订阅');
+    const snapshot = await updateSubscriptionNodes({
+      settingsStore,
+      lifecycle,
+      createMihomoApi: createRuntimeMihomoApi,
+      createSnapshot
+    });
+    sendSnapshotToWindows(snapshot);
+    clearLastError();
+  } catch (error) {
+    recordError('后台刷新订阅失败', error);
+    await broadcastSnapshot().catch((broadcastError) => console.error('broadcast snapshot failed', broadcastError));
+  } finally {
+    refreshTrayMenu();
+    scheduleSubscriptionRefresh();
+  }
+}
 
 async function createSnapshot(): Promise<AppSnapshot> {
   const settings = await settingsStore.read();
@@ -228,6 +349,7 @@ async function createSnapshot(): Promise<AppSnapshot> {
         strategyTargets[settings.strategy === 'manual' ? 'auto' : settings.strategy]
       ];
   const activeStrategy = strategies.find((strategy) => strategy.active)?.key ?? settings.strategy;
+  const trafficSnapshot = await trafficStore.getSnapshot();
 
   return {
     status: lifecycle.getStatus(),
@@ -243,9 +365,12 @@ async function createSnapshot(): Promise<AppSnapshot> {
       snifferEnabled: settings.snifferEnabled,
       tunEnabled: settings.tunEnabled,
       strictRouteEnabled: settings.strictRouteEnabled,
-      allowLan: settings.allowLan
+      allowLan: settings.allowLan,
+      subscriptionRefreshIntervalHours: settings.subscriptionRefreshIntervalHours
     },
     runtime,
+    traffic: trafficSnapshot.stats,
+    trafficIdentity: trafficSnapshot.identity,
     subscriptionUrl: settings.subscriptionUrl,
     diagnostics: {
       lastError,
@@ -297,20 +422,117 @@ async function withTrayRefresh<T>(task: () => Promise<T>): Promise<T> {
 }
 
 async function startProxy(): Promise<AppSnapshot> {
+  await requireTrafficIdentity();
   await lifecycle.start();
+  await activatePendingTrafficIdentity();
+  trafficTracker.start();
+  trafficReporter.start();
   clearLastError();
   return createSnapshot();
 }
 
+async function requireTrafficIdentity(): Promise<void> {
+  const snapshot = await trafficStore.getSnapshot();
+  if (!snapshot.identity) {
+    throw new Error('traffic identity required');
+  }
+}
+
 async function stopProxy(): Promise<AppSnapshot> {
+  await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
+  await trafficReporter.reportPending().catch((error) => appendLog(`流量上报失败: ${formatError(error)}`));
+  trafficTracker.stop();
   await lifecycle.stop();
   return createSnapshot();
 }
 
 async function repairProxy(): Promise<AppSnapshot> {
+  if (lifecycle.getStatus() === 'running') {
+    const settings = await settingsStore.read();
+    await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
+    await trafficReporter.reportPending().catch((error) => appendLog(`流量上报失败: ${formatError(error)}`));
+    await createRuntimeMihomoApi({ secret: settings.controllerSecret }).closeConnections().catch(() => undefined);
+  }
+  trafficTracker.stop();
   await lifecycle.repair();
+  clearSubscriptionRefreshTimer();
   clearLastError();
   return createSnapshot();
+}
+
+async function registerTrafficIdentity(input: Parameters<TrafficReporter['register']>[0]): Promise<AppSnapshot> {
+  const wasRunning = lifecycle.getStatus() === 'running';
+  let startedForRegistration = false;
+
+  try {
+    await trafficReporter.register(input, {
+      proxyUrl: wasRunning ? getRuntimeTrafficProxyUrl() : undefined
+    });
+  } catch (error) {
+    const settings = await settingsStore.read();
+    if (!shouldRetryRegistrationViaProxy(error)) {
+      throw error;
+    }
+
+    if (!wasRunning && settings.subscriptionUrl.trim()) {
+      appendLog(`登记直连失败，尝试代理: ${formatError(error)}`);
+      await lifecycle.start();
+      startedForRegistration = true;
+      try {
+        await trafficReporter.register(input, {
+          proxyUrl: getRuntimeTrafficProxyUrl()
+        });
+      } catch (proxyError) {
+        appendLog(`登记代理重试失败: ${formatError(proxyError)}`);
+        if (isTrafficActivationAuthFailure(proxyError)) {
+          throw proxyError;
+        }
+        await trafficStore.registerPendingIdentity(input);
+      }
+    } else {
+      appendLog(`登记暂存，等待代理可用后重试: ${formatError(error)}`);
+      await trafficStore.registerPendingIdentity(input);
+    }
+  }
+
+  if (startedForRegistration) {
+    await lifecycle.stop().catch((stopError) => appendLog(`登记回滚失败: ${formatError(stopError)}`));
+  }
+  if (lifecycle.getStatus() === 'running') {
+    trafficTracker.start();
+    trafficReporter.start();
+  }
+  clearLastError();
+  return createSnapshot();
+}
+
+async function activatePendingTrafficIdentity(): Promise<void> {
+  const pending = await trafficStore.getPendingRegistration();
+  if (!pending) return;
+
+  try {
+    await trafficReporter.register(pending, {
+      proxyUrl: getRuntimeTrafficProxyUrl()
+    });
+    appendLog('待验证登记已完成');
+  } catch (error) {
+    if (isTrafficActivationAuthFailure(error)) {
+      await trafficStore.clearIdentity(formatError(error));
+      throw error;
+    }
+    appendLog(`待验证登记暂未完成: ${formatError(error)}`);
+  }
+}
+
+async function restartKernelAndApp(): Promise<AppSnapshot> {
+  await lifecycle.restart();
+  clearLastError();
+  const snapshot = await createSnapshot();
+  app.relaunch();
+  cleanupFinished = true;
+  isQuitting = true;
+  app.exit(0);
+  return snapshot;
 }
 
 function registerIpc() {
@@ -367,6 +589,7 @@ function registerIpc() {
     const settings = await settingsStore.read();
     await settingsStore.update({ strategy: 'manual', selectedNode: name });
     if (lifecycle.getStatus() !== 'running') {
+      await requireTrafficIdentity();
       await lifecycle.start();
     }
     const mihomoApi = createMihomoApiClient({
@@ -446,17 +669,20 @@ function registerIpc() {
   });
   ipcMain.handle(ipcChannels.updateSubscription, async () => {
     return withTrayRefresh(async () => {
-      return updateSubscriptionNodes({
+      await requireTrafficIdentity();
+      const snapshot = await updateSubscriptionNodes({
         settingsStore,
         lifecycle,
         createMihomoApi: createRuntimeMihomoApi,
         createSnapshot
       });
+      scheduleSubscriptionRefresh();
+      return snapshot;
     });
   });
   ipcMain.handle(ipcChannels.saveSettings, async (_event, settings) => {
     return withTrayRefresh(async () => {
-      return saveSubscriptionSettings(
+      const snapshot = await saveSubscriptionSettings(
         {
           settingsStore,
           lifecycle,
@@ -464,7 +690,14 @@ function registerIpc() {
         },
         settings
       );
+      scheduleSubscriptionRefresh();
+      return snapshot;
     });
+  });
+  ipcMain.handle(ipcChannels.registerTrafficIdentity, async (_event, input) => {
+    const snapshot = await registerTrafficIdentity(input);
+    sendSnapshotToWindows(snapshot);
+    return snapshot;
   });
 }
 
@@ -666,10 +899,21 @@ async function migrateLegacyLaunchAtLogin() {
 
 function showPetContextMenu() {
   if (!petFeatureEnabled) return;
+  const running = lifecycle.getStatus() === 'running';
+  const proxyActionLabel = running ? '停止代理' : '启动代理';
   const menu = Menu.buildFromTemplate([
     {
-      label: '打开',
+      label: '打开窗口',
       click: showMainWindow
+    },
+    {
+      label: proxyActionLabel,
+      enabled: !trayBusy,
+      click: () => {
+        void runTrayAction(proxyActionLabel, async () => {
+          return running ? stopProxy() : startProxy();
+        });
+      }
     },
     {
       label: '右下贴边',
@@ -854,7 +1098,7 @@ function refreshTrayMenu() {
   const failed = status === 'failed';
   const launchAtLogin = isLaunchAtLoginEnabled();
   const statusLabel = trayBusy ? '处理中' : running ? '运行中' : failed ? '异常' : '已停止';
-  const primaryLabel = running ? '停止代理' : '启动代理';
+  const proxyActionLabel = running ? '停止代理' : '启动代理';
   tray.setToolTip(`YouYu - ${statusLabel}`);
   trayMenu = Menu.buildFromTemplate([
     {
@@ -863,8 +1107,17 @@ function refreshTrayMenu() {
     },
     { type: 'separator' },
     {
-      label: '打开 YouYu',
+      label: '打开窗口',
       click: showMainWindow
+    },
+    {
+      label: proxyActionLabel,
+      enabled: !trayBusy,
+      click: () => {
+        void runTrayAction(proxyActionLabel, async () => {
+          return running ? stopProxy() : startProxy();
+        });
+      }
     },
     {
       label: '开机自启',
@@ -883,28 +1136,28 @@ function refreshTrayMenu() {
         ]
       : []),
     {
-      label: primaryLabel,
+      label: '网络修复',
       enabled: !trayBusy,
-      click: () => {
-        const currentStatus = lifecycle.getStatus();
-        const actionLabel = currentStatus === 'running' ? '停止代理' : '启动代理';
-        void runTrayAction(actionLabel, async () => {
-          if (lifecycle.getStatus() === 'running') {
-            return stopProxy();
+      submenu: [
+        {
+          label: '重启内核并重启软件',
+          enabled: !trayBusy,
+          click: () => {
+            void runTrayAction('重启内核并重启软件', async () => {
+              return restartKernelAndApp();
+            });
           }
-
-          return startProxy();
-        });
-      }
-    },
-    {
-      label: '修复网络',
-      enabled: !trayBusy,
-      click: () => {
-        void runTrayAction('修复网络', async () => {
-          return repairProxy();
-        });
-      }
+        },
+        {
+          label: '重型网络修复',
+          enabled: !trayBusy,
+          click: () => {
+            void runTrayAction('重型网络修复', async () => {
+              return repairProxy();
+            });
+          }
+        }
+      ]
     },
     { type: 'separator' },
     {
@@ -1084,6 +1337,10 @@ async function cleanupBeforeExit() {
     stopPetDrag({ settle: false });
   }
   try {
+    await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
+    await trafficReporter.reportPending().catch((error) => appendLog(`流量上报失败: ${formatError(error)}`));
+    trafficTracker.stop();
+    trafficReporter.stop();
     if (lifecycle.getStatus() !== 'stopped') {
       await lifecycle.stop();
     }
