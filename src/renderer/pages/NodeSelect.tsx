@@ -5,10 +5,13 @@ type NodeSelectProps = {
   snapshot: AppSnapshot;
   busy: boolean;
   message: string;
+  testingAll: boolean;
+  switchingNode?: string;
   onBack: () => void;
   onSelect: (name: string) => void;
   onTestNode: (name: string) => void;
   onTestAll: () => void;
+  onCancelTestAll: () => void;
   onRefresh: () => void;
 };
 
@@ -16,10 +19,13 @@ export function NodeSelect({
   snapshot,
   busy,
   message,
+  testingAll,
+  switchingNode,
   onBack,
   onSelect,
   onTestNode,
   onTestAll,
+  onCancelTestAll,
   onRefresh
 }: NodeSelectProps) {
   const emptyText = snapshot.subscriptionUrl
@@ -37,7 +43,9 @@ export function NodeSelect({
         </div>
         <div className="header-actions">
           <button className="secondary-button" onClick={onBack}>返回</button>
-          <button className="wide-button" disabled={busy} onClick={onTestAll}>全部测速</button>
+          <button className="wide-button" disabled={busy && !testingAll} onClick={testingAll ? onCancelTestAll : onTestAll}>
+            {testingAll ? '停止' : '全部测速'}
+          </button>
           <button className="secondary-button" disabled={busy} onClick={onRefresh}>
             {snapshot.status === 'running' ? '更新订阅' : '启动并更新'}
           </button>
@@ -47,6 +55,7 @@ export function NodeSelect({
         <NodeList
           nodes={snapshot.nodes}
           busy={busy}
+          switchingNode={switchingNode}
           emptyText={emptyText}
           onSelect={onSelect}
           onTestNode={onTestNode}

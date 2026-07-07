@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { DesktopPetState } from '../../shared/ipc';
 import { PetSprite } from '../components/PetSprite';
-import { getPetAnimation, petStates } from '../pet/atlas';
+import { petStates } from '../pet/atlas';
 
 const stateLabels: Record<DesktopPetState, string> = {
   idle: '待机',
@@ -17,17 +17,51 @@ const stateLabels: Record<DesktopPetState, string> = {
   edgePeek: '探边',
   edgeLeft: '左贴',
   edgeRight: '右贴',
+  edgeLeftBlink: '左眨',
+  edgeRightBlink: '右眨',
+  edgeLeftSleep: '左睡',
+  edgeRightSleep: '右睡',
+  topSleep: '倒挂',
+  bottomSleep: '趴睡',
+  bottomDizzy: '晕倒',
+  bottomAngry: '生气',
   fallRecover: '落地',
   annoyed: '不悦',
   comfortSad: '低落',
   rewardObserve: '观察'
 };
 
+const stateDescriptions: Record<DesktopPetState, string> = {
+  idle: '普通停留状态。',
+  walkRight: '向右移动。',
+  walkLeft: '向左移动。',
+  wave: '轻轻挥手。',
+  jump: '短暂跳起。',
+  liftHold: '被提起时保持拉伸。',
+  drag: '拖动时悬空摆动。',
+  sleepWake: '困了又醒。',
+  focusWait: '安静等待。',
+  happy: '开心晃动。',
+  edgePeek: '贴边探头。',
+  edgeLeft: '贴在左侧。',
+  edgeRight: '贴在右侧。',
+  edgeLeftBlink: '左侧眨眼。',
+  edgeRightBlink: '右侧眨眼。',
+  edgeLeftSleep: '左侧睡着。',
+  edgeRightSleep: '右侧睡着。',
+  topSleep: '倒挂在顶部睡觉。',
+  bottomSleep: '贴着底部趴睡。',
+  bottomDizzy: '落地后晕一下。',
+  bottomAngry: '醒来短暂生气。',
+  fallRecover: '落下后恢复。',
+  annoyed: '有点不悦。',
+  comfortSad: '低落安静。',
+  rewardObserve: '观察手里的星星。'
+};
+
 export function PetPreviewPage() {
   const [selectedState, setSelectedState] = useState<DesktopPetState>('idle');
-  const selectedAnimation = useMemo(() => getPetAnimation(selectedState), [selectedState]);
-  const loopText = selectedAnimation.loop ? '循环' : '单次';
-  const atlasText = selectedAnimation.atlas === 'main' ? '主图集' : '扩展图集';
+  const selectedDescription = useMemo(() => stateDescriptions[selectedState], [selectedState]);
 
   return (
     <div className="workspace pet-preview-page">
@@ -37,7 +71,7 @@ export function PetPreviewPage() {
           <p>共 {petStates.length} 个状态</p>
         </div>
         <div className="pet-preview-summary">
-          <span>{atlasText}</span>
+          <span>当前</span>
           <strong>{stateLabels[selectedState]}</strong>
         </div>
       </div>
@@ -45,7 +79,6 @@ export function PetPreviewPage() {
       <section className="pet-preview-layout">
         <div className="pet-preview-grid" aria-label="桌宠状态">
           {petStates.map((state) => {
-            const animation = getPetAnimation(state);
             return (
               <button
                 key={state}
@@ -57,9 +90,7 @@ export function PetPreviewPage() {
                   <PetSprite state={state} scale={0.46} />
                 </span>
                 <span className="pet-preview-name">{stateLabels[state]}</span>
-                <span className="pet-preview-meta">
-                  {animation.atlas} · {animation.frameIndexes.length} 帧
-                </span>
+                <span className="pet-preview-meta">{stateDescriptions[state]}</span>
               </button>
             );
           })}
@@ -71,32 +102,7 @@ export function PetPreviewPage() {
           </div>
           <div className="pet-preview-detail">
             <h2>{stateLabels[selectedState]}</h2>
-            <dl>
-              <div>
-                <dt>状态</dt>
-                <dd>{selectedState}</dd>
-              </div>
-              <div>
-                <dt>图集</dt>
-                <dd>{selectedAnimation.atlas}</dd>
-              </div>
-              <div>
-                <dt>行号</dt>
-                <dd>{selectedAnimation.row}</dd>
-              </div>
-              <div>
-                <dt>帧数</dt>
-                <dd>{selectedAnimation.frameIndexes.length}</dd>
-              </div>
-              <div>
-                <dt>帧率</dt>
-                <dd>{selectedAnimation.fps} fps</dd>
-              </div>
-              <div>
-                <dt>播放</dt>
-                <dd>{loopText}</dd>
-              </div>
-            </dl>
+            <p>{selectedDescription}</p>
           </div>
         </aside>
       </section>

@@ -25,6 +25,8 @@ BrandingText " "
 Var YouYuDialog
 !ifndef BUILD_UNINSTALLER
   Var YouYuRunCheckbox
+  Var YouYuClosedRunningApp
+  Var YouYuIsUpdateInstall
 !endif
 
 !macro customInstallMode
@@ -33,6 +35,10 @@ Var YouYuDialog
 
 !macro customInit
   InitPluginsDir
+  !ifndef BUILD_UNINSTALLER
+    Call YouYuCloseRunningAppBeforeInstall
+    Call YouYuDetectUpdateInstall
+  !endif
   Call YouYuHideTitleIcon
 !macroend
 
@@ -74,6 +80,46 @@ Function YouYuHideTitleIcon
   System::Call 'user32::SetClassLongPtr(p$HWNDPARENT, i${GCLP_HICON}, p0)'
   System::Call 'user32::SetClassLongPtr(p$HWNDPARENT, i${GCLP_HICONSM}, p0)'
 FunctionEnd
+
+!ifndef BUILD_UNINSTALLER
+Function YouYuCloseRunningAppBeforeInstall
+  StrCpy $YouYuClosedRunningApp "0"
+
+  RetryCloseYouYu:
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "if (Get-Process -Name YouYu -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`
+    Pop $0
+    ${If} $0 != 0
+      Return
+    ${EndIf}
+
+    StrCpy $YouYuClosedRunningApp "1"
+    DetailPrint "Closing running YouYu before update."
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "(Get-Process -Name YouYu -ErrorAction SilentlyContinue) | ForEach-Object { if ($$_.MainWindowHandle -ne 0) { [void]$$_.CloseMainWindow() } }"`
+    Pop $0
+    Sleep 2000
+
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "if (Get-Process -Name YouYu -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`
+    Pop $0
+    ${If} $0 == 0
+      nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Name YouYu -ErrorAction SilentlyContinue | Stop-Process -Force"`
+      Pop $0
+      Sleep 1200
+    ${EndIf}
+
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "if (Get-Process -Name YouYu -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`
+    Pop $0
+    ${If} $0 == 0
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "YouYu 正在运行，安装程序无法关闭它。请手动退出后重试。" /SD IDRETRY IDRETRY RetryCloseYouYu
+      Quit
+    ${EndIf}
+FunctionEnd
+
+Function YouYuDetectUpdateInstall
+  StrCpy $YouYuIsUpdateInstall "0"
+  IfFileExists "$INSTDIR\YouYu.exe" 0 +2
+    StrCpy $YouYuIsUpdateInstall "1"
+FunctionEnd
+!endif
 
 Function YouYuHideDefaultChrome
   Call YouYuHideTitleIcon
@@ -131,12 +177,24 @@ Function YouYuWelcomePageCreate
   Call YouYuPrepareInstallButtons
   Call YouYuCreateFrame
 
-  ${NSD_CreateLabel} 13% 62u 74% 30u "安装 YouYu"
+  ${If} $YouYuIsUpdateInstall == "1"
+    ${NSD_CreateLabel} 13% 62u 74% 30u "更新 YouYu"
+  ${Else}
+    ${NSD_CreateLabel} 13% 62u 74% 30u "安装 YouYu"
+  ${EndIf}
   Pop $0
   Push $0
   Call YouYuStyleTitle
 
-  ${NSD_CreateLabel} 13% 108u 74% 24u "点击安装开始使用。"
+  ${If} $YouYuIsUpdateInstall == "1"
+    ${If} $YouYuClosedRunningApp == "1"
+      ${NSD_CreateLabel} 13% 108u 74% 30u "旧版本已退出，点击安装完成更新。"
+    ${Else}
+      ${NSD_CreateLabel} 13% 108u 74% 30u "点击安装完成更新。"
+    ${EndIf}
+  ${Else}
+    ${NSD_CreateLabel} 13% 108u 74% 24u "点击安装开始使用。"
+  ${EndIf}
   Pop $0
   Push $0
   Call YouYuStyleText

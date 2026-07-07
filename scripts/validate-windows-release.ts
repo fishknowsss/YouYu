@@ -5,7 +5,8 @@ const root = process.cwd();
 const releaseDir = join(root, 'release');
 const internalBuild = process.argv.includes('--internal');
 const noPetBuild = process.argv.includes('--no-pet');
-const bundledSubscriptionBuild = internalBuild || noPetBuild;
+const publicUpdateBuild = process.argv.includes('--public-update');
+const bundledSubscriptionBuild = (internalBuild || noPetBuild) && !publicUpdateBuild;
 
 const packageJson = (await import('../package.json', { with: { type: 'json' } })).default as {
   version?: string;
@@ -18,11 +19,14 @@ if (!packageJson.version) {
 const expectedInstallerName = `YouYu-${packageJson.version}-x64${internalBuild ? '-in' : noPetBuild ? '-no' : ''}.exe`;
 const expectedInstallerPath = join(releaseDir, expectedInstallerName);
 const expectedBlockmapPath = join(releaseDir, `${expectedInstallerName}.blockmap`);
+const expectedUpdateMetadataName = internalBuild ? 'latest-in.yml' : noPetBuild ? 'latest-no.yml' : 'latest.yml';
+const expectedUpdateMetadataPath = join(releaseDir, expectedUpdateMetadataName);
 const bundledSubscriptionPath = join(releaseDir, 'win-unpacked', 'resources', 'default-subscription.txt');
 const trafficApiUrlPath = join(releaseDir, 'win-unpacked', 'resources', 'traffic-api-url.txt');
 
 await access(expectedInstallerPath);
 await access(expectedBlockmapPath);
+await access(expectedUpdateMetadataPath);
 
 const entries = await readdir(releaseDir, { withFileTypes: true });
 const exeEntries = entries
@@ -60,6 +64,9 @@ if (!bundledSubscriptionBuild && bundledSubscription) {
 }
 if (bundledSubscriptionBuild && !bundledSubscription) {
   throw new Error(`${internalBuild ? 'Internal' : 'No-pet'} installer is missing the bundled default subscription`);
+}
+if (publicUpdateBuild && bundledSubscription) {
+  throw new Error('Public update installer must not bundle a default subscription');
 }
 
 const trafficApiUrl = (await readFile(trafficApiUrlPath, 'utf8')).trim();

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { saveSubscriptionSettings, updateSubscriptionNodes } from '../../src/main/appActions';
+import { saveSubscriptionSettings, testAllMihomoNodes, updateSubscriptionNodes } from '../../src/main/appActions';
 import type { AppSnapshot } from '../../src/shared/ipc';
 import type { AppSettings } from '../../src/main/storage/settings';
 
@@ -8,6 +8,14 @@ function makeSnapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
     status: 'running',
     currentNode: '自动选择',
     nodes: [{ name: '自动选择', active: true }],
+    nodeHealth: {
+      nodeName: '自动选择',
+      delayStatus: 'untested',
+      availability: {
+        status: 'untested',
+        totalCount: 10
+      }
+    },
     strategies: [{ key: 'auto', label: '自动', target: '自动选择', active: true }],
     mode: 'rule',
     strategy: 'auto',
@@ -16,7 +24,7 @@ function makeSnapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
       systemProxyEnabled: true,
       dnsEnhanced: true,
       snifferEnabled: true,
-      tunEnabled: true,
+      tunEnabled: false,
       strictRouteEnabled: true,
       allowLan: false,
       subscriptionRefreshIntervalHours: 12
@@ -36,6 +44,12 @@ function makeSnapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
       reportStatus: 'idle'
     },
     subscriptionUrl: 'https://example.com/sub',
+    update: {
+      currentVersion: '1.3.0',
+      buildChannel: 'standard',
+      updateChannel: 'latest',
+      status: 'idle'
+    },
     diagnostics: {
       logs: []
     },
@@ -47,6 +61,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   return {
     settingsVersion: 1,
     subscriptionUrl: 'https://example.com/sub',
+    localSubscriptionUrl: 'https://example.com/sub',
     controllerSecret: 'secret',
     mode: 'rule',
     strategy: 'auto',
@@ -55,7 +70,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     systemProxyEnabled: true,
     dnsEnhanced: true,
     snifferEnabled: true,
-    tunEnabled: true,
+    tunEnabled: false,
     strictRouteEnabled: true,
     allowLan: false,
     subscriptionRefreshIntervalHours: 12,
@@ -98,6 +113,32 @@ describe('app actions', () => {
 
     expect(lifecycle.start).toHaveBeenCalledOnce();
     expect(updateProvider).not.toHaveBeenCalled();
+  });
+
+  it('repairs and retries when starting for an update fails once', async () => {
+    const lifecycle = {
+      getStatus: vi.fn(() => 'stopped' as const),
+      start: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('startup failed'))
+        .mockResolvedValueOnce(undefined),
+      stop: vi.fn(async () => undefined),
+      restart: vi.fn(async () => undefined),
+      repair: vi.fn(async () => undefined)
+    };
+
+    await updateSubscriptionNodes({
+      settingsStore: {
+        read: async () => makeSettings(),
+        update: vi.fn()
+      },
+      lifecycle,
+      createMihomoApi: () => makeMihomoApi(),
+      createSnapshot: async () => makeSnapshot()
+    });
+
+    expect(lifecycle.start).toHaveBeenCalledTimes(2);
+    expect(lifecycle.repair).toHaveBeenCalledOnce();
   });
 
   it('updates the running provider without restarting when mihomo accepts it', async () => {
@@ -180,5 +221,34 @@ describe('app actions', () => {
     expect(update).toHaveBeenCalledWith({ subscriptionUrl: 'https://example.com/new' });
     expect(stop).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledOnce();
+  });
+
+  it('passes the all-node test cancellation signal to mihomo', async () => {
+    const signal = new AbortController().signal;
+    const onProgress = vi.fn();
+    const testAllNodes = vi.fn(async () => undefined);
+    const createSnapshot = vi.fn(async () => makeSnapshot());
+
+    await testAllMihomoNodes(
+      {
+        settingsStore: {
+          read: async () => makeSettings(),
+          update: vi.fn()
+        },
+        lifecycle: {
+          getStatus: () => 'running',
+          start: vi.fn(),
+          stop: vi.fn(),
+          restart: vi.fn(),
+          repair: vi.fn()
+        },
+        createMihomoApi: () => makeMihomoApi({ testAllNodes }),
+        createSnapshot
+      },
+      { signal, onProgress }
+    );
+
+    expect(testAllNodes).toHaveBeenCalledWith({ signal, onNodeTested: onProgress });
+    expect(createSnapshot).toHaveBeenCalledOnce();
   });
 });

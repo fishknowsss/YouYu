@@ -43,7 +43,17 @@ export class TrafficStore {
   async read(): Promise<TrafficFile> {
     try {
       const raw = await readFile(this.filePath, 'utf8');
-      return this.normalize(JSON.parse(raw) as Partial<TrafficFile>);
+      try {
+        return this.normalize(JSON.parse(raw) as Partial<TrafficFile>);
+      } catch {
+        const repaired = repairKnownTrafficJsonDamage(raw);
+        if (repaired) {
+          const normalized = this.normalize(repaired);
+          await this.write(normalized);
+          return normalized;
+        }
+        throw new Error('traffic file invalid');
+      }
     } catch {
       const defaults = this.createDefaults();
       await this.write(defaults);
@@ -264,6 +274,23 @@ function normalizeIdentity(value: unknown): TrafficIdentity | undefined {
     lastReportedAt: typeof identity.lastReportedAt === 'string' ? identity.lastReportedAt : undefined,
     verificationStatus: identity.verificationStatus === 'pending' ? 'pending' : 'verified'
   };
+}
+
+function repairKnownTrafficJsonDamage(raw: string): Partial<TrafficFile> | undefined {
+  const repairedRaw = raw.replace(
+    /("name"\s*:\s*")([^"\r\n]*?),?\r?\n(\s*"deviceName"\s*:)/,
+    '$1$2",\n$3'
+  );
+
+  if (repairedRaw === raw) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(repairedRaw) as Partial<TrafficFile>;
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizePendingRegistration(value: unknown): TrafficRegistrationSecret | undefined {

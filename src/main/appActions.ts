@@ -13,6 +13,11 @@ type CreateMihomoApi = (options: { secret: string }) => Pick<
   'updateProvider' | 'setMode' | 'selectStrategy' | 'testNodeDelay' | 'testAllNodes' | 'closeConnections'
 >;
 
+type TestAllNodesOptions = {
+  signal?: AbortSignal;
+  onProgress?: () => void | Promise<void>;
+};
+
 type AppActionDeps = {
   settingsStore: SettingsAccess;
   lifecycle: LifecycleController;
@@ -34,7 +39,7 @@ export async function saveSubscriptionSettings(
   await deps.settingsStore.update(next);
   if (deps.lifecycle.getStatus() === 'running') {
     await deps.lifecycle.stop();
-    await deps.lifecycle.start();
+    await startWithRepairRetry(deps.lifecycle);
   }
   return deps.createSnapshot();
 }
@@ -47,7 +52,7 @@ export async function updateSubscriptionNodes(deps: AppActionDeps): Promise<AppS
 
   const wasStopped = deps.lifecycle.getStatus() !== 'running';
   if (wasStopped) {
-    await deps.lifecycle.start();
+    await startWithRepairRetry(deps.lifecycle);
     return deps.createSnapshot();
   }
 
@@ -55,7 +60,7 @@ export async function updateSubscriptionNodes(deps: AppActionDeps): Promise<AppS
     await deps.createMihomoApi({ secret: settings.controllerSecret }).updateProvider();
   } catch {
     await deps.lifecycle.stop();
-    await deps.lifecycle.start();
+    await startWithRepairRetry(deps.lifecycle);
   }
   return deps.createSnapshot();
 }
@@ -87,18 +92,24 @@ export async function testMihomoNode(
 ): Promise<AppSnapshot> {
   const settings = await deps.settingsStore.read();
   if (deps.lifecycle.getStatus() !== 'running') {
-    await deps.lifecycle.start();
+    await startWithRepairRetry(deps.lifecycle);
   }
   await deps.createMihomoApi({ secret: settings.controllerSecret }).testNodeDelay(name);
   return deps.createSnapshot();
 }
 
-export async function testAllMihomoNodes(deps: AppActionDeps): Promise<AppSnapshot> {
+export async function testAllMihomoNodes(
+  deps: AppActionDeps,
+  options: TestAllNodesOptions = {}
+): Promise<AppSnapshot> {
   const settings = await deps.settingsStore.read();
   if (deps.lifecycle.getStatus() !== 'running') {
-    await deps.lifecycle.start();
+    await startWithRepairRetry(deps.lifecycle);
   }
-  await deps.createMihomoApi({ secret: settings.controllerSecret }).testAllNodes();
+  await deps.createMihomoApi({ secret: settings.controllerSecret }).testAllNodes({
+    signal: options.signal,
+    onNodeTested: options.onProgress
+  });
   return deps.createSnapshot();
 }
 
@@ -108,4 +119,13 @@ export async function closeMihomoConnections(deps: AppActionDeps): Promise<AppSn
     await deps.createMihomoApi({ secret: settings.controllerSecret }).closeConnections();
   }
   return deps.createSnapshot();
+}
+
+async function startWithRepairRetry(lifecycle: LifecycleController): Promise<void> {
+  try {
+    await lifecycle.start();
+  } catch {
+    await lifecycle.repair().catch(() => undefined);
+    await lifecycle.start();
+  }
 }

@@ -2,16 +2,24 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMihomoRuntime } from '../../src/main/mihomo/process';
 import type { AppSettings } from '../../src/main/storage/settings';
 
 let tempDirs: string[] = [];
 
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response('proxies: []\n', { status: 200 }))
+  );
+});
+
 function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   return {
     settingsVersion: 1,
     subscriptionUrl: 'https://example.com/sub',
+    localSubscriptionUrl: 'https://example.com/sub',
     controllerSecret: 'local-secret',
     mode: 'rule',
     strategy: 'auto',
@@ -20,7 +28,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     systemProxyEnabled: true,
     dnsEnhanced: true,
     snifferEnabled: true,
-    tunEnabled: true,
+    tunEnabled: false,
     strictRouteEnabled: true,
     allowLan: false,
     subscriptionRefreshIntervalHours: 12,
@@ -60,6 +68,61 @@ describe('createMihomoRuntime', () => {
       join(userDataDir, 'mihomo', 'config.yaml')
     ]);
     expect(waitForReady).toHaveBeenCalledWith('local-secret');
+  });
+
+  it('falls back to the cached subscription config when the subscription endpoint is unavailable', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    let subscriptionAvailable = true;
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      if (String(url) === 'https://example.com/sub') {
+        return subscriptionAvailable
+          ? new Response(
+              `
+proxies:
+  - name: cached-node
+    type: ss
+    server: 127.0.0.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+`
+            )
+          : new Response(undefined, { status: 503 });
+      }
+
+      return Response.json({ version: 'test' });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const spawn = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+
+    const firstRuntime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      spawnProcess: spawn,
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await firstRuntime.start();
+    subscriptionAvailable = false;
+
+    const secondRuntime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      spawnProcess: spawn,
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await secondRuntime.start();
+
+    const config = await readFile(join(userDataDir, 'mihomo', 'config.yaml'), 'utf8');
+    expect(config).toContain('cached-node');
+    expect(fetch).toHaveBeenCalledWith(
+      'https://example.com/sub',
+      expect.objectContaining({ headers: { 'User-Agent': 'Clash Verge/2.3.2' } })
+    );
   });
 
   it('waits for mihomo to exit before resolving stop', async () => {
@@ -281,6 +344,59 @@ describe('createMihomoRuntime', () => {
         body: JSON.stringify({ name: '自动选择' })
       })
     );
+  });
+
+  it('selects a usable node inside the auto strategy group on startup', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.killed = false;
+    child.kill = vi.fn();
+    let selectorNow = 'DIRECT';
+    let autoNow = '剩余流量：796.81 GB';
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/version')) {
+        return Response.json({ version: 'test' });
+      }
+      if (path.endsWith('/proxies') && !init?.method) {
+        return Response.json({
+          proxies: {
+            节点选择: {
+              now: selectorNow,
+              all: ['自动选择', 'DIRECT']
+            },
+            自动选择: {
+              now: autoNow,
+              all: ['剩余流量：796.81 GB', '中国联通 订阅地址', '香港 01']
+            },
+            '剩余流量：796.81 GB': {},
+            '中国联通 订阅地址': {},
+            '香港 01': {}
+          }
+        });
+      }
+
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      if (path.endsWith('/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9')) selectorNow = body.name;
+      if (path.endsWith('/proxies/%E8%87%AA%E5%8A%A8%E9%80%89%E6%8B%A9')) autoNow = body.name;
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      spawnProcess: () => child as never
+    });
+
+    await runtime.start();
+
+    expect(selectorNow).toBe('自动选择');
+    expect(autoNow).toBe('香港 01');
   });
 
   it('keeps the auto strategy group ahead of a saved node on startup', async () => {

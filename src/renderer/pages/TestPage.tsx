@@ -16,6 +16,7 @@ type TestRow = ConnectivityResult & {
 };
 
 type TestResults = Record<ConnectivityServiceKey, TestRow>;
+type ConnectivityApi = NonNullable<Window['youyu']>;
 
 const services: Array<{
   key: ConnectivityServiceKey;
@@ -25,15 +26,14 @@ const services: Array<{
 }> = [
   { key: 'steam', name: 'Steam', url: 'https://store.steampowered.com', category: 'special' },
   { key: 'steamNetwork', name: 'Steam 联机', url: 'https://api.steampowered.com', category: 'special' },
+  { key: 'steamCloud', name: 'Steam 云同步', url: 'https://steamcloud-ugc.storage.googleapis.com', category: 'special' },
   { key: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com', category: 'ai' },
   { key: 'claude', name: 'Claude', url: 'https://claude.ai', category: 'ai' },
   { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai' },
   { key: 'flow', name: 'Flow', url: 'https://labs.google/fx/tools/flow', category: 'special' },
-  { key: 'runway', name: 'Runway', url: 'https://app.runwayml.com', category: 'ai' },
-  { key: 'tencent', name: '腾讯', url: 'https://www.tencent.com', category: 'domestic' },
+  { key: 'pixverse', name: 'PixVerse', url: 'https://app.pixverse.ai', category: 'ai' },
   { key: 'google', name: 'Google', url: 'https://www.google.com', category: 'global' },
-  { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global' },
-  { key: 'ehentai', name: 'E-Hentai', url: 'https://e-hentai.org', category: 'global' }
+  { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global' }
 ];
 
 let cachedResults: TestResults | undefined;
@@ -88,16 +88,9 @@ export function TestPage({ snapshot }: TestPageProps) {
 
     setBusyAll(true);
     commitResults((current) => markAllTesting(current, true));
+    selectActiveKey('steam');
     try {
-      const nextResults = await api.testAllConnectivity();
-      commitResults((current) => {
-        const next = { ...current };
-        for (const result of nextResults) {
-          next[result.key] = result;
-        }
-        return next;
-      });
-      selectActiveKey('steam');
+      await testConnectivityQueue(api);
     } finally {
       setBusyAll(false);
       commitResults((current) => markAllTesting(current, false));
@@ -113,6 +106,31 @@ export function TestPage({ snapshot }: TestPageProps) {
     const next = updater(getCachedResults());
     cachedResults = next;
     setResults(next);
+  }
+
+  async function testConnectivityQueue(api: ConnectivityApi) {
+    const queue = [...services];
+    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+      while (queue.length) {
+        const service = queue.shift();
+        if (!service) continue;
+
+        try {
+          const result = await api.testConnectivity(service.key);
+          commitResults((current) => ({
+            ...current,
+            [service.key]: result
+          }));
+        } catch (error) {
+          commitResults((current) => ({
+            ...current,
+            [service.key]: createFailedResult(current[service.key], error)
+          }));
+        }
+      }
+    });
+
+    await Promise.all(workers);
   }
 
   return (
@@ -265,6 +283,17 @@ function markAllTesting(
     next[key] = { ...next[key], testing };
   }
   return next;
+}
+
+function createFailedResult(row: TestRow, error: unknown): TestRow {
+  return {
+    ...row,
+    status: 'failed',
+    statusText: '失败',
+    checkedAt: new Date().toISOString(),
+    testing: false,
+    error: error instanceof Error ? error.message : String(error)
+  };
 }
 
 function getSummary(rows: TestRow[]) {

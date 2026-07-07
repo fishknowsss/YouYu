@@ -3,7 +3,7 @@ import { getPetAnimation, petStates } from '../../src/renderer/pet/atlas';
 
 describe('pet atlas', () => {
   it('maps every desktop pet state to a real manifest row', () => {
-    expect(petStates).toHaveLength(17);
+    expect(petStates).toHaveLength(25);
 
     for (const state of petStates) {
       const animation = getPetAnimation(state);
@@ -34,6 +34,28 @@ describe('pet atlas', () => {
     expect(getPetAnimation('edgeRight').loop).toBe(true);
     expect(getPetAnimation('edgeLeft').frameIndexes).toEqual([0]);
     expect(getPetAnimation('edgeRight').frameIndexes).toEqual([0]);
+    expect(getPetAnimation('edgeLeftBlink').frameIndexes).toEqual([0, 0, 0]);
+    expect(getPetAnimation('edgeRightBlink').frameIndexes).toEqual([0, 0, 0]);
+    expect(getPetAnimation('edgeLeftSleep').loop).toBe(true);
+    expect(getPetAnimation('edgeRightSleep').loop).toBe(true);
+    expect(getPetAnimation('edgeLeftSleep').frameIndexes).toEqual([0]);
+    expect(getPetAnimation('edgeRightSleep').frameIndexes).toEqual([0]);
+  });
+
+  it('adds long-idle docked sleep states without new artwork rows', () => {
+    const topSleep = getPetAnimation('topSleep');
+    const bottomSleep = getPetAnimation('bottomSleep');
+    const dizzy = getPetAnimation('bottomDizzy');
+    const angry = getPetAnimation('bottomAngry');
+
+    expect(topSleep.row).toBe(getPetAnimation('sleepWake').row);
+    expect(bottomSleep.row).toBe(getPetAnimation('sleepWake').row);
+    expect(topSleep.loop).toBe(true);
+    expect(bottomSleep.loop).toBe(true);
+    expect(dizzy.row).toBe(getPetAnimation('fallRecover').row);
+    expect(angry.row).toBe(getPetAnimation('annoyed').row);
+    expect(dizzy.frameIndexes).toEqual([3, 4, 3, 4]);
+    expect(angry.frameIndexes).toEqual([3, 4, 3, 4]);
   });
 
   it('keeps lift hold as a stable single frame', () => {

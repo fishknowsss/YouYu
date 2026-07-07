@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -88,5 +88,42 @@ describe('TrafficStore', () => {
     expect(snapshot.stats.reportStatus).toBe('failed');
     expect(snapshot.stats.reportError).toBe('traffic activation failed: 403 invalid passphrase');
     await expect(store.getPendingRegistration()).resolves.toBeUndefined();
+  });
+
+  it('repairs known damaged identity name JSON instead of dropping registration', async () => {
+    await writeFile(
+      join(dir, 'traffic.json'),
+      `{
+  "version": 1,
+  "deviceSeed": "seed-1",
+  "identity": {
+    "userId": "u_1",
+    "deviceId": "d_1",
+    "name": "损坏姓名,
+    "deviceName": "DESKTOP",
+    "registeredAt": "2026-05-10T08:00:00.000Z",
+    "verificationStatus": "verified"
+  },
+  "totalUpload": 12,
+  "totalDownload": 34,
+  "pendingUpload": 0,
+  "pendingDownload": 0,
+  "daily": {},
+  "reportStatus": "synced"
+}
+`,
+      'utf8'
+    );
+
+    const store = new TrafficStore(dir);
+    const snapshot = await store.getSnapshot();
+
+    expect(snapshot.identity).toMatchObject({
+      userId: 'u_1',
+      deviceId: 'd_1',
+      name: '损坏姓名',
+      verificationStatus: 'verified'
+    });
+    expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8')).identity.name).toBe('损坏姓名');
   });
 });

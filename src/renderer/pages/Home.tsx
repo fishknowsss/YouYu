@@ -1,4 +1,4 @@
-import type { AppSnapshot, MihomoMode } from '../../shared/ipc';
+import type { AppSnapshot, MihomoMode, StrategyKey } from '../../shared/ipc';
 import type { UsageMode } from '../components/AppShell';
 import { BrandMark } from '../components/BrandMark';
 import { PowerButton } from '../components/PowerButton';
@@ -13,6 +13,8 @@ type HomeProps = {
   onStop: () => void;
   onRepair: () => void;
   onModeChange: (mode: MihomoMode) => void;
+  onStrategyChange: (strategy: StrategyKey) => void;
+  onOpenNodes: () => void;
   onUsageModeChange: (mode: UsageMode) => void;
 };
 
@@ -27,6 +29,7 @@ export function Home(props: HomeProps) {
 function EasyHome(props: HomeProps) {
   const running = props.snapshot.status === 'running';
   const starting = props.busy && !running;
+  const stopping = props.busy && running;
   const primaryLabel = props.busy ? '处理中' : running ? '停止使用' : '一键连接';
 
   function handlePrimaryAction() {
@@ -40,10 +43,16 @@ function EasyHome(props: HomeProps) {
 
   return (
     <div className="workspace easy-workspace">
-      <section className={`home-board easy-board ${running ? 'is-running' : ''}`}>
+      <section
+        className={`home-board easy-board ${running ? 'is-running' : ''} ${starting ? 'is-starting' : ''} ${
+          stopping ? 'is-stopping' : ''
+        }`}
+      >
         <div className="launch-panel">
           <button
-            className={`easy-power-button ${running ? 'running' : ''}`}
+            className={`easy-power-button ${running ? 'running' : 'idle'} ${starting ? 'starting' : ''} ${
+              stopping ? 'stopping' : ''
+            }`}
             disabled={props.busy}
             onClick={handlePrimaryAction}
             aria-label={primaryLabel}
@@ -91,6 +100,23 @@ function AdvancedHome(props: HomeProps) {
             </div>
           </div>
           <div className="connection-actions">
+            <NodeHealth snapshot={props.snapshot} />
+            <div className="node-mode-toggle" aria-label="节点方式">
+              <button
+                className={props.snapshot.strategy === 'manual' ? 'active' : ''}
+                disabled={props.busy}
+                onClick={props.onOpenNodes}
+              >
+                手动
+              </button>
+              <button
+                className={props.snapshot.strategy !== 'manual' ? 'active' : ''}
+                disabled={props.busy}
+                onClick={() => props.onStrategyChange('auto')}
+              >
+                自动
+              </button>
+            </div>
             <PowerButton
               status={props.snapshot.status}
               busy={props.busy}
@@ -160,6 +186,46 @@ function AdvancedHome(props: HomeProps) {
   );
 }
 
+function NodeHealth({ snapshot }: { snapshot: AppSnapshot }) {
+  const health = snapshot.nodeHealth;
+  if (snapshot.status !== 'running') {
+    return (
+      <div className="connection-health connection-health-single" aria-label="节点状态 未连接">
+        <div className="node-health-metric node-health-summary is-muted">
+          <strong>未连接</strong>
+        </div>
+      </div>
+    );
+  }
+
+  if (health.delayStatus === 'untested' && health.availability.status === 'untested') {
+    return (
+      <div className="connection-health connection-health-single" aria-label="节点状态 检测中">
+        <div className="node-health-metric node-health-summary is-testing">
+          <strong>检测中</strong>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="connection-health" aria-label="节点状态">
+      <div
+        className={`node-health-metric ${getDelayToneClass(health.delay, health.delayStatus)}`}
+        aria-label={`延迟 ${formatDelay(health)}`}
+      >
+        <strong>{formatDelay(health)}</strong>
+      </div>
+      <div
+        className={`node-health-metric ${getAvailabilityToneClass(health.availability)}`}
+        aria-label={`可用度 ${formatAvailability(health.availability)}`}
+      >
+        <strong>{formatAvailability(health.availability)}</strong>
+      </div>
+    </div>
+  );
+}
+
 function getStatusLabel(status: AppSnapshot['status']): string {
   if (status === 'running') return '运行中';
   if (status === 'failed') return '启动失败';
@@ -181,4 +247,40 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)}GB`;
+}
+
+function formatDelay(health: AppSnapshot['nodeHealth']): string {
+  if (health.delayStatus === 'testing') return '测试中';
+  if (health.delayStatus === 'failed') return '失败';
+  if (typeof health.delay === 'number') return `${health.delay} ms`;
+  return '未测';
+}
+
+function formatAvailability(availability: AppSnapshot['nodeHealth']['availability']): string {
+  if (availability.status === 'testing') return '测试中';
+  if (availability.status === 'failed') return '失败';
+  if (typeof availability.availableCount === 'number') {
+    if (availability.availableCount <= 5) return '不良';
+    if (availability.availableCount <= 8) return '一般';
+    return '优秀';
+  }
+  return '未测';
+}
+
+function getDelayToneClass(delay: number | undefined, status: AppSnapshot['nodeHealth']['delayStatus']): string {
+  if (status === 'testing') return 'is-testing';
+  if (status === 'failed') return 'is-danger';
+  if (typeof delay !== 'number') return 'is-muted';
+  if (delay <= 120) return 'is-success';
+  if (delay <= 260) return 'is-warning';
+  return 'is-danger';
+}
+
+function getAvailabilityToneClass(availability: AppSnapshot['nodeHealth']['availability']): string {
+  if (availability.status === 'testing') return 'is-testing';
+  if (availability.status === 'failed') return 'is-danger';
+  if (availability.tone === 'success') return 'is-success';
+  if (availability.tone === 'warning') return 'is-warning';
+  if (availability.tone === 'danger') return 'is-danger';
+  return 'is-muted';
 }

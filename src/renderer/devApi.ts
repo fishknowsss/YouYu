@@ -9,6 +9,9 @@ import type {
   YouYuApi
 } from '../shared/ipc';
 
+declare const __YOUYU_APP_VERSION__: string;
+declare const __YOUYU_BUILD_CHANNEL__: 'standard' | 'in' | 'no' | string;
+
 const baseNodes: ProxyNode[] = [
   { name: '自动选择', delay: 92 },
   { name: '香港 01', delay: 118 },
@@ -28,15 +31,14 @@ const devConnectivity: Array<{
 }> = [
   { key: 'steam', name: 'Steam', url: 'https://store.steampowered.com', category: 'special', totalMs: 142, ip: '23.203.232.145', region: 'Japan' },
   { key: 'steamNetwork', name: 'Steam 联机', url: 'https://api.steampowered.com', category: 'special', totalMs: 166, ip: '23.203.232.145', region: 'Japan' },
+  { key: 'steamCloud', name: 'Steam 云同步', url: 'https://steamcloud-ugc.storage.googleapis.com', category: 'special', totalMs: 184, ip: '172.217.25.176', region: 'Japan' },
   { key: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com', category: 'ai', totalMs: 286, ip: '126.63.231.113', region: 'Japan' },
   { key: 'claude', name: 'Claude', url: 'https://claude.ai', category: 'ai', totalMs: 312, ip: '126.63.231.113', region: 'Japan' },
   { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai', totalMs: 248 },
   { key: 'flow', name: 'Flow', url: 'https://labs.google/fx/tools/flow', category: 'special', totalMs: 338 },
-  { key: 'runway', name: 'Runway', url: 'https://app.runwayml.com', category: 'ai', totalMs: 428 },
-  { key: 'tencent', name: '腾讯', url: 'https://www.tencent.com', category: 'domestic', totalMs: 126 },
+  { key: 'pixverse', name: 'PixVerse', url: 'https://app.pixverse.ai', category: 'ai', totalMs: 428 },
   { key: 'google', name: 'Google', url: 'https://www.google.com', category: 'global', totalMs: 168 },
-  { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global', totalMs: 198, ip: '216.236.40.177', region: 'Hong Kong' },
-  { key: 'ehentai', name: 'E-Hentai', url: 'https://e-hentai.org', category: 'global', totalMs: 214, ip: '216.236.40.177', region: 'Hong Kong' }
+  { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global', totalMs: 198, ip: '216.236.40.177', region: 'Hong Kong' }
 ];
 
 export function createDevYouYuApi(): YouYuApi {
@@ -46,15 +48,16 @@ export function createDevYouYuApi(): YouYuApi {
     status: 'stopped',
     currentNode: '自动选择',
     nodes: [],
+    nodeHealth: createDevNodeHealth('自动选择'),
     strategies: createStrategies('auto'),
     mode: 'rule',
     strategy: 'auto',
     ruleProfile: 'subscription',
     features: {
       systemProxyEnabled: true,
-      dnsEnhanced: false,
+      dnsEnhanced: true,
       snifferEnabled: true,
-      tunEnabled: true,
+      tunEnabled: false,
       strictRouteEnabled: true,
       allowLan: false,
       subscriptionRefreshIntervalHours: 12
@@ -74,6 +77,12 @@ export function createDevYouYuApi(): YouYuApi {
       reportStatus: 'idle'
     },
     subscriptionUrl: '',
+    update: {
+      currentVersion: __YOUYU_APP_VERSION__,
+      buildChannel: getDevBuildChannel(),
+      updateChannel: getDevUpdateChannel(),
+      status: 'idle'
+    },
     diagnostics: {
       logs: []
     }
@@ -105,6 +114,12 @@ export function createDevYouYuApi(): YouYuApi {
     }
   }
 
+  function requireTrafficIdentity() {
+    if (!snapshot.trafficIdentity) {
+      throw new Error('traffic identity required');
+    }
+  }
+
   return {
     async getSnapshot() {
       return structuredClone(snapshot);
@@ -132,15 +147,20 @@ export function createDevYouYuApi(): YouYuApi {
       publishPet(next);
       return next;
     },
+    async setPetMousePassthrough() {
+      return undefined;
+    },
     async showMainWindow() {
       return undefined;
     },
     async start() {
+      requireTrafficIdentity();
       requireSubscription();
       publishPet('happy');
       return publish({
         status: 'running',
         nodes: withNodes(),
+        nodeHealth: createDevNodeHealth(snapshot.currentNode, 92),
         runtime: {
           activeConnections: 4,
           uploadTotal: 728493,
@@ -153,6 +173,7 @@ export function createDevYouYuApi(): YouYuApi {
       return publish({
         status: 'stopped',
         nodes: [],
+        nodeHealth: createDevNodeHealth(snapshot.currentNode),
         runtime: {
           activeConnections: 0,
           uploadTotal: 0,
@@ -165,6 +186,7 @@ export function createDevYouYuApi(): YouYuApi {
       return publish({
         status: 'stopped',
         nodes: [],
+        nodeHealth: createDevNodeHealth(snapshot.currentNode),
         runtime: {
           activeConnections: 0,
           uploadTotal: 0,
@@ -173,11 +195,27 @@ export function createDevYouYuApi(): YouYuApi {
       });
     },
     async selectNode(name) {
+      requireTrafficIdentity();
       return publish({
         strategy: 'manual',
         currentNode: name,
         nodes: withNodes(name),
+        nodeHealth: createDevNodeHealth(name, 96),
         strategies: createStrategies('manual')
+      });
+    },
+    async selectBestAutoNode() {
+      requireTrafficIdentity();
+      const bestNode = snapshot.nodes
+        .filter((node) => typeof node.delay === 'number')
+        .sort((left, right) => (left.delay ?? Number.MAX_SAFE_INTEGER) - (right.delay ?? Number.MAX_SAFE_INTEGER))[0];
+      const currentNode = bestNode?.name ?? '自动选择';
+      return publish({
+        strategy: 'auto',
+        currentNode,
+        nodes: withNodes(currentNode),
+        nodeHealth: createDevNodeHealth(currentNode, bestNode?.delay ?? 92),
+        strategies: createStrategies('auto')
       });
     },
     async selectStrategy(strategy) {
@@ -185,6 +223,7 @@ export function createDevYouYuApi(): YouYuApi {
         strategy,
         currentNode: strategyLabel(strategy),
         strategies: createStrategies(strategy),
+        nodeHealth: createDevNodeHealth(strategyLabel(strategy), strategy === 'direct' ? undefined : 92),
         nodes: withNodes()
       });
     },
@@ -192,19 +231,29 @@ export function createDevYouYuApi(): YouYuApi {
       return publish({ mode });
     },
     async testNode(name) {
+      requireTrafficIdentity();
       return publish({
         nodes: snapshot.nodes.map((node) =>
           node.name === name ? { ...node, delay: Math.max(68, node.delay ?? 120) } : node
-        )
+        ),
+        nodeHealth:
+          snapshot.currentNode === name
+            ? createDevNodeHealth(name, Math.max(68, snapshot.nodes.find((node) => node.name === name)?.delay ?? 120))
+            : snapshot.nodeHealth
       });
     },
     async testAllNodes() {
+      requireTrafficIdentity();
       return publish({
         nodes: withNodes(snapshot.currentNode).map((node, index) => ({
           ...node,
           delay: 78 + index * 19
-        }))
+        })),
+        nodeHealth: createDevNodeHealth(snapshot.currentNode, 78)
       });
+    },
+    async cancelNodeTests() {
+      return structuredClone(snapshot);
     },
     async testConnectivity(key) {
       return createDevConnectivityResult(key);
@@ -221,11 +270,13 @@ export function createDevYouYuApi(): YouYuApi {
       });
     },
     async updateSubscription() {
+      requireTrafficIdentity();
       requireSubscription();
       publishPet('happy');
       return publish({
         status: 'running',
         nodes: withNodes(),
+        nodeHealth: createDevNodeHealth(snapshot.currentNode, 92),
         runtime: {
           activeConnections: 4,
           uploadTotal: 728493,
@@ -274,7 +325,59 @@ export function createDevYouYuApi(): YouYuApi {
           reportStatus: 'synced'
         }
       });
+    },
+    async checkForUpdates() {
+      return publish({
+        update: {
+          currentVersion: snapshot.update.currentVersion,
+          buildChannel: snapshot.update.buildChannel,
+          updateChannel: snapshot.update.updateChannel,
+          status: 'not-available',
+          checkedAt: new Date().toISOString()
+        }
+      });
+    },
+    async installUpdate() {
+      return structuredClone(snapshot);
     }
+  };
+}
+
+function getDevBuildChannel(): AppSnapshot['update']['buildChannel'] {
+  if (__YOUYU_BUILD_CHANNEL__ === 'in' || __YOUYU_BUILD_CHANNEL__ === 'no') return __YOUYU_BUILD_CHANNEL__;
+  return 'standard';
+}
+
+function getDevUpdateChannel(): string {
+  const channel = getDevBuildChannel();
+  if (channel === 'in') return 'latest-in';
+  if (channel === 'no') return 'latest-no';
+  return 'latest';
+}
+
+function createDevNodeHealth(nodeName: string, delay?: number): AppSnapshot['nodeHealth'] {
+  const checkedAt = new Date().toISOString();
+  const availableCount = Math.min(9, devConnectivity.length);
+  const totalCount = devConnectivity.length;
+  return {
+    nodeName,
+    delayStatus: typeof delay === 'number' ? 'measured' : 'untested',
+    delay,
+    delayCheckedAt: typeof delay === 'number' ? checkedAt : undefined,
+    availability:
+      typeof delay === 'number'
+        ? {
+            status: 'measured',
+            totalCount,
+            availableCount,
+            percent: Math.round((availableCount / totalCount) * 100),
+            tone: 'success',
+            checkedAt
+          }
+        : {
+            status: 'untested',
+            totalCount
+          }
   };
 }
 

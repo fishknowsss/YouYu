@@ -13,9 +13,10 @@ type AppShellProps = {
   usageMode: UsageMode;
   children: ReactNode;
   onPageChange: (page: PageKey) => void;
+  onAdvancedUnlock?: () => void;
 };
 
-export function AppShell({ page, usageMode, children, onPageChange }: AppShellProps) {
+export function AppShell({ page, usageMode, children, onPageChange, onAdvancedUnlock }: AppShellProps) {
   const navItems: Array<{ key: PageKey; label: string }> = [
     { key: 'home', label: '首页' },
     { key: 'nodes', label: '节点' },
@@ -55,6 +56,14 @@ export function AppShell({ page, usageMode, children, onPageChange }: AppShellPr
         </aside>
       )}
       <main className="main-surface">{children}</main>
+      {usageMode === 'easy' && onAdvancedUnlock && (
+        <button
+          type="button"
+          className="advanced-unlock-hotspot"
+          aria-label="进入专业模式"
+          onClick={onAdvancedUnlock}
+        />
+      )}
     </div>
   );
 }

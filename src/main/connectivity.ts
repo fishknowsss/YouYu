@@ -69,6 +69,15 @@ export const connectivityServices: ConnectivityService[] = [
     kind: 'http'
   },
   {
+    key: 'steamCloud',
+    name: 'Steam 云同步',
+    url: 'https://steamcloud-ugc.storage.googleapis.com',
+    probeUrl: 'https://steamcloud-ugc.storage.googleapis.com',
+    host: 'steamcloud-ugc.storage.googleapis.com',
+    category: 'special',
+    kind: 'http'
+  },
+  {
     key: 'chatgpt',
     name: 'ChatGPT',
     url: 'https://chatgpt.com',
@@ -105,21 +114,12 @@ export const connectivityServices: ConnectivityService[] = [
     kind: 'flow'
   },
   {
-    key: 'runway',
-    name: 'Runway',
-    url: 'https://app.runwayml.com',
-    probeUrl: 'https://app.runwayml.com',
-    host: 'app.runwayml.com',
+    key: 'pixverse',
+    name: 'PixVerse',
+    url: 'https://app.pixverse.ai',
+    probeUrl: 'https://app.pixverse.ai',
+    host: 'app.pixverse.ai',
     category: 'ai',
-    kind: 'http'
-  },
-  {
-    key: 'tencent',
-    name: '腾讯',
-    url: 'https://www.tencent.com',
-    probeUrl: 'https://www.tencent.com',
-    host: 'www.tencent.com',
-    category: 'domestic',
     kind: 'http'
   },
   {
@@ -137,15 +137,6 @@ export const connectivityServices: ConnectivityService[] = [
     url: 'https://www.cloudflare.com',
     probeUrl: 'https://www.cloudflare.com/cdn-cgi/trace',
     host: 'www.cloudflare.com',
-    category: 'global',
-    kind: 'trace'
-  },
-  {
-    key: 'ehentai',
-    name: 'E-Hentai',
-    url: 'https://e-hentai.org',
-    probeUrl: 'https://e-hentai.org/cdn-cgi/trace',
-    host: 'e-hentai.org',
     category: 'global',
     kind: 'trace'
   }
@@ -337,6 +328,7 @@ function getServiceStatus(key: ConnectivityServiceKey, probe: CurlProbe): Connec
     return 'blocked';
   }
   if (code === 0) return 'failed';
+  if (key === 'steamCloud' && code === 404) return 'available';
   if ((code >= 200 && code < 400) || code === 401 || code === 403) return 'available';
   if (code === 451) return 'blocked';
   return code >= 500 ? 'failed' : 'blocked';
@@ -345,6 +337,7 @@ function getServiceStatus(key: ConnectivityServiceKey, probe: CurlProbe): Connec
 function getReachability(key: ConnectivityServiceKey, probe: CurlProbe): ConnectivityReachability {
   const code = probe.httpCode ?? 0;
   if (key === 'flow' && probe.finalUrl?.includes('/unsupported-country')) return 'blocked';
+  if (key === 'steamCloud' && code === 404) return 'ok';
   if (code === 403) return 'guarded';
   if ((code >= 200 && code < 400) || code === 401) return 'ok';
   if (code === 451) return 'blocked';

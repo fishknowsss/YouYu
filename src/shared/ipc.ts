@@ -1,7 +1,20 @@
 export type AppStatus = 'stopped' | 'running' | 'failed';
+export type AppBuildChannel = 'standard' | 'in' | 'no';
 export type MihomoMode = 'rule' | 'global' | 'direct';
 export type StrategyKey = 'manual' | 'auto' | 'fallback' | 'load-balance' | 'direct';
 export type RuleProfile = 'smart' | 'global' | 'subscription';
+export type RemoteControlConfig = {
+  version: number;
+  enabled: boolean;
+  subscriptionUrl?: string;
+  ruleProfile?: RuleProfile;
+  preferredNode?: string;
+  preferredStrategy?: StrategyKey;
+  directRules: string[];
+  proxyRules: string[];
+  anomalyThresholdBytes?: number;
+  updatedAt?: string;
+};
 export type PetWindowPosition = {
   x: number;
   y: number;
@@ -20,6 +33,14 @@ export type DesktopPetState =
   | 'edgePeek'
   | 'edgeLeft'
   | 'edgeRight'
+  | 'edgeLeftBlink'
+  | 'edgeRightBlink'
+  | 'edgeLeftSleep'
+  | 'edgeRightSleep'
+  | 'topSleep'
+  | 'bottomSleep'
+  | 'bottomDizzy'
+  | 'bottomAngry'
   | 'fallRecover'
   | 'annoyed'
   | 'comfortSad'
@@ -29,6 +50,27 @@ export type ProxyNode = {
   name: string;
   delay?: number;
   active?: boolean;
+  testState?: 'testing' | 'tested' | 'failed';
+};
+
+export type NodeMetricStatus = 'untested' | 'testing' | 'measured' | 'failed';
+export type NodeAvailabilityTone = 'danger' | 'warning' | 'success';
+
+export type NodeAvailabilitySnapshot = {
+  status: NodeMetricStatus;
+  totalCount: number;
+  availableCount?: number;
+  percent?: number;
+  tone?: NodeAvailabilityTone;
+  checkedAt?: string;
+};
+
+export type CurrentNodeHealth = {
+  nodeName: string;
+  delayStatus: NodeMetricStatus;
+  delay?: number;
+  delayCheckedAt?: string;
+  availability: NodeAvailabilitySnapshot;
 };
 
 export type StrategyGroup = {
@@ -40,10 +82,27 @@ export type StrategyGroup = {
   delay?: number;
 };
 
+export type RuntimeConnectionStats = {
+  id?: string;
+  upload?: number;
+  download?: number;
+  chains?: string[];
+  metadata?: {
+    host?: string;
+    destinationIP?: string;
+    process?: string;
+    processPath?: string;
+    sourceIP?: string;
+    sourcePort?: string;
+    destinationPort?: string;
+  };
+};
+
 export type RuntimeStats = {
   activeConnections: number;
   uploadTotal: number;
   downloadTotal: number;
+  connections?: RuntimeConnectionStats[];
 };
 
 export type TrafficIdentity = {
@@ -72,15 +131,14 @@ export type PersistentTrafficStats = {
 export type ConnectivityServiceKey =
   | 'steam'
   | 'steamNetwork'
+  | 'steamCloud'
   | 'chatgpt'
   | 'claude'
   | 'gemini'
   | 'flow'
-  | 'runway'
-  | 'tencent'
+  | 'pixverse'
   | 'google'
-  | 'cloudflare'
-  | 'ehentai';
+  | 'cloudflare';
 
 export type ConnectivityStatus = 'untested' | 'available' | 'blocked' | 'timeout' | 'failed';
 export type ConnectivityReachability = 'ok' | 'guarded' | 'blocked' | 'unknown';
@@ -119,6 +177,27 @@ export type AppDiagnostics = {
   logs: string[];
 };
 
+export type AppUpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'not-available'
+  | 'failed';
+
+export type AppUpdateSnapshot = {
+  currentVersion: string;
+  buildChannel: AppBuildChannel;
+  updateChannel: string;
+  status: AppUpdateStatus;
+  availableVersion?: string;
+  downloadedVersion?: string;
+  percent?: number;
+  checkedAt?: string;
+  message?: string;
+};
+
 export type FeatureSettings = {
   systemProxyEnabled: boolean;
   dnsEnhanced: boolean;
@@ -131,6 +210,7 @@ export type FeatureSettings = {
 
 export type AppSettingsInput = Partial<FeatureSettings> & {
   subscriptionUrl?: string;
+  remoteSubscriptionUrl?: string | null;
   mode?: MihomoMode;
   strategy?: StrategyKey;
   ruleProfile?: RuleProfile;
@@ -147,6 +227,7 @@ export type AppSnapshot = {
   status: AppStatus;
   currentNode: string;
   nodes: ProxyNode[];
+  nodeHealth: CurrentNodeHealth;
   strategies: StrategyGroup[];
   mode: MihomoMode;
   strategy: StrategyKey;
@@ -156,6 +237,8 @@ export type AppSnapshot = {
   traffic: PersistentTrafficStats;
   trafficIdentity?: TrafficIdentity;
   subscriptionUrl: string;
+  remoteSubscriptionUrl?: string;
+  update: AppUpdateSnapshot;
   diagnostics: AppDiagnostics;
 };
 
@@ -166,21 +249,26 @@ export type YouYuApi = {
   wavePet: () => Promise<void>;
   startPetDrag: () => Promise<void>;
   stopPetDrag: (moved?: boolean) => Promise<DesktopPetState | undefined>;
+  setPetMousePassthrough: (passthrough: boolean) => Promise<void>;
   showMainWindow: () => Promise<void>;
   start: () => Promise<AppSnapshot>;
   stop: () => Promise<AppSnapshot>;
   repair: () => Promise<AppSnapshot>;
   selectNode: (name: string) => Promise<AppSnapshot>;
+  selectBestAutoNode: () => Promise<AppSnapshot>;
   selectStrategy: (strategy: StrategyKey) => Promise<AppSnapshot>;
   setMode: (mode: MihomoMode) => Promise<AppSnapshot>;
   testNode: (name: string) => Promise<AppSnapshot>;
   testAllNodes: () => Promise<AppSnapshot>;
+  cancelNodeTests: () => Promise<AppSnapshot>;
   testConnectivity: (key: ConnectivityServiceKey) => Promise<ConnectivityResult>;
   testAllConnectivity: () => Promise<ConnectivityResult[]>;
   closeConnections: () => Promise<AppSnapshot>;
   updateSubscription: () => Promise<AppSnapshot>;
   saveSettings: (settings: AppSettingsInput) => Promise<AppSnapshot>;
   registerTrafficIdentity: (input: TrafficRegistrationInput) => Promise<AppSnapshot>;
+  checkForUpdates: () => Promise<AppSnapshot>;
+  installUpdate: () => Promise<AppSnapshot>;
 };
 
 export const ipcChannels = {
@@ -190,19 +278,24 @@ export const ipcChannels = {
   wavePet: 'youyu:wave-pet',
   startPetDrag: 'youyu:start-pet-drag',
   stopPetDrag: 'youyu:stop-pet-drag',
+  setPetMousePassthrough: 'youyu:set-pet-mouse-passthrough',
   showMainWindow: 'youyu:show-main-window',
   start: 'youyu:start',
   stop: 'youyu:stop',
   repair: 'youyu:repair',
   selectNode: 'youyu:select-node',
+  selectBestAutoNode: 'youyu:select-best-auto-node',
   selectStrategy: 'youyu:select-strategy',
   setMode: 'youyu:set-mode',
   testNode: 'youyu:test-node',
   testAllNodes: 'youyu:test-all-nodes',
+  cancelNodeTests: 'youyu:cancel-node-tests',
   testConnectivity: 'youyu:test-connectivity',
   testAllConnectivity: 'youyu:test-all-connectivity',
   closeConnections: 'youyu:close-connections',
   updateSubscription: 'youyu:update-subscription',
   saveSettings: 'youyu:save-settings',
-  registerTrafficIdentity: 'youyu:register-traffic-identity'
+  registerTrafficIdentity: 'youyu:register-traffic-identity',
+  checkForUpdates: 'youyu:check-for-updates',
+  installUpdate: 'youyu:install-update'
 } as const;

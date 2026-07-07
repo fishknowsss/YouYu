@@ -12,7 +12,7 @@
 | 内部版 | `npm run dist:win:in` | `release/YouYu-<version>-x64-in.exe` | 本机自用或内部分发 | 是 | 是 |
 | 无桌宠版 | `npm run dist:win:no` | `release/YouYu-<version>-x64-no.exe` | 本机自用或内部分发 | 是 | 否 |
 
-公开 GitHub release、GitHub Actions artifact 和公开下载渠道只能上传标准版。内部版和无桌宠版可以保留在本机 `release/`，但不能默认作为公开发布产物。
+公开 GitHub release、GitHub Actions artifact 和公开下载渠道只能上传不含内置订阅的产物。标准版使用 `latest.yml` 更新；内部通道和无桌宠通道只能上传 `--public-update` 生成的更新包，分别使用 `latest-in.yml` 和 `latest-no.yml`。本地自用且内置订阅的内部版、无桌宠版可以保留在本机 `release/`，但不能上传 GitHub release。
 
 纯文档、项目规则或归档目录维护不需要递增版本号，也不需要重新打安装包。
 
@@ -31,7 +31,8 @@
   - 打包脚本临时生成。
   - 必须被 `.gitignore` 命中。
   - `dist:win` 从空的 `resources/default-subscription.txt` 生成。
-  - `dist:win:in` 和 `dist:win:no` 从 `resources/default-subscription.in.txt` 生成。
+  - `dist:win:in` 和 `dist:win:no` 从 `resources/default-subscription.in.txt` 生成，仅用于本地自用或内部分发。
+  - `dist:win:release` 生成公开更新用三通道产物，三种通道都从空的 `resources/default-subscription.txt` 生成，禁止携带真实订阅。
 
 如果真实订阅曾经进入 GitHub commit、Actions artifact 或 release asset，要当作已经泄露处理，必须更换订阅 token。删除文件或重写历史只能止血，不能让旧 token 重新安全。
 
@@ -98,7 +99,7 @@ release/YouYu-<version>-x64.exe
 
 - `validate:release` 通过。
 - `release/win-unpacked/resources/default-subscription.txt` 为空。
-- GitHub Actions 上传路径只匹配 `release/YouYu-${version}-x64.exe`。
+- GitHub Actions 公开上传必须使用 `npm run dist:win:release` 生成的空订阅更新包。
 
 内部版：
 
@@ -157,20 +158,30 @@ YouYu-<version>-x64-no.exe
 
 ## GitHub 发布规则
 
-GitHub release 和 GitHub Actions 只能使用标准版：
+GitHub release 和 GitHub Actions 使用 `npm run dist:win:release`。用于自动更新的公开 Release 需要同时上传：
 
 ```text
 release/YouYu-<version>-x64.exe
+release/YouYu-<version>-x64.exe.blockmap
+release/latest.yml
+release/YouYu-<version>-x64-in.exe
+release/YouYu-<version>-x64-in.exe.blockmap
+release/latest-in.yml
+release/YouYu-<version>-x64-no.exe
+release/YouYu-<version>-x64-no.exe.blockmap
+release/latest-no.yml
 ```
 
-禁止上传：
+其中 `latest.yml` 只服务标准版，`latest-in.yml` 只服务内部通道，`latest-no.yml` 只服务无桌宠通道。三个公开更新包都必须通过空内置订阅校验，不允许包含 `resources/default-subscription.in.txt` 的内容。
+
+禁止上传本地内置订阅产物：
 
 ```text
-release/YouYu-<version>-x64-in.exe
-release/YouYu-<version>-x64-no.exe
+npm run dist:win:in 生成的 release/YouYu-<version>-x64-in.exe
+npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 ```
 
-本机 `release/` 里可以同时保留三个安装包；上传或发布时要明确只选择不带 `-in`、不带 `-no` 的标准版。
+本机 `release/` 里可以保留三通道安装包；上传或发布时要确认 `-in`、`-no` 来自 `dist:win:release`，而不是本地内置订阅包。
 
 ## 快速检查
 
@@ -185,4 +196,4 @@ release/YouYu-<version>-x64-no.exe
 - `release/YouYu-<version>-x64.exe` 存在。
 - `release/YouYu-<version>-x64-in.exe` 存在。
 - `release/YouYu-<version>-x64-no.exe` 存在。
-- 上传 GitHub 时只上传 `release/YouYu-<version>-x64.exe`。
+- 上传 GitHub 时使用 `npm run dist:win:release` 生成的三通道公开更新产物，并确认 `latest.yml`、`latest-in.yml`、`latest-no.yml` 都存在。

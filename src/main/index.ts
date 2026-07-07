@@ -1,19 +1,28 @@
 import { app, BrowserWindow, Menu, Tray, ipcMain, screen, type Rectangle } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { execFile, execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { createLifecycleController, type MihomoRuntime } from './lifecycle';
-import { testAllConnectivity, testConnectivity } from './connectivity';
+import { connectivityServices, testAllConnectivity, testConnectivity } from './connectivity';
 import { createMihomoApiClient } from './mihomo/api';
 import { strategyLabels, strategyTargets } from './mihomo/config';
 import { createMihomoRuntime } from './mihomo/process';
 import { createSystemProxyAdapter } from './platform/systemProxy';
 import { SettingsStore } from './storage/settings';
+import {
+  availabilitySnapshotFromRecord,
+  createAvailabilityRecord,
+  createEmptyCurrentNodeHealth,
+  NodeHealthStore
+} from './storage/nodeHealth';
+import { resolveDefaultSubscriptionUrl } from './defaultSubscription';
 import { TrafficReporter } from './traffic/reporter';
 import { TrafficStore } from './traffic/store';
 import { TrafficTracker } from './traffic/tracker';
+import { RemoteConfigClient } from './remoteConfig';
 import {
   closeMihomoConnections,
   saveSubscriptionSettings,
@@ -23,9 +32,19 @@ import {
   testMihomoNode,
   updateSubscriptionNodes
 } from './appActions';
-import { ipcChannels, type AppSnapshot, type DesktopPetState, type StrategyGroup } from '../shared/ipc';
+import {
+  ipcChannels,
+  type AppUpdateSnapshot,
+  type AppSnapshot,
+  type CurrentNodeHealth,
+  type DesktopPetState,
+  type RemoteControlConfig,
+  type StrategyGroup,
+  type StrategyKey
+} from '../shared/ipc';
 
 declare const __YOUYU_DISABLE_PET__: boolean;
+declare const __YOUYU_BUILD_CHANNEL__: string;
 
 const appId = 'studio.youyu.proxy';
 const isDev = !app.isPackaged;
@@ -42,7 +61,41 @@ let isQuitting = false;
 let trayBusy = false;
 let petAnimationTimer: ReturnType<typeof setTimeout> | undefined;
 let petDragTimer: ReturnType<typeof setInterval> | undefined;
+let petDockTimer: ReturnType<typeof setTimeout> | undefined;
+let petSequenceTimer: ReturnType<typeof setTimeout> | undefined;
+let petMoveTimer: ReturnType<typeof setInterval> | undefined;
+let petMousePassthrough = false;
+let petDockBehavior:
+  | {
+      kind: 'side';
+      side: 'edgeLeft' | 'edgeRight';
+      startedAt: number;
+    }
+  | {
+      kind: 'top';
+      startedAt: number;
+    }
+  | undefined;
 let subscriptionRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+let updateCheckTimer: ReturnType<typeof setTimeout> | undefined;
+let updateCheckRunning = false;
+let autoUpdatesConfigured = false;
+let updateSnapshot: AppUpdateSnapshot = {
+  currentVersion: '0.0.0',
+  buildChannel: 'standard',
+  updateChannel: 'latest',
+  status: 'idle'
+};
+let nodeHealthTimer: ReturnType<typeof setTimeout> | undefined;
+let nodeHealthCheckRunning = false;
+let currentNodeHealthFailures = 0;
+let currentNodeHealthFailureName = '';
+let currentNodeHealth = createEmptyCurrentNodeHealth('', connectivityServices.length);
+let currentNodeAvailabilityRunning = false;
+let currentNodeAvailabilityNode = '';
+let runtimeRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+let runtimeRecoveryRunning = false;
+let runtimeRecoveryFailures = 0;
 let petDragStart:
   | {
       cursorX: number;
@@ -58,6 +111,7 @@ let runtimePorts = {
   controllerPort: 9090,
   dnsPort: 1053
 };
+let activeNodeTestController: AbortController | undefined;
 let lastError: string | undefined;
 const appLogs: string[] = [];
 const petFeatureEnabled = !__YOUYU_DISABLE_PET__;
@@ -66,6 +120,20 @@ const petWindowSize = {
   height: 212
 };
 const petDragFrameMs = 16;
+const petSideBlinkDelayMs = 7000;
+const petSideSleepDelayMs = 28000;
+const petSideDropDelayMs = 65000;
+const petTopDropDelayMs = 52000;
+const nodeHealthInitialDelayMs = 15000;
+const currentNodeDelayRefreshMs = 15 * 60 * 1000;
+const nodeHealthIntervalMs = currentNodeDelayRefreshMs;
+const nodeHealthRepairDelayMs = 3000;
+const nodeHealthRetryDelayMs = 8000;
+const nodeHealthFailureThreshold = 2;
+const updateInitialDelayMs = 45 * 1000;
+const updateDailyIntervalMs = 24 * 60 * 60 * 1000;
+const runtimeRecoveryInitialDelayMs = 1500;
+const runtimeRecoveryMaxDelayMs = 60000;
 
 app.setName('YouYu');
 if (process.platform === 'win32') {
@@ -85,10 +153,25 @@ const trafficApiUrlPath = isDev
   ? join(process.cwd(), 'resources/traffic-api-url.txt')
   : join(process.resourcesPath, 'traffic-api-url.txt');
 const appVersion = readPackageVersion();
+const appBuildChannel = normalizeBuildChannel(__YOUYU_BUILD_CHANNEL__);
+const appUpdateChannel = getUpdateChannelName(appBuildChannel);
+updateSnapshot = {
+  currentVersion: appVersion,
+  buildChannel: appBuildChannel,
+  updateChannel: appUpdateChannel,
+  status: 'idle'
+};
 const settingsStore = new SettingsStore(app.getPath('userData'), {
   defaultSubscriptionUrl: readDefaultSubscriptionUrl(defaultSubscriptionPath)
 });
 const trafficStore = new TrafficStore(app.getPath('userData'));
+const nodeHealthStore = new NodeHealthStore(app.getPath('userData'));
+const remoteConfigClient = new RemoteConfigClient({
+  baseDir: app.getPath('userData'),
+  endpoint: readOptionalText(trafficApiUrlPath),
+  appVersion,
+  store: trafficStore
+});
 const trafficReporter = new TrafficReporter({
   store: trafficStore,
   endpoint: readOptionalText(trafficApiUrlPath),
@@ -101,7 +184,9 @@ const trafficTracker = new TrafficTracker({
   isRunning: () => lifecycle.getStatus() === 'running',
   readRuntimeStats: async () => {
     const settings = await settingsStore.read();
-    return createRuntimeMihomoApi({ secret: settings.controllerSecret }).getRuntimeStats();
+    return createRuntimeMihomoApi({ secret: settings.controllerSecret }).getRuntimeStats({
+      includeConnections: true
+    });
   },
   onError: (error) => appendLog(`流量统计失败: ${formatError(error)}`)
 });
@@ -120,11 +205,13 @@ const mihomoRuntime: MihomoRuntime =
         binaryPath: mihomoBinaryPath,
         userDataDir,
         readSettings: () => settingsStore.read(),
+        readRemoteConfig: () => remoteConfigClient.getActiveConfig(),
         getPorts: allocateRuntimePorts,
         logLine: appendLog,
         onUnexpectedExit: (reason) => {
           recordError('mihomo 异常退出', reason);
           lifecycle.markRuntimeExited?.(reason);
+          scheduleRuntimeRecovery(runtimeRecoveryInitialDelayMs);
           refreshTrayMenu();
           void broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
         }
@@ -142,7 +229,7 @@ const mihomoRuntime: MihomoRuntime =
       };
 
 function readDefaultSubscriptionUrl(path: string): string {
-  return readOptionalText(path);
+  return resolveDefaultSubscriptionUrl(readOptionalText(path));
 }
 
 function readOptionalText(path: string): string {
@@ -179,8 +266,50 @@ function recordError(context: string, error: unknown) {
   appendLog(lastError);
 }
 
+function normalizeBuildChannel(channel: string | undefined): AppUpdateSnapshot['buildChannel'] {
+  if (channel === 'in' || channel === 'no') return channel;
+  return 'standard';
+}
+
+function getUpdateChannelName(channel: AppUpdateSnapshot['buildChannel']): string {
+  if (channel === 'in') return 'latest-in';
+  if (channel === 'no') return 'latest-no';
+  return 'latest';
+}
+
 function getRuntimeTrafficProxyUrl(): string | undefined {
   return lifecycle?.getStatus() === 'running' ? `http://127.0.0.1:${runtimePorts.mixedPort}` : undefined;
+}
+
+async function syncRemoteConfig(options: { proxyUrl?: string; restartIfRunning?: boolean } = {}): Promise<void> {
+  try {
+    const result = await remoteConfigClient.sync({ proxyUrl: options.proxyUrl });
+    const subscriptionChanged = await applyRemoteSubscription(result.config);
+    if (!result.changed && !subscriptionChanged) return;
+
+    appendLog(`remote config updated: v${result.config?.version ?? 0}`);
+    if (options.restartIfRunning && lifecycle.getStatus() === 'running') {
+      await lifecycle.restart();
+    }
+  } catch (error) {
+    appendLog(`remote config sync failed: ${formatError(error)}`);
+  }
+}
+
+async function applyRemoteSubscription(config?: RemoteControlConfig): Promise<boolean> {
+  const nextRemoteSubscriptionUrl = config?.enabled ? config.subscriptionUrl?.trim() ?? '' : '';
+  const settings = await settingsStore.read();
+  const currentRemoteSubscriptionUrl = settings.remoteSubscriptionUrl ?? '';
+  if (currentRemoteSubscriptionUrl === nextRemoteSubscriptionUrl) {
+    return false;
+  }
+
+  await settingsStore.update({
+    remoteSubscriptionUrl: nextRemoteSubscriptionUrl || null
+  });
+  appendLog(nextRemoteSubscriptionUrl ? '远程订阅已更新' : '远程订阅已清除');
+  scheduleSubscriptionRefresh();
+  return true;
 }
 
 function shouldRetryRegistrationViaProxy(error: unknown): boolean {
@@ -209,6 +338,172 @@ function isTrafficActivationAuthFailure(error: unknown): boolean {
 
 function clearLastError() {
   lastError = undefined;
+}
+
+function setupAutoUpdates() {
+  if (autoUpdatesConfigured) return;
+  autoUpdatesConfigured = true;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.channel = appUpdateChannel;
+  autoUpdater.allowDowngrade = false;
+
+  autoUpdater.on('checking-for-update', () => {
+    setUpdateSnapshot({
+      status: 'checking',
+      checkedAt: new Date().toISOString()
+    });
+  });
+  autoUpdater.on('update-available', (info) => {
+    setUpdateSnapshot({
+      status: 'available',
+      availableVersion: getUpdateInfoVersion(info),
+      checkedAt: new Date().toISOString()
+    });
+  });
+  autoUpdater.on('download-progress', (progress) => {
+    setUpdateSnapshot({
+      status: 'downloading',
+      percent: normalizeUpdatePercent(progress.percent)
+    });
+  });
+  autoUpdater.on('update-downloaded', (info) => {
+    setUpdateSnapshot({
+      status: 'downloaded',
+      availableVersion: getUpdateInfoVersion(info),
+      downloadedVersion: getUpdateInfoVersion(info),
+      percent: 100,
+      checkedAt: new Date().toISOString()
+    });
+  });
+  autoUpdater.on('update-not-available', (info) => {
+    setUpdateSnapshot({
+      status: 'not-available',
+      availableVersion: getUpdateInfoVersion(info),
+      checkedAt: new Date().toISOString()
+    });
+  });
+  autoUpdater.on('error', (error) => {
+    setUpdateFailure(error);
+  });
+
+  scheduleUpdateCheck(updateInitialDelayMs);
+}
+
+function setUpdateSnapshot(next: Partial<AppUpdateSnapshot>) {
+  const merged: AppUpdateSnapshot = {
+    ...updateSnapshot,
+    ...next,
+    currentVersion: appVersion,
+    buildChannel: appBuildChannel,
+    updateChannel: appUpdateChannel
+  };
+
+  if (next.status && !Object.prototype.hasOwnProperty.call(next, 'message')) {
+    delete merged.message;
+  }
+  if (merged.status !== 'downloading' && merged.status !== 'downloaded') {
+    delete merged.percent;
+  }
+  if (!['available', 'downloading', 'downloaded', 'not-available'].includes(merged.status)) {
+    delete merged.availableVersion;
+  }
+  if (merged.status !== 'downloaded') {
+    delete merged.downloadedVersion;
+  }
+
+  updateSnapshot = merged;
+  void broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
+}
+
+function scheduleUpdateCheck(delayMs = updateDailyIntervalMs) {
+  if (updateCheckTimer) {
+    clearTimeout(updateCheckTimer);
+    updateCheckTimer = undefined;
+  }
+  if (!app.isPackaged || updateSnapshot.status === 'downloaded') return;
+
+  updateCheckTimer = setTimeout(() => {
+    updateCheckTimer = undefined;
+    void checkForUpdatesNow(false).catch((error) => {
+      appendLog(`检查更新失败: ${formatError(error)}`);
+    });
+  }, delayMs);
+}
+
+async function checkForUpdatesNow(userInitiated = true): Promise<AppSnapshot> {
+  if (!app.isPackaged) {
+    setUpdateSnapshot({
+      status: 'not-available',
+      checkedAt: new Date().toISOString(),
+      message: userInitiated ? '开发环境不检查更新' : undefined
+    });
+    return createSnapshot();
+  }
+
+  if (updateSnapshot.status === 'downloaded' || updateCheckRunning) {
+    return createSnapshot();
+  }
+
+  updateCheckRunning = true;
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    setUpdateFailure(error);
+  } finally {
+    updateCheckRunning = false;
+    scheduleUpdateCheck(updateDailyIntervalMs);
+  }
+
+  return createSnapshot();
+}
+
+function setUpdateFailure(error: unknown) {
+  const message = formatError(error);
+  if (updateSnapshot.status !== 'failed' || updateSnapshot.message !== message) {
+    appendLog(`检查更新失败: ${message}`);
+  }
+  setUpdateSnapshot({
+    status: 'failed',
+    checkedAt: new Date().toISOString(),
+    message
+  });
+}
+
+async function installDownloadedUpdate(): Promise<AppSnapshot> {
+  if (updateSnapshot.status !== 'downloaded') {
+    throw new Error('update not downloaded');
+  }
+
+  const snapshot = await createSnapshot();
+  await prepareForUpdateInstall();
+  cleanupFinished = true;
+  isQuitting = true;
+  autoUpdater.quitAndInstall(false, true);
+  return snapshot;
+}
+
+async function prepareForUpdateInstall(): Promise<void> {
+  await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
+  await trafficReporter.reportPending().catch((error) => appendLog(`流量上报失败: ${formatError(error)}`));
+  trafficTracker.stop();
+  trafficReporter.stop();
+  if (lifecycle.getStatus() !== 'stopped') {
+    await lifecycle.stop().catch((error) => appendLog(`更新前停止代理失败: ${formatError(error)}`));
+  }
+}
+
+function getUpdateInfoVersion(info: unknown): string | undefined {
+  if (!info || typeof info !== 'object') return undefined;
+  const version = (info as { version?: unknown }).version;
+  return typeof version === 'string' && version.trim() ? version.trim() : undefined;
+}
+
+function normalizeUpdatePercent(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.min(100, Math.round(value)));
 }
 
 async function listenOnPort(port: number) {
@@ -266,7 +561,20 @@ lifecycle = createLifecycleController({
     getProxyServer: () => `127.0.0.1:${runtimePorts.mixedPort}`
   }),
   mihomo: mihomoRuntime,
-  onStatusChange: () => {
+  onStatusChange: (status) => {
+    if (status === 'running') {
+      clearRuntimeRecoveryTimer();
+      runtimeRecoveryFailures = 0;
+      startNodeHealthMonitor();
+    } else {
+      stopNodeHealthMonitor();
+    }
+    if (status === 'failed') {
+      scheduleRuntimeRecovery(runtimeRecoveryInitialDelayMs);
+    }
+    if (status === 'stopped') {
+      clearRuntimeRecoveryTimer();
+    }
     refreshTrayMenu();
     syncPetStateToRuntime();
     scheduleSubscriptionRefresh();
@@ -326,6 +634,337 @@ async function refreshSubscriptionInBackground() {
   }
 }
 
+function startNodeHealthMonitor() {
+  scheduleNodeHealthCheck(nodeHealthInitialDelayMs);
+}
+
+function stopNodeHealthMonitor() {
+  if (nodeHealthTimer) {
+    clearTimeout(nodeHealthTimer);
+    nodeHealthTimer = undefined;
+  }
+  nodeHealthCheckRunning = false;
+}
+
+function syncCurrentNodeHealthName(nodeName: string) {
+  if (currentNodeHealth.nodeName === nodeName) return;
+
+  currentNodeHealth = createEmptyCurrentNodeHealth(nodeName, connectivityServices.length);
+}
+
+function isProxyNodeName(nodeName: string): boolean {
+  return Boolean(nodeName) && nodeName !== 'DIRECT';
+}
+
+function shouldRefreshCurrentNodeDelay(nodeName: string): boolean {
+  syncCurrentNodeHealthName(nodeName);
+  if (currentNodeHealth.delayStatus === 'testing') return false;
+
+  const checkedAt = currentNodeHealth.delayCheckedAt ? Date.parse(currentNodeHealth.delayCheckedAt) : 0;
+  return !checkedAt || Date.now() - checkedAt >= currentNodeDelayRefreshMs;
+}
+
+function updateCurrentNodeDelay(
+  nodeName: string,
+  next: Pick<CurrentNodeHealth, 'delayStatus' | 'delay' | 'delayCheckedAt'>
+) {
+  syncCurrentNodeHealthName(nodeName);
+  currentNodeHealth = {
+    ...currentNodeHealth,
+    ...next
+  };
+}
+
+function updateCurrentNodeAvailabilityStatus(
+  nodeName: string,
+  status: CurrentNodeHealth['availability']['status']
+) {
+  syncCurrentNodeHealthName(nodeName);
+  currentNodeHealth = {
+    ...currentNodeHealth,
+    availability: {
+      status,
+      totalCount: connectivityServices.length
+    }
+  };
+}
+
+async function getCurrentNodeHealthSnapshot(nodeName: string, running: boolean): Promise<CurrentNodeHealth> {
+  syncCurrentNodeHealthName(nodeName);
+
+  if (!running || !isProxyNodeName(nodeName)) {
+    currentNodeHealth = createEmptyCurrentNodeHealth(nodeName, connectivityServices.length);
+    return currentNodeHealth;
+  }
+
+  const record = await nodeHealthStore.getTodayAvailability(nodeName).catch((error) => {
+    appendLog(`读取节点可用度失败: ${formatError(error)}`);
+    return undefined;
+  });
+  if (record) {
+    currentNodeHealth = {
+      ...currentNodeHealth,
+      availability: availabilitySnapshotFromRecord(record)
+    };
+    return currentNodeHealth;
+  }
+
+  if (
+    currentNodeHealth.availability.status === 'measured' &&
+    !isLocalToday(currentNodeHealth.availability.checkedAt)
+  ) {
+    currentNodeHealth = {
+      ...currentNodeHealth,
+      availability: {
+        status: 'untested',
+        totalCount: connectivityServices.length
+      }
+    };
+  }
+
+  return currentNodeHealth;
+}
+
+async function maybeStartCurrentNodeAvailabilityCheck(nodeName: string) {
+  if (!isProxyNodeName(nodeName) || lifecycle.getStatus() !== 'running') return;
+  if (currentNodeAvailabilityRunning) return;
+
+  const cached = await nodeHealthStore.getTodayAvailability(nodeName).catch((error) => {
+    appendLog(`读取节点可用度失败: ${formatError(error)}`);
+    return undefined;
+  });
+  if (cached) {
+    syncCurrentNodeHealthName(nodeName);
+    currentNodeHealth = {
+      ...currentNodeHealth,
+      availability: availabilitySnapshotFromRecord(cached)
+    };
+    return;
+  }
+
+  currentNodeAvailabilityRunning = true;
+  currentNodeAvailabilityNode = nodeName;
+  updateCurrentNodeAvailabilityStatus(nodeName, 'testing');
+  void broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
+
+  try {
+    const results = await testAllConnectivity({
+      getMixedPort: () => runtimePorts.mixedPort,
+      getControllerPort: () => runtimePorts.controllerPort,
+      getControllerSecret: async () => (await settingsStore.read()).controllerSecret,
+      isRunning: () => lifecycle.getStatus() === 'running'
+    });
+    if (!(await isStillCurrentNode(nodeName))) {
+      return;
+    }
+
+    const record = createAvailabilityRecord(nodeName, results);
+    await nodeHealthStore.saveAvailability(record);
+
+    if (currentNodeHealth.nodeName === nodeName) {
+      currentNodeHealth = {
+        ...currentNodeHealth,
+        availability: availabilitySnapshotFromRecord(record)
+      };
+      void broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
+    }
+  } catch (error) {
+    appendLog(`节点可用度测试失败: ${formatError(error)}`);
+    if (currentNodeHealth.nodeName === nodeName) {
+      updateCurrentNodeAvailabilityStatus(nodeName, 'failed');
+      void broadcastSnapshot().catch((broadcastError) => console.error('broadcast snapshot failed', broadcastError));
+    }
+  } finally {
+    if (currentNodeAvailabilityNode === nodeName) {
+      currentNodeAvailabilityNode = '';
+    }
+    currentNodeAvailabilityRunning = false;
+  }
+}
+
+async function isStillCurrentNode(nodeName: string): Promise<boolean> {
+  if (lifecycle.getStatus() !== 'running') return false;
+  try {
+    const settings = await settingsStore.read();
+    const currentNode = await createRuntimeMihomoApi({ secret: settings.controllerSecret }).getCurrentNode();
+    return currentNode === nodeName;
+  } catch {
+    return false;
+  }
+}
+
+function isLocalToday(isoDate?: string): boolean {
+  if (!isoDate) return false;
+  const checkedAt = new Date(isoDate);
+  if (!Number.isFinite(checkedAt.getTime())) return false;
+  const now = new Date();
+  return (
+    checkedAt.getFullYear() === now.getFullYear() &&
+    checkedAt.getMonth() === now.getMonth() &&
+    checkedAt.getDate() === now.getDate()
+  );
+}
+
+function scheduleNodeHealthCheck(delayMs = nodeHealthIntervalMs) {
+  if (nodeHealthTimer) {
+    clearTimeout(nodeHealthTimer);
+    nodeHealthTimer = undefined;
+  }
+  if (lifecycle.getStatus() !== 'running') return;
+
+  nodeHealthTimer = setTimeout(() => {
+    nodeHealthTimer = undefined;
+    void runNodeHealthCheck();
+  }, delayMs);
+}
+
+function clearRuntimeRecoveryTimer() {
+  if (runtimeRecoveryTimer) {
+    clearTimeout(runtimeRecoveryTimer);
+    runtimeRecoveryTimer = undefined;
+  }
+}
+
+function getRuntimeRecoveryDelay(): number {
+  return Math.min(runtimeRecoveryMaxDelayMs, runtimeRecoveryInitialDelayMs * 2 ** runtimeRecoveryFailures);
+}
+
+function scheduleRuntimeRecovery(delayMs = getRuntimeRecoveryDelay()) {
+  if (isQuitting || cleanupStarted || cleanupFinished) return;
+  if (lifecycle.getStatus() === 'stopped') return;
+
+  clearRuntimeRecoveryTimer();
+  runtimeRecoveryTimer = setTimeout(() => {
+    runtimeRecoveryTimer = undefined;
+    void runRuntimeRecovery();
+  }, delayMs);
+}
+
+async function runRuntimeRecovery() {
+  if (runtimeRecoveryRunning || isQuitting || cleanupStarted || cleanupFinished) return;
+  if (lifecycle.getStatus() === 'stopped') return;
+
+  runtimeRecoveryRunning = true;
+  try {
+    appendLog('检测到代理异常，正在自动修复');
+    await lifecycle.repair().catch((error) => appendLog(`自动修复准备失败: ${formatError(error)}`));
+    const snapshot = await startProxy();
+    runtimeRecoveryFailures = 0;
+    sendSnapshotToWindows(snapshot);
+  } catch (error) {
+    runtimeRecoveryFailures += 1;
+    recordError('自动恢复失败', error);
+    await broadcastSnapshot().catch((broadcastError) => console.error('broadcast snapshot failed', broadcastError));
+    scheduleRuntimeRecovery();
+  } finally {
+    runtimeRecoveryRunning = false;
+    refreshTrayMenu();
+  }
+}
+
+async function runNodeHealthCheck() {
+  const status = lifecycle.getStatus();
+  let nextDelayMs = nodeHealthIntervalMs;
+  if (status === 'failed') {
+    scheduleRuntimeRecovery(nodeHealthRepairDelayMs);
+    return;
+  }
+  if (nodeHealthCheckRunning || status !== 'running') {
+    scheduleNodeHealthCheck();
+    return;
+  }
+
+  nodeHealthCheckRunning = true;
+  try {
+    nextDelayMs = await ensureCurrentNodeUsable();
+  } catch (error) {
+    appendLog(`节点检查失败: ${formatError(error)}`);
+    scheduleRuntimeRecovery(nodeHealthRepairDelayMs);
+  } finally {
+    nodeHealthCheckRunning = false;
+    scheduleNodeHealthCheck(nextDelayMs);
+  }
+}
+
+async function ensureCurrentNodeUsable(): Promise<number> {
+  const settings = await settingsStore.read();
+  if (settings.mode === 'direct' || settings.strategy === 'direct') return nodeHealthIntervalMs;
+
+  const mihomoApi = createRuntimeMihomoApi({ secret: settings.controllerSecret });
+  const currentNode = await mihomoApi.getCurrentNode();
+  if (!currentNode || currentNode === 'DIRECT') return nodeHealthIntervalMs;
+
+  const shouldPublishDelay = shouldRefreshCurrentNodeDelay(currentNode);
+  if (shouldPublishDelay) {
+    updateCurrentNodeDelay(currentNode, {
+      delayStatus: 'testing',
+      delay: undefined,
+      delayCheckedAt: undefined
+    });
+    void broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
+  }
+
+  const currentDelay = await mihomoApi.testNodeDelay(currentNode).catch(() => undefined);
+  if (typeof currentDelay === 'number') {
+    currentNodeHealthFailures = 0;
+    currentNodeHealthFailureName = currentNode;
+    if (shouldPublishDelay) {
+      updateCurrentNodeDelay(currentNode, {
+        delayStatus: 'measured',
+        delay: currentDelay,
+        delayCheckedAt: new Date().toISOString()
+      });
+      void broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
+    }
+    void maybeStartCurrentNodeAvailabilityCheck(currentNode);
+    return nodeHealthIntervalMs;
+  }
+
+  if (shouldPublishDelay) {
+    updateCurrentNodeDelay(currentNode, {
+      delayStatus: 'failed',
+      delay: undefined,
+      delayCheckedAt: new Date().toISOString()
+    });
+    void broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
+  }
+
+  if (currentNodeHealthFailureName !== currentNode) {
+    currentNodeHealthFailureName = currentNode;
+    currentNodeHealthFailures = 0;
+  }
+  currentNodeHealthFailures += 1;
+  if (currentNodeHealthFailures < nodeHealthFailureThreshold) {
+    appendLog(`当前节点短暂异常，等待复查: ${currentNode}`);
+    return nodeHealthRetryDelayMs;
+  }
+
+  appendLog(`当前节点不可用，正在切换: ${currentNode}`);
+  const selectedNode = isAutomaticStrategy(settings.strategy)
+    ? await mihomoApi.selectBestUsableNodeForStrategy(settings.strategy, { avoidNode: currentNode })
+    : await mihomoApi.selectBestUsableNode({ avoidNode: currentNode });
+  if (!selectedNode) {
+    throw new Error('没有可用节点');
+  }
+
+  await settingsStore.update(
+    isAutomaticStrategy(settings.strategy)
+      ? { strategy: settings.strategy, selectedNode: null }
+      : { strategy: 'manual', selectedNode }
+  );
+  await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+  appendLog(`已切换可用节点: ${selectedNode}`);
+  currentNodeHealthFailures = 0;
+  currentNodeHealthFailureName = selectedNode;
+  const snapshot = await createSnapshot();
+  sendSnapshotToWindows(snapshot);
+  return 0;
+}
+
+function isAutomaticStrategy(strategy: StrategyKey): strategy is Exclude<StrategyKey, 'manual' | 'direct'> {
+  return strategy === 'auto' || strategy === 'fallback' || strategy === 'load-balance';
+}
+
 async function createSnapshot(): Promise<AppSnapshot> {
   const settings = await settingsStore.read();
   const mihomoApi = createMihomoApiClient({
@@ -350,11 +989,13 @@ async function createSnapshot(): Promise<AppSnapshot> {
       ];
   const activeStrategy = strategies.find((strategy) => strategy.active)?.key ?? settings.strategy;
   const trafficSnapshot = await trafficStore.getSnapshot();
+  const nodeHealth = await getCurrentNodeHealthSnapshot(currentNode, running);
 
   return {
     status: lifecycle.getStatus(),
     currentNode,
     nodes,
+    nodeHealth,
     strategies,
     mode: settings.mode,
     strategy: activeStrategy,
@@ -372,6 +1013,8 @@ async function createSnapshot(): Promise<AppSnapshot> {
     traffic: trafficSnapshot.stats,
     trafficIdentity: trafficSnapshot.identity,
     subscriptionUrl: settings.subscriptionUrl,
+    remoteSubscriptionUrl: settings.remoteSubscriptionUrl,
+    update: updateSnapshot,
     diagnostics: {
       lastError,
       logs: appLogs.slice(-80)
@@ -391,6 +1034,60 @@ async function broadcastSnapshot(): Promise<AppSnapshot> {
   const snapshot = await createSnapshot();
   sendSnapshotToWindows(snapshot);
   return snapshot;
+}
+
+function createSnapshotProgressNotifier(intervalMs = 300, shouldSend: () => boolean = () => true) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let sending = false;
+  let queued = false;
+  let lastSentAt = 0;
+
+  const schedule = () => {
+    if (timer) return;
+    const delayMs = Math.max(0, intervalMs - (Date.now() - lastSentAt));
+    timer = setTimeout(() => {
+      timer = undefined;
+      void send();
+    }, delayMs);
+  };
+
+  const send = async () => {
+    if (sending) {
+      queued = true;
+      return;
+    }
+
+    sending = true;
+    queued = false;
+    try {
+      if (!shouldSend()) return;
+      const snapshot = await createSnapshot();
+      if (!shouldSend()) return;
+      sendSnapshotToWindows(snapshot);
+      lastSentAt = Date.now();
+    } catch (error) {
+      appendLog(`测速进度刷新失败: ${formatError(error)}`);
+    } finally {
+      sending = false;
+      if (queued) {
+        schedule();
+      }
+    }
+  };
+
+  return {
+    notify() {
+      queued = true;
+      schedule();
+    },
+    clear() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      queued = false;
+    }
+  };
 }
 
 function createDefaultStrategies(active: string): StrategyGroup[] {
@@ -423,18 +1120,83 @@ async function withTrayRefresh<T>(task: () => Promise<T>): Promise<T> {
 
 async function startProxy(): Promise<AppSnapshot> {
   await requireTrafficIdentity();
-  await lifecycle.start();
-  await activatePendingTrafficIdentity();
+  await syncRemoteConfig();
+  await startLifecycleWithRepairRetry();
+  await activatePendingTrafficIdentity().catch((error) => {
+    appendLog(`登记验证暂未完成: ${formatError(error)}`);
+  });
+  await syncRemoteConfig({ proxyUrl: getRuntimeTrafficProxyUrl(), restartIfRunning: true });
   trafficTracker.start();
   trafficReporter.start();
   clearLastError();
+  scheduleNodeHealthCheck(0);
   return createSnapshot();
+}
+
+async function selectBestAutoNode(): Promise<AppSnapshot> {
+  await requireTrafficIdentity();
+  const settings = await settingsStore.update({ strategy: 'auto', selectedNode: null });
+  if (lifecycle.getStatus() !== 'running') {
+    await startProxy();
+  }
+
+  const mihomoApi = createRuntimeMihomoApi({ secret: settings.controllerSecret });
+  const selectedNode = await mihomoApi.selectBestUsableNodeForStrategy('auto');
+  if (!selectedNode) {
+    throw new Error('没有可用节点');
+  }
+
+  await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+  appendLog(`已自动选择可用节点: ${selectedNode}`);
+  clearLastError();
+  scheduleNodeHealthCheck(0);
+  return createSnapshot();
+}
+
+async function selectVerifiedManualNode(
+  mihomoApi: ReturnType<typeof createRuntimeMihomoApi>,
+  requestedNode: string
+): Promise<string> {
+  const availableNodes = await mihomoApi.listNodes().catch(() => []);
+  if (!availableNodes.some((node) => node.name === requestedNode)) {
+    appendLog(`手动节点不存在，正在选择可用节点: ${requestedNode}`);
+    const selectedNode = await mihomoApi.selectBestUsableNode({ avoidNode: requestedNode });
+    if (!selectedNode) {
+      throw new Error('没有可用节点');
+    }
+    return selectedNode;
+  }
+
+  const requestedDelay = await mihomoApi.testNodeDelay(requestedNode).catch(() => undefined);
+  if (typeof requestedDelay === 'number') {
+    await mihomoApi.selectNode(requestedNode);
+    return requestedNode;
+  }
+
+  appendLog(`手动节点不可用，正在选择可用节点: ${requestedNode}`);
+  const selectedNode = await mihomoApi.selectBestUsableNode({ avoidNode: requestedNode });
+  if (!selectedNode) {
+    throw new Error('没有可用节点');
+  }
+  return selectedNode;
 }
 
 async function requireTrafficIdentity(): Promise<void> {
   const snapshot = await trafficStore.getSnapshot();
   if (!snapshot.identity) {
     throw new Error('traffic identity required');
+  }
+}
+
+async function startLifecycleWithRepairRetry(): Promise<void> {
+  try {
+    await lifecycle.start();
+  } catch (error) {
+    appendLog(`启动失败，自动修复后重试: ${formatError(error)}`);
+    await lifecycle.repair().catch((repairError) => {
+      appendLog(`自动修复失败: ${formatError(repairError)}`);
+    });
+    await lifecycle.start();
   }
 }
 
@@ -476,7 +1238,7 @@ async function registerTrafficIdentity(input: Parameters<TrafficReporter['regist
 
     if (!wasRunning && settings.subscriptionUrl.trim()) {
       appendLog(`登记直连失败，尝试代理: ${formatError(error)}`);
-      await lifecycle.start();
+      await startLifecycleWithRepairRetry();
       startedForRegistration = true;
       try {
         await trafficReporter.register(input, {
@@ -499,6 +1261,7 @@ async function registerTrafficIdentity(input: Parameters<TrafficReporter['regist
     await lifecycle.stop().catch((stopError) => appendLog(`登记回滚失败: ${formatError(stopError)}`));
   }
   if (lifecycle.getStatus() === 'running') {
+    await syncRemoteConfig({ proxyUrl: getRuntimeTrafficProxyUrl(), restartIfRunning: true });
     trafficTracker.start();
     trafficReporter.start();
   }
@@ -514,6 +1277,7 @@ async function activatePendingTrafficIdentity(): Promise<void> {
     await trafficReporter.register(pending, {
       proxyUrl: getRuntimeTrafficProxyUrl()
     });
+    await syncRemoteConfig({ proxyUrl: getRuntimeTrafficProxyUrl(), restartIfRunning: true });
     appendLog('待验证登记已完成');
   } catch (error) {
     if (isTrafficActivationAuthFailure(error)) {
@@ -545,6 +1309,9 @@ function registerIpc() {
   });
   ipcMain.handle(ipcChannels.stopPetDrag, async (_event, moved?: boolean) => {
     return stopPetDrag({ settle: Boolean(moved) });
+  });
+  ipcMain.handle(ipcChannels.setPetMousePassthrough, async (_event, passthrough?: boolean) => {
+    setPetMousePassthrough(Boolean(passthrough));
   });
   ipcMain.handle(ipcChannels.showMainWindow, async () => {
     showMainWindow();
@@ -587,20 +1354,34 @@ function registerIpc() {
   });
   ipcMain.handle(ipcChannels.selectNode, async (_event, name: string) => {
     const settings = await settingsStore.read();
-    await settingsStore.update({ strategy: 'manual', selectedNode: name });
     if (lifecycle.getStatus() !== 'running') {
       await requireTrafficIdentity();
-      await lifecycle.start();
+      await startLifecycleWithRepairRetry();
     }
     const mihomoApi = createMihomoApiClient({
       secret: settings.controllerSecret,
       controllerPort: runtimePorts.controllerPort
     });
-    await mihomoApi.selectNode(name);
+    const selectedNode = await selectVerifiedManualNode(mihomoApi, name);
+    await settingsStore.update({ strategy: 'manual', selectedNode });
+    await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+    scheduleNodeHealthCheck(0);
     return createSnapshot();
   });
+  ipcMain.handle(ipcChannels.selectBestAutoNode, async () => {
+    return withTrayRefresh(async () => {
+      try {
+        const snapshot = await selectBestAutoNode();
+        sendSnapshotToWindows(snapshot);
+        return snapshot;
+      } catch (error) {
+        recordError('自动选择节点失败', error);
+        throw error;
+      }
+    });
+  });
   ipcMain.handle(ipcChannels.selectStrategy, async (_event, strategy) => {
-    return selectMihomoStrategy(
+    const snapshot = await selectMihomoStrategy(
       {
         settingsStore,
         lifecycle,
@@ -609,9 +1390,11 @@ function registerIpc() {
       },
       strategy
     );
+    scheduleNodeHealthCheck(0);
+    return snapshot;
   });
   ipcMain.handle(ipcChannels.setMode, async (_event, mode) => {
-    return setMihomoMode(
+    const snapshot = await setMihomoMode(
       {
         settingsStore,
         lifecycle,
@@ -620,8 +1403,11 @@ function registerIpc() {
       },
       mode
     );
+    scheduleNodeHealthCheck(0);
+    return snapshot;
   });
   ipcMain.handle(ipcChannels.testNode, async (_event, name: string) => {
+    await requireTrafficIdentity();
     return testMihomoNode(
       {
         settingsStore,
@@ -633,12 +1419,45 @@ function registerIpc() {
     );
   });
   ipcMain.handle(ipcChannels.testAllNodes, async () => {
-    return testAllMihomoNodes({
-      settingsStore,
-      lifecycle,
-      createMihomoApi: createRuntimeMihomoApi,
-      createSnapshot
+    await requireTrafficIdentity();
+    activeNodeTestController?.abort();
+    const controller = new AbortController();
+    const progressNotifier = createSnapshotProgressNotifier(300, () => {
+      return activeNodeTestController === controller && !controller.signal.aborted;
     });
+    activeNodeTestController = controller;
+    try {
+      const snapshot = await testAllMihomoNodes(
+        {
+          settingsStore,
+          lifecycle,
+          createMihomoApi: createRuntimeMihomoApi,
+          createSnapshot
+        },
+        {
+          signal: controller.signal,
+          onProgress: () => {
+            if (activeNodeTestController === controller && !controller.signal.aborted) {
+              progressNotifier.notify();
+            }
+          }
+        }
+      );
+      sendSnapshotToWindows(snapshot);
+      return snapshot;
+    } finally {
+      progressNotifier.clear();
+      if (activeNodeTestController === controller) {
+        activeNodeTestController = undefined;
+      }
+    }
+  });
+  ipcMain.handle(ipcChannels.cancelNodeTests, async () => {
+    activeNodeTestController?.abort();
+    activeNodeTestController = undefined;
+    const snapshot = await createSnapshot();
+    sendSnapshotToWindows(snapshot);
+    return snapshot;
   });
   ipcMain.handle(ipcChannels.testConnectivity, async (_event, key) => {
     return testConnectivity(
@@ -699,6 +1518,12 @@ function registerIpc() {
     sendSnapshotToWindows(snapshot);
     return snapshot;
   });
+  ipcMain.handle(ipcChannels.checkForUpdates, async () => {
+    return checkForUpdatesNow(true);
+  });
+  ipcMain.handle(ipcChannels.installUpdate, async () => {
+    return installDownloadedUpdate();
+  });
 }
 
 function showMainWindow() {
@@ -736,6 +1561,104 @@ function setPetState(state: DesktopPetState, durationMs?: number) {
       syncPetStateToRuntime();
     }, durationMs);
   }
+
+  updatePetDockBehavior(state, Boolean(durationMs));
+}
+
+function clearPetDockTimer() {
+  if (!petDockTimer) return;
+  clearTimeout(petDockTimer);
+  petDockTimer = undefined;
+}
+
+function clearPetSequenceTimer() {
+  if (!petSequenceTimer) return;
+  clearTimeout(petSequenceTimer);
+  petSequenceTimer = undefined;
+}
+
+function clearPetMoveTimer() {
+  if (!petMoveTimer) return;
+  clearInterval(petMoveTimer);
+  petMoveTimer = undefined;
+}
+
+function clearPetDockBehavior() {
+  clearPetDockTimer();
+  petDockBehavior = undefined;
+}
+
+function updatePetDockBehavior(state: DesktopPetState, temporary = false) {
+  if (!petFeatureEnabled || temporary) return;
+
+  if (state === 'edgeLeft' || state === 'edgeRight') {
+    if (petDockBehavior?.kind !== 'side' || petDockBehavior.side !== state) {
+      petDockBehavior = { kind: 'side', side: state, startedAt: Date.now() };
+    }
+    scheduleSideDockBehavior();
+    return;
+  }
+
+  if (state === 'edgeLeftSleep' || state === 'edgeRightSleep') {
+    const side = state === 'edgeLeftSleep' ? 'edgeLeft' : 'edgeRight';
+    if (petDockBehavior?.kind !== 'side' || petDockBehavior.side !== side) {
+      petDockBehavior = { kind: 'side', side, startedAt: Date.now() - petSideSleepDelayMs };
+    }
+    scheduleSideDockBehavior();
+    return;
+  }
+
+  if (state === 'topSleep') {
+    if (petDockBehavior?.kind !== 'top') {
+      petDockBehavior = { kind: 'top', startedAt: Date.now() };
+    }
+    scheduleTopDockBehavior();
+    return;
+  }
+
+  clearPetDockBehavior();
+}
+
+function scheduleSideDockBehavior() {
+  if (petDockBehavior?.kind !== 'side') return;
+  clearPetDockTimer();
+
+  const elapsed = Date.now() - petDockBehavior.startedAt;
+  if (elapsed >= petSideDropDelayMs) {
+    petDockTimer = setTimeout(() => dropPetToBottom('side'), 0);
+    return;
+  }
+
+  if (elapsed >= petSideSleepDelayMs) {
+    const sleepState = getSideSleepState(petDockBehavior.side);
+    if (petState !== sleepState) {
+      setPetState(sleepState);
+      return;
+    }
+    petDockTimer = setTimeout(() => dropPetToBottom('side'), petSideDropDelayMs - elapsed);
+    return;
+  }
+
+  petDockTimer = setTimeout(() => {
+    if (petDockBehavior?.kind !== 'side') return;
+    setPetState(getSideBlinkState(petDockBehavior.side), 900);
+  }, Math.min(petSideBlinkDelayMs, petSideSleepDelayMs - elapsed));
+}
+
+function scheduleTopDockBehavior() {
+  if (petDockBehavior?.kind !== 'top') return;
+  clearPetDockTimer();
+
+  const elapsed = Date.now() - petDockBehavior.startedAt;
+  petDockTimer = setTimeout(() => dropPetToBottom('top'), Math.max(0, petTopDropDelayMs - elapsed));
+}
+
+function getSideBlinkState(side: 'edgeLeft' | 'edgeRight'): DesktopPetState {
+  return side === 'edgeLeft' ? 'edgeLeftBlink' : 'edgeRightBlink';
+}
+
+function getSideSleepState(side: 'edgeLeft' | 'edgeRight'): DesktopPetState {
+  return side === 'edgeLeft' ? 'edgeLeftSleep' : 'edgeRightSleep';
 }
 
 function syncPetStateToRuntime() {
@@ -776,6 +1699,7 @@ function showPetWindow() {
   }
 
   petWindow.showInactive();
+  setPetMousePassthrough(true);
   syncPetStateToRuntime();
   refreshTrayMenu();
 }
@@ -783,6 +1707,9 @@ function showPetWindow() {
 function hidePetWindow() {
   if (!petFeatureEnabled) return;
   if (!petWindow) return;
+  clearPetSequenceTimer();
+  clearPetMoveTimer();
+  setPetMousePassthrough(true);
   petWindow.hide();
   setPetState('idle');
   refreshTrayMenu();
@@ -952,6 +1879,20 @@ function getBottomRightEdgeBounds(area: Rectangle): Rectangle {
   };
 }
 
+function getBottomDockBounds(area: Rectangle, preferredX: number): Rectangle {
+  const minX = area.x + Math.round(petWindowSize.width * 0.45);
+  const maxX = area.x + area.width - petWindowSize.width - Math.round(petWindowSize.width * 0.45);
+  const fallbackX = area.x + Math.round((area.width - petWindowSize.width) / 2);
+  const x = maxX > minX ? Math.min(Math.max(preferredX, minX), maxX) : fallbackX;
+
+  return {
+    width: petWindowSize.width,
+    height: petWindowSize.height,
+    x,
+    y: area.y + area.height - petWindowSize.height
+  };
+}
+
 async function getPetStartBounds() {
   const settings = await settingsStore.read();
   if (!settings.petWindow) return getDefaultPetBounds();
@@ -977,12 +1918,19 @@ function clampPetBounds(bounds: Rectangle, area = screen.getDisplayMatching(boun
 function getPetDockState(bounds: Rectangle): DesktopPetState | undefined {
   const area = screen.getDisplayMatching(bounds).workArea;
   const edgeDistance = 18;
+  const maxX = area.x + area.width - bounds.width;
+  const maxY = area.y + area.height - bounds.height;
+  const nearLeft = Math.abs(bounds.x - area.x) <= edgeDistance;
+  const nearRight = Math.abs(maxX - bounds.x) <= edgeDistance;
+  const nearTop = Math.abs(bounds.y - area.y) <= edgeDistance;
+  const nearBottom = Math.abs(maxY - bounds.y) <= edgeDistance;
+
+  if (nearTop && !nearLeft && !nearRight) return 'topSleep';
+  if (nearBottom && !nearLeft && !nearRight) return 'bottomSleep';
+
   const distances = [
     { state: 'edgeLeft' as const, distance: Math.abs(bounds.x - area.x) },
-    {
-      state: 'edgeRight' as const,
-      distance: Math.abs(area.x + area.width - (bounds.x + bounds.width))
-    }
+    { state: 'edgeRight' as const, distance: Math.abs(maxX - bounds.x) }
   ].filter((candidate) => candidate.distance <= edgeDistance);
 
   distances.sort((a, b) => a.distance - b.distance);
@@ -1001,6 +1949,12 @@ function settlePetBounds(bounds: Rectangle): { bounds: Rectangle; dockState?: De
     x = area.x;
   } else if (Math.abs(maxX - x) <= edgeDistance) {
     x = maxX;
+  }
+
+  if (Math.abs(y - area.y) <= edgeDistance) {
+    y = area.y;
+  } else if (Math.abs(maxY - y) <= edgeDistance) {
+    y = maxY;
   }
 
   const nextBounds = {
@@ -1024,8 +1978,17 @@ function savePetBounds(bounds: Rectangle) {
   });
 }
 
-function applyPetWindowShape(win: BrowserWindow) {
-  void win;
+function setPetMousePassthrough(passthrough: boolean, force = false) {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  if (!force && petMousePassthrough === passthrough) return;
+
+  petMousePassthrough = passthrough;
+  if (passthrough) {
+    petWindow.setIgnoreMouseEvents(true, { forward: true });
+    return;
+  }
+
+  petWindow.setIgnoreMouseEvents(false);
 }
 
 async function dockPetToBottomRight() {
@@ -1037,8 +2000,78 @@ async function dockPetToBottomRight() {
   setPetState('edgeRight');
 }
 
+function dropPetToBottom(source: 'side' | 'top') {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  const current = petWindow.getBounds();
+  const area = screen.getDisplayMatching(current).workArea;
+  const bounds = getBottomDockBounds(area, current.x);
+
+  clearPetDockBehavior();
+  clearPetSequenceTimer();
+  setPetState('fallRecover');
+  animatePetBounds(bounds, 620, () => {
+    if (!petWindow || petWindow.isDestroyed()) return;
+    petWindow.setBounds(bounds, false);
+    savePetBounds(bounds);
+    if (source === 'top') {
+      playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'bottomSleep']);
+      return;
+    }
+    playPetBottomSequence(['bottomSleep']);
+  });
+}
+
+function animatePetBounds(target: Rectangle, durationMs: number, onDone: () => void) {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  clearPetMoveTimer();
+
+  const start = petWindow.getBounds();
+  const startedAt = Date.now();
+  petMoveTimer = setInterval(() => {
+    if (!petWindow || petWindow.isDestroyed()) {
+      clearPetMoveTimer();
+      return;
+    }
+
+    const progress = Math.min(1, (Date.now() - startedAt) / durationMs);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    petWindow.setBounds(
+      {
+        ...target,
+        x: Math.round(start.x + (target.x - start.x) * eased),
+        y: Math.round(start.y + (target.y - start.y) * eased)
+      },
+      false
+    );
+
+    if (progress >= 1) {
+      clearPetMoveTimer();
+      onDone();
+    }
+  }, petDragFrameMs);
+}
+
+function playPetBottomSequence(states: DesktopPetState[]) {
+  const [state, ...rest] = states;
+  if (!state) return;
+
+  setPetState(state);
+  if (rest.length === 0) return;
+
+  const holdMs = state === 'bottomDizzy' ? 1200 : 950;
+  clearPetSequenceTimer();
+  petSequenceTimer = setTimeout(() => {
+    petSequenceTimer = undefined;
+    playPetBottomSequence(rest);
+  }, holdMs);
+}
+
 function startPetDrag() {
   if (!petWindow || petDragTimer) return;
+  setPetMousePassthrough(false);
+  clearPetDockBehavior();
+  clearPetSequenceTimer();
+  clearPetMoveTimer();
 
   const cursor = screen.getCursorScreenPoint();
   const bounds = petWindow.getBounds();
@@ -1294,7 +2327,7 @@ async function createPetWindow() {
   });
   petWindow = win;
   win.setAlwaysOnTop(true, 'floating');
-  applyPetWindowShape(win);
+  setPetMousePassthrough(true, true);
 
   win.webContents.on('preload-error', (_event, preloadPath, error) => {
     console.error(`pet preload failed: ${preloadPath}`, error);
@@ -1316,6 +2349,9 @@ async function createPetWindow() {
       petWindow = null;
     }
     stopPetDrag();
+    clearPetDockBehavior();
+    clearPetSequenceTimer();
+    clearPetMoveTimer();
     refreshTrayMenu();
   });
 
@@ -1335,6 +2371,9 @@ async function cleanupBeforeExit() {
   cleanupStarted = true;
   if (petFeatureEnabled) {
     stopPetDrag({ settle: false });
+    clearPetDockBehavior();
+    clearPetSequenceTimer();
+    clearPetMoveTimer();
   }
   try {
     await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
@@ -1363,6 +2402,7 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(async () => {
     await allocateRuntimePorts();
     registerIpc();
+    setupAutoUpdates();
     createTray();
     void migrateLegacyLaunchAtLogin();
     void createWindow();

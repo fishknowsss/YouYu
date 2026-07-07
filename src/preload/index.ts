@@ -20,21 +20,27 @@ const api: YouYuApi = {
   wavePet: () => ipcRenderer.invoke(ipcChannels.wavePet),
   startPetDrag: () => ipcRenderer.invoke(ipcChannels.startPetDrag),
   stopPetDrag: (moved) => ipcRenderer.invoke(ipcChannels.stopPetDrag, moved),
+  setPetMousePassthrough: (passthrough) =>
+    ipcRenderer.invoke(ipcChannels.setPetMousePassthrough, passthrough),
   showMainWindow: () => ipcRenderer.invoke(ipcChannels.showMainWindow),
   start: () => ipcRenderer.invoke(ipcChannels.start),
   stop: () => ipcRenderer.invoke(ipcChannels.stop),
   repair: () => ipcRenderer.invoke(ipcChannels.repair),
   selectNode: (name) => ipcRenderer.invoke(ipcChannels.selectNode, name),
+  selectBestAutoNode: () => ipcRenderer.invoke(ipcChannels.selectBestAutoNode),
   selectStrategy: (strategy) => ipcRenderer.invoke(ipcChannels.selectStrategy, strategy),
   setMode: (mode) => ipcRenderer.invoke(ipcChannels.setMode, mode),
   testNode: (name) => ipcRenderer.invoke(ipcChannels.testNode, name),
   testAllNodes: () => ipcRenderer.invoke(ipcChannels.testAllNodes),
+  cancelNodeTests: () => ipcRenderer.invoke(ipcChannels.cancelNodeTests),
   testConnectivity: (key) => ipcRenderer.invoke(ipcChannels.testConnectivity, key),
   testAllConnectivity: () => ipcRenderer.invoke(ipcChannels.testAllConnectivity),
   closeConnections: () => ipcRenderer.invoke(ipcChannels.closeConnections),
   updateSubscription: () => ipcRenderer.invoke(ipcChannels.updateSubscription),
   saveSettings: (settings) => ipcRenderer.invoke(ipcChannels.saveSettings, settings),
-  registerTrafficIdentity: (input) => ipcRenderer.invoke(ipcChannels.registerTrafficIdentity, input)
+  registerTrafficIdentity: (input) => ipcRenderer.invoke(ipcChannels.registerTrafficIdentity, input),
+  checkForUpdates: () => ipcRenderer.invoke(ipcChannels.checkForUpdates),
+  installUpdate: () => ipcRenderer.invoke(ipcChannels.installUpdate)
 };
 
 contextBridge.exposeInMainWorld('youyu', api);

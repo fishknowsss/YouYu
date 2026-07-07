@@ -11,13 +11,14 @@ describe('createDevYouYuApi', () => {
       subscriptionUrl: '',
       ruleProfile: 'subscription',
       features: {
-        dnsEnhanced: false,
-        tunEnabled: true,
+        dnsEnhanced: true,
+        tunEnabled: false,
         strictRouteEnabled: true,
         subscriptionRefreshIntervalHours: 12
       }
     });
 
+    await api.registerTrafficIdentity({ name: '测试', passphrase: 'pass' });
     await api.saveSettings({ subscriptionUrl: 'https://example.com/sub' });
     const running = await api.start();
 
@@ -34,6 +35,7 @@ describe('createDevYouYuApi', () => {
   it('starts the preview flow when updating nodes from a saved subscription', async () => {
     const api = createDevYouYuApi();
 
+    await api.registerTrafficIdentity({ name: '测试', passphrase: 'pass' });
     await api.saveSettings({ subscriptionUrl: ' https://example.com/sub ' });
     const updated = await api.updateSubscription();
 
@@ -45,7 +47,18 @@ describe('createDevYouYuApi', () => {
   it('requires a subscription before starting or updating nodes', async () => {
     const api = createDevYouYuApi();
 
+    await api.registerTrafficIdentity({ name: '测试', passphrase: 'pass' });
+
     await expect(api.start()).rejects.toThrow('missing subscription url');
     await expect(api.updateSubscription()).rejects.toThrow('missing subscription url');
+  });
+
+  it('requires registration before starting or updating nodes', async () => {
+    const api = createDevYouYuApi();
+
+    await api.saveSettings({ subscriptionUrl: 'https://example.com/sub' });
+
+    await expect(api.start()).rejects.toThrow('traffic identity required');
+    await expect(api.updateSubscription()).rejects.toThrow('traffic identity required');
   });
 });

@@ -1,9 +1,10 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import type { MihomoRuntime } from '../lifecycle';
 import type { AppSettings } from '../storage/settings';
-import { buildMihomoConfig, strategyTargets } from './config';
+import type { RemoteControlConfig } from '../../shared/ipc';
+import { buildMihomoConfig, isBlockedSelectableNodeName, strategyTargets } from './config';
 
 type SpawnedProcess = {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
@@ -35,6 +36,7 @@ export type MihomoRuntimeOptions = {
     | { mixedPort: number; controllerPort: number; dnsPort?: number }
     | Promise<{ mixedPort: number; controllerPort: number; dnsPort?: number }>;
   logLine?: (line: string) => void;
+  readRemoteConfig?: () => Promise<RemoteControlConfig | undefined>;
   spawnProcess?: (binaryPath: string, args: string[]) => SpawnedProcess;
   waitForReady?: (secret: string) => Promise<void>;
   onUnexpectedExit?: (reason: string) => void;
@@ -43,13 +45,13 @@ export type MihomoRuntimeOptions = {
 const selectorName = '节点选择';
 const builtInProxyNames = new Set(['COMPATIBLE', 'DIRECT', 'PASS', 'REJECT', 'REJECT-DROP']);
 const managedGroupNames = new Set(['节点选择', '自动选择', '故障转移', '负载均衡']);
-const noticeNodeKeywords = ['失去支持', '更新你的代理客户端', '官网公告', '代理客户端'];
 const preferredDefaultNodeKeywordSets = [
   ['台湾', '08', '家宽'],
   ['台湾', '09', '家宽'],
   ['台湾', '家宽']
 ];
 const subscriptionUserAgent = 'Clash Verge/2.3.2';
+const subscriptionCacheFileName = 'subscription-cache.yaml';
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
@@ -118,7 +120,7 @@ function collectUsableNodes(proxies: Record<string, MihomoProxyItem>, names: str
   const nodes: string[] = [];
   const seen = new Set<string>();
   const visit = (name: string) => {
-    if (seen.has(name) || builtInProxyNames.has(name) || isNoticeNodeName(name)) return;
+    if (seen.has(name) || builtInProxyNames.has(name)) return;
     seen.add(name);
 
     const item = proxies[name];
@@ -127,7 +129,7 @@ function collectUsableNodes(proxies: Record<string, MihomoProxyItem>, names: str
       return;
     }
 
-    if (!managedGroupNames.has(name)) {
+    if (!managedGroupNames.has(name) && !isBlockedSelectableNodeName(name)) {
       nodes.push(name);
     }
   };
@@ -226,8 +228,12 @@ function pickStartupNode(nodes: string[], selectedNode: string): string | undefi
   return pickDefaultNode(nodes);
 }
 
-function isNoticeNodeName(name: string): boolean {
-  return noticeNodeKeywords.some((keyword) => name.includes(keyword));
+function pickUsableNodeForGroup(
+  proxies: Record<string, MihomoProxyItem>,
+  group: string
+): string | undefined {
+  const groupNodes = collectUsableNodes(proxies, proxies[group]?.all ?? []);
+  return pickDefaultNode(groupNodes);
 }
 
 async function selectNode(port: number, secret: string, group: string, node: string): Promise<void> {
@@ -297,6 +303,12 @@ async function waitForUsableProxies(
             await task.catch(() => undefined);
           }
         }
+        if (strategyTarget && target === strategyTarget) {
+          const usableStrategyNode = pickUsableNodeForGroup(proxies, strategyTarget);
+          if (usableStrategyNode) {
+            await selectNode(port, secret, strategyTarget, usableStrategyNode);
+          }
+        }
         logLine?.(
           strategyTarget && target === strategyTarget
             ? `mihomo selected strategy: ${target}`
@@ -341,6 +353,32 @@ async function fetchSubscriptionConfigText(url: string): Promise<string | undefi
   }
 }
 
+async function readCachedSubscriptionConfigText(cachePath: string, logLine?: (line: string) => void): Promise<string | undefined> {
+  try {
+    const cached = (await readFile(cachePath, 'utf8')).trim();
+    if (!cached) return undefined;
+    logLine?.('mihomo using cached subscription config');
+    return cached;
+  } catch {
+    return undefined;
+  }
+}
+
+async function cacheSubscriptionConfigText(
+  cachePath: string,
+  text: string | undefined,
+  logLine?: (line: string) => void
+): Promise<void> {
+  const value = text?.trim();
+  if (!value) return;
+
+  try {
+    await writeFile(cachePath, value, 'utf8');
+  } catch (error) {
+    logLine?.(`mihomo subscription cache write failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntime {
   let child: SpawnedProcess | null = null;
   let stopping = false;
@@ -362,8 +400,16 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
     const workDir = join(options.userDataDir, 'mihomo');
     const configPath = join(workDir, 'config.yaml');
     const ports = (await options.getPorts?.()) ?? { mixedPort: 7890, controllerPort: 9090 };
-    const subscriptionConfigText = await fetchSubscriptionConfigText(settings.subscriptionUrl);
+    const subscriptionCachePath = join(workDir, subscriptionCacheFileName);
     await mkdir(workDir, { recursive: true });
+    const fetchedSubscriptionConfigText = await fetchSubscriptionConfigText(settings.subscriptionUrl);
+    await cacheSubscriptionConfigText(subscriptionCachePath, fetchedSubscriptionConfigText, options.logLine);
+    const subscriptionConfigText =
+      fetchedSubscriptionConfigText ?? (await readCachedSubscriptionConfigText(subscriptionCachePath, options.logLine));
+    const remoteConfig = await options.readRemoteConfig?.().catch((error) => {
+      options.logLine?.(`remote config skipped: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    });
     await clearGeoDataFiles(workDir);
     await writeFile(
       configPath,
@@ -372,7 +418,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         secret: settings.controllerSecret,
         mode: settings.mode,
         strategy: settings.strategy,
-        ruleProfile: settings.ruleProfile,
+        ruleProfile: remoteConfig?.ruleProfile ?? settings.ruleProfile,
         systemProxyEnabled: settings.systemProxyEnabled,
         dnsEnhanced: settings.dnsEnhanced,
         snifferEnabled: settings.snifferEnabled,
@@ -380,6 +426,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         strictRouteEnabled: settings.strictRouteEnabled,
         allowLan: settings.allowLan,
         subscriptionConfigText,
+        remoteConfig,
         mixedPort: ports.mixedPort,
         controllerPort: ports.controllerPort,
         dnsPort: ports.dnsPort
@@ -387,7 +434,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
       'utf8'
     );
 
-    return { workDir, configPath, settings, ports };
+    return { workDir, configPath, settings, ports, remoteConfig };
   }
 
   async function stopCurrentChild() {
@@ -425,7 +472,11 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
       let lastError: unknown;
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        const { workDir, configPath, settings, ports } = await writeConfig();
+        const { workDir, configPath, settings, ports, remoteConfig } = await writeConfig();
+        const startupNode = remoteConfig?.preferredNode ?? settings.selectedNode;
+        const startupStrategy = remoteConfig?.preferredNode
+          ? 'manual'
+          : remoteConfig?.preferredStrategy ?? settings.strategy;
         options.logLine?.(
           `mihomo starting: mixed-port=${ports.mixedPort}, controller=${ports.controllerPort}, dns=${ports.dnsPort ?? 1053}`
         );
@@ -509,8 +560,8 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
                   await waitForUsableProxies(
                     settings.controllerSecret,
                     ports.controllerPort,
-                    settings.selectedNode,
-                    settings.strategy,
+                    startupNode,
+                    startupStrategy,
                     options.logLine
                   );
                 })(),

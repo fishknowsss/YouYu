@@ -18,7 +18,13 @@ npx wrangler secret put ADMIN_TOKEN
 npx wrangler deploy
 ```
 
-Use `yaoyaoba118` for `REGISTRATION_PASSPHRASE`.
+Existing D1 databases created before remote subscription support need this one-time migration:
+
+```powershell
+npx wrangler d1 execute youyu_traffic --remote --file=./migrations/2026-07-03-add-remote-subscription-url.sql
+```
+
+Use your own private value for `REGISTRATION_PASSPHRASE`.
 
 After deploy, put the Worker URL into:
 
@@ -37,5 +43,25 @@ Authorization: Bearer <ADMIN_TOKEN>
 
 ```http
 GET /api/admin/users/<userId>/traffic
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+```http
+GET /api/admin/config
+POST /api/admin/config
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+`POST /api/admin/config` and per-user config accept `subscriptionUrl`. Leave it empty to avoid a remote subscription override.
+
+```http
+GET /api/admin/users/<userId>/config
+POST /api/admin/users/<userId>/config
+POST /api/admin/users/<userId>/config/reset
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+```http
+GET /api/admin/anomalies
 Authorization: Bearer <ADMIN_TOKEN>
 ```

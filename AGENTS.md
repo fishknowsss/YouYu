@@ -27,8 +27,8 @@
 ## Packaging Rules
 
 - Read [docs/release-packaging.md](docs/release-packaging.md) before changing packaging, release, subscription defaults, or versioning.
-- Public GitHub builds must use `npm run dist:win` and produce `release/YouYu-<version>-x64.exe`.
-- Public builds must not contain a bundled subscription. `scripts/validate-windows-release.ts` enforces an empty bundled `default-subscription.txt`.
+- Public GitHub update builds must use `npm run dist:win:release` and produce standard, internal-channel, and no-pet-channel update assets plus `latest.yml`, `latest-in.yml`, and `latest-no.yml`.
+- Public builds must not contain a bundled subscription. `scripts/validate-windows-release.ts` enforces an empty bundled `default-subscription.txt` for standard public builds and for `--public-update` internal/no-pet channel builds.
 - Local internal builds must use `npm run dist:win:in` and produce `release/YouYu-<version>-x64-in.exe`.
 - Local no-desktop-pet builds must use `npm run dist:win:no` and produce `release/YouYu-<version>-x64-no.exe`.
 - The internal subscription source is `resources/default-subscription.in.txt`; it is local-only and gitignored. Never commit it.

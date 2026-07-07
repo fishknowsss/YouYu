@@ -42,7 +42,7 @@ describe('parseTraceData', () => {
 });
 
 describe('connectivityServices', () => {
-  it('keeps Steam checks first and removes ByteDance', () => {
+  it('keeps the 10-site availability list with PixVerse on the global app domain', () => {
     expect(connectivityServices[0]).toMatchObject({
       key: 'steam',
       name: 'Steam',
@@ -53,6 +53,23 @@ describe('connectivityServices', () => {
       name: 'Steam 联机',
       host: 'api.steampowered.com'
     });
-    expect(connectivityServices.map((service) => service.key)).not.toContain('bytedance');
+    expect(connectivityServices[2]).toMatchObject({
+      key: 'steamCloud',
+      name: 'Steam 云同步',
+      host: 'steamcloud-ugc.storage.googleapis.com'
+    });
+    expect(connectivityServices).toHaveLength(10);
+    expect(connectivityServices).toContainEqual(
+      expect.objectContaining({
+        key: 'pixverse',
+        name: 'PixVerse',
+        url: 'https://app.pixverse.ai',
+        probeUrl: 'https://app.pixverse.ai',
+        host: 'app.pixverse.ai'
+      })
+    );
+    expect(connectivityServices.map((service) => service.key)).not.toEqual(
+      expect.arrayContaining(['bytedance', 'runway', 'tencent', 'ehentai'])
+    );
   });
 });

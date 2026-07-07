@@ -19,8 +19,15 @@ describe('createSystemProxyAdapter', () => {
       platform: 'win32',
       runCommand: async (command) => {
         calls.push(`${command.file} ${command.args.join(' ')}`);
-        if (command.args.includes('ProxyEnable')) return 'ProxyEnable    REG_DWORD    0x0';
-        if (command.args.includes('ProxyServer')) return 'ProxyServer    REG_SZ    old:8080';
+        if (command.args[0] === 'query' && command.args.includes('ProxyEnable')) {
+          return 'ProxyEnable    REG_DWORD    0x0';
+        }
+        if (command.args[0] === 'query' && command.args.includes('ProxyServer')) {
+          return 'ProxyServer    REG_SZ    old:8080';
+        }
+        if (command.args[0] === 'query' && command.args.includes('ProxyOverride')) {
+          return 'ProxyOverride    REG_SZ    old.local;<local>';
+        }
         return '';
       }
     });
@@ -32,8 +39,10 @@ describe('createSystemProxyAdapter', () => {
     expect(calls.some((call) => call.includes('ProxyServer /t REG_SZ /d 127.0.0.1:7890'))).toBe(
       true
     );
+    expect(calls.some((call) => call.includes('ProxyOverride /t REG_SZ /d') && call.includes('*.cn'))).toBe(true);
     expect(calls.some((call) => call.includes('ProxyEnable /t REG_DWORD /d 0'))).toBe(true);
     expect(calls.some((call) => call.includes('ProxyServer /t REG_SZ /d old:8080'))).toBe(true);
+    expect(calls.some((call) => call.includes('ProxyOverride /t REG_SZ /d old.local;<local>'))).toBe(true);
   });
 
   it('keeps the original proxy state when enable is called twice', async () => {
@@ -42,8 +51,12 @@ describe('createSystemProxyAdapter', () => {
       platform: 'win32',
       runCommand: async (command) => {
         calls.push(`${command.file} ${command.args.join(' ')}`);
-        if (command.args.includes('ProxyEnable')) return 'ProxyEnable    REG_DWORD    0x0';
-        if (command.args.includes('ProxyServer')) return 'ProxyServer    REG_SZ    old:8080';
+        if (command.args[0] === 'query' && command.args.includes('ProxyEnable')) {
+          return 'ProxyEnable    REG_DWORD    0x0';
+        }
+        if (command.args[0] === 'query' && command.args.includes('ProxyServer')) {
+          return 'ProxyServer    REG_SZ    old:8080';
+        }
         return '';
       }
     });
@@ -72,6 +85,8 @@ describe('createSystemProxyAdapter', () => {
     await proxy.repair();
 
     expect(calls.some((call) => call.includes('ProxyEnable /t REG_DWORD /d 0'))).toBe(true);
+    expect(calls.some((call) => call.includes('reg.exe delete HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings /v ProxyServer /f'))).toBe(true);
+    expect(calls.some((call) => call.includes('reg.exe delete HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings /v ProxyOverride /f'))).toBe(true);
     expect(calls.some((call) => call.includes('netsh.exe winhttp reset proxy'))).toBe(true);
     expect(calls.some((call) => call.includes('ipconfig.exe /flushdns'))).toBe(true);
   });

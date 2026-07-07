@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { PointerEvent } from 'react';
+import type { MouseEvent, PointerEvent } from 'react';
 import { PetSprite } from './components/PetSprite';
 import type { DesktopPetState } from '../shared/ipc';
 import { getPetAnimationDurationMs } from './pet/atlas';
@@ -29,6 +29,7 @@ export function PetApp() {
   const ambientTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const liftTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const drag = useRef<DragState | undefined>(undefined);
+  const mousePassthrough = useRef<boolean | undefined>(undefined);
 
   useEffect(() => {
     document.documentElement.classList.add('pet-window');
@@ -58,8 +59,19 @@ export function PetApp() {
     };
   }, []);
 
+  useEffect(() => {
+    setMousePassthrough(true);
+    return () => setMousePassthrough(true);
+  }, []);
+
   function setVisual(next: DesktopPetState) {
     setState((current) => (current === next ? current : next));
+  }
+
+  function setMousePassthrough(passthrough: boolean) {
+    if (mousePassthrough.current === passthrough) return;
+    mousePassthrough.current = passthrough;
+    void window.youyu?.setPetMousePassthrough(passthrough);
   }
 
   function clearActionTimer() {
@@ -124,6 +136,7 @@ export function PetApp() {
 
   function handlePointerDown(event: PointerEvent<HTMLElement>) {
     if (event.button !== 0) return;
+    setMousePassthrough(false);
     clearActionTimer();
     clearAmbientTimer();
     drag.current = {
@@ -186,6 +199,31 @@ export function PetApp() {
     void stopDrag(Boolean(currentDrag?.moved));
   }
 
+  function handleRootPointerMove(event: PointerEvent<HTMLElement>) {
+    updateMousePassthroughFromTarget(event.target);
+  }
+
+  function handleRootMouseMove(event: MouseEvent<HTMLElement>) {
+    updateMousePassthroughFromTarget(event.target);
+  }
+
+  function updateMousePassthroughFromTarget(target: EventTarget | null) {
+    if (drag.current) {
+      setMousePassthrough(false);
+      return;
+    }
+
+    const insideHitTarget =
+      target instanceof Element && Boolean(target.closest('.pet-hit-target'));
+    setMousePassthrough(!insideHitTarget);
+  }
+
+  function handleRootPointerLeave() {
+    if (!drag.current) {
+      setMousePassthrough(true);
+    }
+  }
+
   async function stopDrag(moved: boolean, playTapAction = true) {
     clearLiftTimer();
     const currentDrag = drag.current;
@@ -207,7 +245,7 @@ export function PetApp() {
     }
 
     const settleState = await window.youyu?.stopPetDrag(true);
-    if (isEdgeState(settleState)) {
+    if (settleState && isDockHoldState(settleState)) {
       baseState.current = settleState;
       clearActionTimer();
       clearAmbientTimer();
@@ -220,28 +258,44 @@ export function PetApp() {
 
   return (
     <main
-      className="pet-root"
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={() => {
-        void stopDrag(Boolean(drag.current?.moved), false);
-      }}
-      onDoubleClick={() => {
-        lockState('jump', 180);
-        void window.youyu?.showMainWindow();
-      }}
+      className={`pet-root pet-root-${state}`}
+      onPointerMove={handleRootPointerMove}
+      onMouseMove={handleRootMouseMove}
+      onPointerLeave={handleRootPointerLeave}
       aria-label="YouYu 桌宠"
     >
-      <button className="pet-hit-target" type="button" aria-label="桌宠">
+      <div className="pet-visual" aria-hidden="true">
         <PetSprite state={state} />
-      </button>
+      </div>
+      <button
+        className={`pet-hit-target pet-hit-target-${state}`}
+        type="button"
+        aria-label="桌宠"
+        onPointerEnter={() => setMousePassthrough(false)}
+        onPointerLeave={() => {
+          if (!drag.current) setMousePassthrough(true);
+        }}
+        onMouseEnter={() => setMousePassthrough(false)}
+        onMouseLeave={() => {
+          if (!drag.current) setMousePassthrough(true);
+        }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={() => {
+          void stopDrag(Boolean(drag.current?.moved), false);
+        }}
+        onDoubleClick={() => {
+          lockState('jump', 180);
+          void window.youyu?.showMainWindow();
+        }}
+      />
     </main>
   );
 }
 
 function getAmbientSteps(baseState: DesktopPetState): AmbientStep[] {
-  if (isEdgeState(baseState)) {
+  if (isDockHoldState(baseState)) {
     return [{ state: baseState, durationMs: 3600000 }];
   }
 
@@ -282,8 +336,19 @@ function getAmbientSteps(baseState: DesktopPetState): AmbientStep[] {
   ];
 }
 
-function isEdgeState(state: DesktopPetState | undefined): state is DesktopPetState {
-  return state === 'edgeLeft' || state === 'edgeRight';
+function isDockHoldState(state: DesktopPetState): boolean {
+  return (
+    state === 'edgeLeft' ||
+    state === 'edgeRight' ||
+    state === 'edgeLeftBlink' ||
+    state === 'edgeRightBlink' ||
+    state === 'edgeLeftSleep' ||
+    state === 'edgeRightSleep' ||
+    state === 'topSleep' ||
+    state === 'bottomSleep' ||
+    state === 'bottomDizzy' ||
+    state === 'bottomAngry'
+  );
 }
 
 function isDragVisual(state: DesktopPetState): boolean {

@@ -9,5 +9,6 @@ dist/
 coverage/
 .env
 .env.*
+**/.wrangler/
 resources/default-subscription.in.txt
 resources/generated/

@@ -1,6 +1,10 @@
 appId: studio.youyu.proxy
 productName: YouYu
 compression: normal
+publish:
+  provider: github
+  owner: fishknowsss
+  repo: YouYu
 electronLanguages:
   - zh-CN
   - en-US

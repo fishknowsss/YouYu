@@ -1,5 +1,12 @@
-import type { MihomoMode, ProxyNode, RuntimeStats, StrategyGroup, StrategyKey } from '../../shared/ipc';
-import { strategyLabels, strategyTargets } from './config';
+import type {
+  MihomoMode,
+  ProxyNode,
+  RuntimeConnectionStats,
+  RuntimeStats,
+  StrategyGroup,
+  StrategyKey
+} from '../../shared/ipc';
+import { isBlockedSelectableNodeName, strategyLabels, strategyTargets } from './config';
 
 type Fetcher = typeof fetch;
 
@@ -14,31 +21,59 @@ type MihomoProxiesResponse = {
   proxies?: Record<string, MihomoProxyItem>;
 };
 
+type MihomoProviderProxyItem = MihomoProxyItem & {
+  name?: string;
+};
+
+type MihomoProviderNode = {
+  provider: string;
+  name: string;
+  item: MihomoProxyItem;
+};
+
 export type MihomoApiClient = {
   listNodes: () => Promise<ProxyNode[]>;
   listStrategies: () => Promise<StrategyGroup[]>;
   getCurrentNode: () => Promise<string>;
-  getRuntimeStats: () => Promise<RuntimeStats>;
+  getRuntimeStats: (options?: { includeConnections?: boolean }) => Promise<RuntimeStats>;
   selectNode: (name: string) => Promise<void>;
   selectStrategy: (strategy: StrategyKey) => Promise<void>;
   setMode: (mode: MihomoMode) => Promise<void>;
-  testNodeDelay: (name: string) => Promise<number | undefined>;
-  testAllNodes: () => Promise<void>;
+  testNodeDelay: (name: string, options?: { signal?: AbortSignal }) => Promise<number | undefined>;
+  testAllNodes: (options?: {
+    signal?: AbortSignal;
+    onNodeTested?: (node: ProxyNode) => void | Promise<void>;
+  }) => Promise<void>;
+  selectBestUsableNode: (options?: { avoidNode?: string; signal?: AbortSignal }) => Promise<string | undefined>;
+  selectBestUsableNodeForStrategy: (
+    strategy: Exclude<StrategyKey, 'manual' | 'direct'>,
+    options?: { avoidNode?: string; signal?: AbortSignal }
+  ) => Promise<string | undefined>;
   closeConnections: () => Promise<void>;
   updateProvider: () => Promise<void>;
 };
 
 const selectorName = '节点选择';
 const providerName = 'airport';
-const delayTestUrl = 'https://www.gstatic.com/generate_204';
+const delayTestUrls = ['https://www.gstatic.com/generate_204', 'https://cp.cloudflare.com/generate_204'];
+const delayTestTimeoutMs = 2000;
+const delayTestConcurrency = 6;
+const nodeDelayCache = new Map<string, number>();
+const nodeTestStateCache = new Map<string, ProxyNode['testState']>();
+const nodeProviderCache = new Map<string, string>();
 const builtInProxyNames = new Set(['COMPATIBLE', 'DIRECT', 'PASS', 'REJECT', 'REJECT-DROP']);
-const noticeNodeKeywords = ['失去支持', '更新你的代理客户端', '官网公告', '代理客户端'];
+const effectiveCurrentGroupNames = ['Final', 'GLOBAL', 'MESL'];
+const requiredSyncedGroupNames = new Set([selectorName, ...effectiveCurrentGroupNames]);
 const strategyTargetSet = new Set<string>([...Object.values(strategyTargets), ...builtInProxyNames]);
+const preferredJapanNodePatterns = [
+  /(?:^|[^a-z0-9])(?:jp|jpn|japan|tokyo|osaka)(?:$|[^a-z0-9])/i,
+  /(?:\u65e5\u672c|\u4e1c\u4eac|\u5927\u962a|\u{1f1ef}\u{1f1f5})/iu
+];
 
 type MihomoConnectionsResponse = {
   uploadTotal?: number;
   downloadTotal?: number;
-  connections?: unknown[];
+  connections?: RuntimeConnectionStats[];
 };
 
 type MihomoDelayResponse = {
@@ -64,6 +99,10 @@ export function createMihomoApiClient(options: {
     };
   }
 
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
   async function request(path: string, init?: RequestInit): Promise<Response> {
     const response = await fetcher(`${controllerUrl}${path}`, init);
     if (!response.ok) {
@@ -79,22 +118,76 @@ export function createMihomoApiClient(options: {
     return (await response.json()) as MihomoProxiesResponse;
   }
 
+  async function readProviders(): Promise<MihomoProvidersResponse> {
+    const response = await request('/providers/proxies', {
+      headers: headers()
+    });
+    return (await response.json()) as MihomoProvidersResponse;
+  }
+
   function findSelector(proxies: Record<string, MihomoProxyItem>): { name: string; item: MihomoProxyItem } | null {
     const preferred = proxies[selectorName];
     if (preferred?.all?.length) {
       return { name: selectorName, item: preferred };
     }
 
-    const selector = Object.entries(proxies).find(([_name, item]) => {
-      return item.all?.length && item.all.some((name) => name !== 'DIRECT' && proxies[name]);
-    });
+    const selectors = Object.entries(proxies)
+      .map(([name, item]) => ({
+        name,
+        item,
+        nodes: item.all?.length ? collectSelectableNodes(proxies, item.all).length : 0
+      }))
+      .filter(({ name, item, nodes }) => {
+        return nodes > 0 && item.all?.length && !builtInProxyNames.has(name);
+      })
+      .sort((left, right) => scoreSelector(right.name, right.item, right.nodes) - scoreSelector(left.name, left.item, left.nodes));
 
-    return selector ? { name: selector[0], item: selector[1] } : null;
+    const selector = selectors[0];
+
+    return selector ? { name: selector.name, item: selector.item } : null;
+  }
+
+  function scoreSelector(name: string, item: MihomoProxyItem, nodeCount: number): number {
+    const type = item.type?.toLowerCase() ?? '';
+    let score = nodeCount;
+    if (type === 'selector' || type === 'select') score += 10000;
+    if (/节点|选择|代理|proxy|proxies|global|final|select/i.test(name)) score += 5000;
+    if (strategyTargetSet.has(name)) score -= 2000;
+    if (/urltest|url-test|fallback|load-balance|loadbalance/i.test(type)) score -= 2000;
+    return score;
+  }
+
+  function findCurrentSelector(proxies: Record<string, MihomoProxyItem>): MihomoProxyItem | undefined {
+    const managedSelector = proxies[selectorName];
+    if (managedSelector?.all?.length) {
+      return managedSelector;
+    }
+
+    for (const name of effectiveCurrentGroupNames) {
+      const item = proxies[name];
+      if (item?.all?.length) {
+        return item;
+      }
+    }
+
+    return findSelector(proxies)?.item;
   }
 
   function latestDelay(item: MihomoProxyItem | undefined): number | undefined {
     const delay = item?.history?.findLast((entry) => typeof entry.delay === 'number')?.delay;
-    return typeof delay === 'number' && delay > 0 ? delay : undefined;
+    return normalizeDelay(delay);
+  }
+
+  function cachedDelay(name: string, item: MihomoProxyItem | undefined): number | undefined {
+    return nodeDelayCache.get(name) ?? latestDelay(item);
+  }
+
+  function cachedTestState(name: string): ProxyNode['testState'] {
+    return nodeTestStateCache.get(name);
+  }
+
+  function normalizeDelay(delay: unknown): number | undefined {
+    return typeof delay === 'number' && delay > 0 && delay < delayTestTimeoutMs ? delay : undefined;
   }
 
   function resolveCurrentNode(proxies: Record<string, MihomoProxyItem>, selector: MihomoProxyItem | undefined) {
@@ -113,7 +206,7 @@ export function createMihomoApiClient(options: {
 
     const item = proxies[name];
     if (!item?.all?.length) {
-      return builtInProxyNames.has(name) ? undefined : name;
+      return builtInProxyNames.has(name) || isBlockedSelectableNodeName(name) ? undefined : name;
     }
 
     if (visited.has(name)) {
@@ -136,7 +229,7 @@ export function createMihomoApiClient(options: {
     const nodes: string[] = [];
     const seen = new Set<string>();
     const visit = (name: string) => {
-      if (seen.has(name) || builtInProxyNames.has(name) || isNoticeNodeName(name)) return;
+      if (seen.has(name) || builtInProxyNames.has(name)) return;
       seen.add(name);
 
       const item = proxies[name];
@@ -145,7 +238,7 @@ export function createMihomoApiClient(options: {
         return;
       }
 
-      if (!strategyTargetSet.has(name)) {
+      if (!strategyTargetSet.has(name) && !isBlockedSelectableNodeName(name)) {
         nodes.push(name);
       }
     };
@@ -154,8 +247,64 @@ export function createMihomoApiClient(options: {
     return nodes;
   }
 
-  function isNoticeNodeName(name: string): boolean {
-    return noticeNodeKeywords.some((keyword) => name.includes(keyword));
+  function collectAllSelectableNodes(proxies: Record<string, MihomoProxyItem>, preferredNames: string[]): string[] {
+    const nodes: string[] = [];
+    const seen = new Set<string>();
+    const add = (name: string) => {
+      if (seen.has(name) || builtInProxyNames.has(name) || strategyTargetSet.has(name)) return;
+      if (isBlockedSelectableNodeName(name)) return;
+      const item = proxies[name];
+      if (item?.all?.length) return;
+      seen.add(name);
+      nodes.push(name);
+    };
+
+    collectSelectableNodes(proxies, preferredNames).forEach(add);
+    for (const item of Object.values(proxies)) {
+      if (item.all?.length) {
+        collectSelectableNodes(proxies, item.all).forEach(add);
+      }
+    }
+    return nodes;
+  }
+
+  function collectProviderNodes(data: MihomoProvidersResponse): MihomoProviderNode[] {
+    const nodes: MihomoProviderNode[] = [];
+    const seen = new Set<string>();
+
+    for (const [provider, rawProvider] of Object.entries(data.providers ?? {})) {
+      if (provider === 'default' || !isRecord(rawProvider) || !Array.isArray(rawProvider.proxies)) {
+        continue;
+      }
+
+      for (const rawProxy of rawProvider.proxies) {
+        if (!isRecord(rawProxy) || typeof rawProxy.name !== 'string') {
+          continue;
+        }
+        const name = rawProxy.name;
+        if (seen.has(name) || builtInProxyNames.has(name) || strategyTargetSet.has(name)) {
+          continue;
+        }
+        if (isBlockedSelectableNodeName(name)) {
+          continue;
+        }
+        seen.add(name);
+        nodes.push({
+          provider,
+          name,
+          item: {
+            type: typeof rawProxy.type === 'string' ? rawProxy.type : undefined,
+            now: typeof rawProxy.now === 'string' ? rawProxy.now : undefined,
+            all: Array.isArray(rawProxy.all) ? rawProxy.all.filter((value): value is string => typeof value === 'string') : undefined,
+            history: Array.isArray(rawProxy.history)
+              ? rawProxy.history.filter((entry): entry is { delay?: number } => isRecord(entry))
+              : undefined
+          }
+        });
+      }
+    }
+
+    return nodes;
   }
 
   function inferStrategy(current: string): StrategyKey {
@@ -168,6 +317,10 @@ export function createMihomoApiClient(options: {
     selector: { name: string; item: MihomoProxyItem },
     name: string
   ): Array<{ group: string; name: string }> | null {
+    if (isBlockedSelectableNodeName(name)) {
+      return null;
+    }
+
     return resolveSelectionStepsForGroup(proxies, selector.name, name);
   }
 
@@ -215,7 +368,7 @@ export function createMihomoApiClient(options: {
         if (existing?.required) {
           continue;
         }
-        stepsByGroup.set(step.group, { ...step, required: false });
+        stepsByGroup.set(step.group, { ...step, required: requiredSyncedGroupNames.has(step.group) });
       }
     }
 
@@ -250,15 +403,14 @@ export function createMihomoApiClient(options: {
   }
 
   async function waitForSelectedNode(name: string): Promise<void> {
-    const deadline = Date.now() + 4000;
+    const deadline = Date.now() + 6000;
     let lastNode = '';
 
     while (Date.now() < deadline) {
       const data = await readProxies();
       const proxies = data.proxies ?? {};
-      const selector = findSelector(proxies)?.item;
-      lastNode = resolveCurrentNode(proxies, selector);
-      if (lastNode === name || selector?.now === name) {
+      lastNode = resolveCurrentNode(proxies, findCurrentSelector(proxies));
+      if (lastNode === name) {
         return;
       }
       await sleep(180);
@@ -267,24 +419,122 @@ export function createMihomoApiClient(options: {
     throw new Error(`mihomo node selection not applied: expected ${name}, got ${lastNode || 'unknown'}`);
   }
 
+  async function waitForSelectorChoice(group: string, name: string): Promise<void> {
+    const deadline = Date.now() + 6000;
+    let lastChoice = '';
+
+    while (Date.now() < deadline) {
+      const data = await readProxies();
+      const proxies = data.proxies ?? {};
+      lastChoice = proxies[group]?.now ?? '';
+      if (lastChoice === name) {
+        return;
+      }
+      await sleep(180);
+    }
+
+    throw new Error(`mihomo strategy selection not applied: expected ${name}, got ${lastChoice || 'unknown'}`);
+  }
+
   function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  function assertNotAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) {
+      throw new Error('node testing cancelled');
+    }
+  }
+
+  function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+    return Boolean(signal?.aborted) || (error instanceof Error && error.name === 'AbortError');
+  }
+
+  function pickFastestUsableNode(nodes: ProxyNode[], avoidNode?: string): ProxyNode | undefined {
+    const usable = nodes
+      .filter((node) => typeof node.delay === 'number')
+      .sort((left, right) => (left.delay ?? Number.MAX_SAFE_INTEGER) - (right.delay ?? Number.MAX_SAFE_INTEGER));
+    if (!usable.length) return undefined;
+
+    const candidates = avoidNode ? usable.filter((node) => node.name !== avoidNode) : usable;
+    const targetPool = candidates.length ? candidates : usable;
+    return targetPool.find((node) => isPreferredJapanNode(node.name)) ?? targetPool[0];
+  }
+
+  function isPreferredJapanNode(name: string): boolean {
+    return preferredJapanNodePatterns.some((pattern) => pattern.test(name));
+  }
+
+  async function applySelectionSteps(steps: Array<{ group: string; name: string }>): Promise<void> {
+    for (const step of steps) {
+      await request(`/proxies/${encodeURIComponent(step.group)}`, {
+        method: 'PUT',
+        headers: headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name: step.name })
+      });
+    }
+  }
+
+  async function requestNodeDelay(name: string, url: string, signal?: AbortSignal): Promise<number | undefined> {
+    const response = await request(
+      `/proxies/${encodeURIComponent(name)}/delay?timeout=${delayTestTimeoutMs}&url=${encodeURIComponent(url)}`,
+      {
+        headers: headers(),
+        signal
+      }
+    );
+    const data = (await response.json()) as MihomoDelayResponse;
+    return normalizeDelay(data.delay);
+  }
+
+  async function requestProviderNodeDelay(
+    provider: string,
+    name: string,
+    url: string,
+    signal?: AbortSignal
+  ): Promise<number | undefined> {
+    const response = await request(
+      `/providers/proxies/${encodeURIComponent(provider)}/${encodeURIComponent(name)}/healthcheck?timeout=${delayTestTimeoutMs}&url=${encodeURIComponent(url)}`,
+      {
+        method: 'GET',
+        headers: headers(),
+        signal
+      }
+    );
+    const data = (await response.json()) as MihomoDelayResponse;
+    return normalizeDelay(data.delay);
+  }
+
   return {
     async listNodes() {
-      const data = await readProxies();
+      const [data, providers] = await Promise.all([
+        readProxies(),
+        readProviders().catch(() => ({ providers: {} } as MihomoProvidersResponse))
+      ]);
       const proxies = data.proxies ?? {};
       const selector = findSelector(proxies)?.item;
       const all = selector?.all ?? [];
-      const selected = selector?.now ?? strategyTargets.auto;
-      const currentNode = resolveCurrentNode(proxies, selector);
+      const currentNode = resolveCurrentNode(proxies, findCurrentSelector(proxies));
+      const providerNodes = collectProviderNodes(providers);
+      const providerItems = new Map(providerNodes.map((node) => [node.name, node.item]));
+      nodeProviderCache.clear();
+      providerNodes.forEach((node) => nodeProviderCache.set(node.name, node.provider));
+      const nodeNames = collectAllSelectableNodes(proxies, all);
+      for (const providerNode of providerNodes) {
+        if (!nodeNames.includes(providerNode.name)) {
+          nodeNames.push(providerNode.name);
+        }
+      }
 
-      return collectSelectableNodes(proxies, all).map((name) => ({
-        name,
-        delay: latestDelay(proxies[name]),
-        active: name === selected || name === currentNode
-      }));
+      return nodeNames.map((name) => {
+        const delay = cachedDelay(name, proxies[name] ?? providerItems.get(name));
+        return {
+          name,
+          delay,
+          active: name === currentNode,
+          testState: cachedTestState(name)
+        };
+      });
     },
     async listStrategies() {
       const data = await readProxies();
@@ -305,9 +555,9 @@ export function createMihomoApiClient(options: {
     async getCurrentNode() {
       const data = await readProxies();
       const proxies = data.proxies ?? {};
-      return resolveCurrentNode(proxies, findSelector(proxies)?.item);
+      return resolveCurrentNode(proxies, findCurrentSelector(proxies));
     },
-    async getRuntimeStats() {
+    async getRuntimeStats(options = {}) {
       const response = await request('/connections', {
         headers: headers()
       });
@@ -315,7 +565,8 @@ export function createMihomoApiClient(options: {
       return {
         activeConnections: data.connections?.length ?? 0,
         uploadTotal: data.uploadTotal ?? 0,
-        downloadTotal: data.downloadTotal ?? 0
+        downloadTotal: data.downloadTotal ?? 0,
+        connections: options.includeConnections ? data.connections ?? [] : undefined
       };
     },
     async selectNode(name: string) {
@@ -345,9 +596,46 @@ export function createMihomoApiClient(options: {
       }
       await waitForSelectedNode(name);
     },
+    async selectBestUsableNodeForStrategy(strategy, options = {}) {
+      await this.testAllNodes({ signal: options.signal });
+      const bestNode = pickFastestUsableNode(await this.listNodes(), options.avoidNode);
+      if (!bestNode) {
+        return undefined;
+      }
+
+      const data = await readProxies();
+      const proxies = data.proxies ?? {};
+      const targetGroup = strategyTargets[strategy];
+      const strategySteps = resolveSelectionStepsForGroup(proxies, targetGroup, bestNode.name);
+      const selector = findSelector(proxies);
+      if (!strategySteps || !selector?.item.all?.includes(targetGroup)) {
+        await this.selectNode(bestNode.name);
+        return bestNode.name;
+      }
+
+      await applySelectionSteps(strategySteps);
+      await request(`/proxies/${encodeURIComponent(selector.name)}`, {
+        method: 'PUT',
+        headers: headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name: targetGroup })
+      });
+      await waitForSelectedNode(bestNode.name);
+      return bestNode.name;
+    },
     async selectStrategy(strategy: StrategyKey) {
       if (strategy === 'manual') return;
-      await this.selectNode(strategyTargets[strategy]);
+      const data = await readProxies();
+      const selector = findSelector(data.proxies ?? {});
+      if (!selector) {
+        throw new Error('mihomo selector missing');
+      }
+      const target = strategyTargets[strategy];
+      await request(`/proxies/${encodeURIComponent(selector.name)}`, {
+        method: 'PUT',
+        headers: headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name: target })
+      });
+      await waitForSelectorChoice(selector.name, target);
     },
     async setMode(mode: MihomoMode) {
       await request('/configs', {
@@ -356,28 +644,89 @@ export function createMihomoApiClient(options: {
         body: JSON.stringify({ mode })
       });
     },
-    async testNodeDelay(name: string) {
-      const response = await request(
-        `/proxies/${encodeURIComponent(name)}/delay?timeout=5000&url=${encodeURIComponent(delayTestUrl)}`,
-        {
-          headers: headers()
-        }
+    async testNodeDelay(name: string, options = {}) {
+      assertNotAborted(options.signal);
+      if (isBlockedSelectableNodeName(name)) {
+        nodeDelayCache.delete(name);
+        nodeTestStateCache.set(name, 'failed');
+        return undefined;
+      }
+
+      nodeTestStateCache.set(name, 'testing');
+      const provider = nodeProviderCache.get(name);
+      const results = await Promise.all(
+        delayTestUrls.map(async (url) => {
+          try {
+            return await requestNodeDelay(name, url, options.signal);
+          } catch (error) {
+            if (isAbortError(error, options.signal)) {
+              throw error;
+            }
+            if (provider) {
+              return requestProviderNodeDelay(provider, name, url, options.signal).catch((providerError) => {
+                if (isAbortError(providerError, options.signal)) {
+                  throw providerError;
+                }
+                return undefined;
+              });
+            }
+            return undefined;
+          }
+        })
       );
-      const data = (await response.json()) as MihomoDelayResponse;
-      return data.delay;
+
+      const delays = results.filter((delay): delay is number => typeof delay === 'number');
+      if (!delays.length) {
+        nodeDelayCache.delete(name);
+        nodeTestStateCache.set(name, 'failed');
+        return undefined;
+      }
+
+      const delay = Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length);
+      nodeDelayCache.set(name, delay);
+      nodeTestStateCache.set(name, 'tested');
+      return delay;
     },
-    async testAllNodes() {
+    async testAllNodes(options = {}) {
       const nodes = await this.listNodes();
       const queue = [...nodes];
-      const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
-        while (queue.length) {
+      const workers = Array.from({ length: Math.min(delayTestConcurrency, queue.length) }, async () => {
+        while (queue.length && !options.signal?.aborted) {
           const node = queue.shift();
           if (node) {
-            await this.testNodeDelay(node.name).catch(() => undefined);
+            let delay: number | undefined;
+            try {
+              nodeTestStateCache.set(node.name, 'testing');
+              await options.onNodeTested?.({ ...node, testState: 'testing' });
+              delay = await this.testNodeDelay(node.name, { signal: options.signal });
+            } catch (error) {
+              if (isAbortError(error, options.signal)) {
+                throw error;
+              }
+            } finally {
+              if (!options.signal?.aborted) {
+                await options.onNodeTested?.({
+                  ...node,
+                  delay,
+                  testState: typeof delay === 'number' ? 'tested' : 'failed'
+                });
+              }
+            }
           }
         }
       });
       await Promise.all(workers);
+      assertNotAborted(options.signal);
+    },
+    async selectBestUsableNode(options = {}) {
+      await this.testAllNodes({ signal: options.signal });
+      const bestNode = pickFastestUsableNode(await this.listNodes(), options.avoidNode);
+      if (!bestNode) {
+        return undefined;
+      }
+
+      await this.selectNode(bestNode.name);
+      return bestNode.name;
     },
     async closeConnections() {
       await request('/connections', {
@@ -400,6 +749,9 @@ export function createMihomoApiClient(options: {
         providerNames = [providerName];
       }
 
+      nodeDelayCache.clear();
+      nodeTestStateCache.clear();
+      nodeProviderCache.clear();
       await Promise.all(
         providerNames.map((name) =>
           request(`/providers/proxies/${encodeURIComponent(name)}`, {
