@@ -2,7 +2,7 @@ export type AppStatus = 'stopped' | 'running' | 'failed';
 export type AppBuildChannel = 'standard' | 'in' | 'no';
 export type MihomoMode = 'rule' | 'global' | 'direct';
 export type StrategyKey = 'manual' | 'auto' | 'fallback' | 'load-balance' | 'direct';
-export type RuleProfile = 'smart' | 'global' | 'subscription';
+export type RuleProfile = 'ruleset' | 'smart' | 'global' | 'subscription';
 export type RemoteControlConfig = {
   version: number;
   enabled: boolean;
@@ -137,6 +137,12 @@ export type ConnectivityServiceKey =
   | 'gemini'
   | 'flow'
   | 'pixverse'
+  | 'github'
+  | 'microsoftStore'
+  | 'discord'
+  | 'turnstile'
+  | 'recaptcha'
+  | 'hcaptcha'
   | 'google'
   | 'cloudflare';
 

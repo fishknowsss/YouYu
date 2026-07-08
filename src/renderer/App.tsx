@@ -27,7 +27,7 @@ const emptySnapshot: AppSnapshot = {
   ],
   mode: 'rule',
   strategy: 'auto',
-  ruleProfile: 'subscription',
+  ruleProfile: 'ruleset',
   features: {
     systemProxyEnabled: true,
     dnsEnhanced: true,
@@ -66,7 +66,7 @@ const emptySnapshot: AppSnapshot = {
 const easyStartSettings: AppSettingsInput = {
   mode: 'rule',
   strategy: 'auto',
-  ruleProfile: 'subscription',
+  ruleProfile: 'ruleset',
   systemProxyEnabled: true,
   dnsEnhanced: true,
   snifferEnabled: true,

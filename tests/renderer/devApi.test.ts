@@ -9,7 +9,7 @@ describe('createDevYouYuApi', () => {
       status: 'stopped',
       currentNode: '自动选择',
       subscriptionUrl: '',
-      ruleProfile: 'subscription',
+      ruleProfile: 'ruleset',
       features: {
         dnsEnhanced: true,
         tunEnabled: false,

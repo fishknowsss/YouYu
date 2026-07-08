@@ -3,7 +3,7 @@ import { parse } from 'yaml';
 import { buildMihomoConfig } from '../../src/main/mihomo/config';
 
 describe('buildMihomoConfig', () => {
-  it('builds a local-only mihomo config with Steam priority rules and direct LAN ranges', () => {
+  it('builds a ruleset mihomo config with service groups and local direct safeguards', () => {
     const yamlText = buildMihomoConfig({
       subscriptionUrl: 'https://example.com/sub?token=secret',
       secret: 'local-secret'
@@ -28,7 +28,15 @@ describe('buildMihomoConfig', () => {
     expect(config['proxy-providers'].airport['exclude-filter']).toContain('自动选择');
     expect(config['proxy-providers'].airport['exclude-filter']).toContain('全球拦截');
     expect(config['proxy-providers'].airport['health-check'].interval).toBe(1800);
-    expect(config['proxy-groups'].map((group: { name: string }) => group.name)).toHaveLength(4);
+    expect(config['rule-providers']).toMatchObject({
+      OpenAI: expect.objectContaining({ behavior: 'classical' }),
+      Discord: expect.objectContaining({ behavior: 'classical' }),
+      GitHub: expect.objectContaining({ behavior: 'classical' }),
+      Microsoft: expect.objectContaining({ behavior: 'classical' })
+    });
+    expect(config['proxy-groups'].map((group: { name: string }) => group.name)).toEqual(
+      expect.arrayContaining(['节点选择', '自动选择', '故障转移', '负载均衡', 'AI', 'Discord', '开发平台', '验证码'])
+    );
     expect(config['proxy-groups'][1]).toMatchObject({
       type: 'url-test',
       interval: 1800,
@@ -42,23 +50,22 @@ describe('buildMihomoConfig', () => {
       expect.arrayContaining([
         `PROCESS-NAME,Steam.exe,${selector}`,
         `PROCESS-NAME,steamwebhelper.exe,${selector}`,
+        `DOMAIN-SUFFIX,openai.com,${selector}`,
         `DOMAIN-SUFFIX,flow.google.com,${selector}`,
         `DOMAIN-SUFFIX,steampowered.com,${selector}`,
         `DOMAIN-SUFFIX,api.steampowered.com,${selector}`,
         `DOMAIN-SUFFIX,steamcommunity.com,${selector}`,
         `DOMAIN-SUFFIX,steamcdn-a.akamaihd.net,${selector}`,
         `DOMAIN-SUFFIX,steamcloud-ugc.storage.googleapis.com,${selector}`,
-        'DOMAIN-SUFFIX,cn,DIRECT',
-        'DOMAIN-SUFFIX,feishu.cn,DIRECT',
-        'DOMAIN-SUFFIX,dingtalk.com,DIRECT',
-        'DOMAIN-SUFFIX,douyin.com,DIRECT',
-        'DOMAIN-SUFFIX,weixin.qq.com,DIRECT',
-        'DOMAIN-SUFFIX,xiaohongshu.com,DIRECT',
+        'DOMAIN-SUFFIX,apps.microsoft.com,DIRECT',
         'PROCESS-NAME,WeChat.exe,DIRECT',
         'PROCESS-NAME,DingTalk.exe,DIRECT',
-        'IP-CIDR,100.64.0.0/10,DIRECT,no-resolve',
-        'IP-CIDR,224.0.0.0/4,DIRECT,no-resolve',
-        'IP-CIDR,255.255.255.255/32,DIRECT,no-resolve',
+        'RULE-SET,OpenAI,AI',
+        'RULE-SET,Discord,Discord',
+        'RULE-SET,GitHub,开发平台',
+        'RULE-SET,Microsoft,微软服务',
+        'RULE-SET,China,DIRECT',
+        'GEOIP,CN,DIRECT,no-resolve',
         `MATCH,${selector}`
       ])
     );
@@ -107,12 +114,19 @@ describe('buildMihomoConfig', () => {
     expect(config.dns['fallback-filter']).toBeUndefined();
     expect(config.dns['fake-ip-filter']).toEqual(
       expect.arrayContaining([
+        '*.msftconnecttest.com',
         '*.steampowered.com',
         'steamcdn-a.akamaihd.net',
         'steamcloud-ugc.storage.googleapis.com',
         'stun.*.*'
       ])
     );
+    expect(config.dns.nameserver).toEqual(['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query']);
+    expect(config.dns['proxy-server-nameserver']).toEqual([
+      'https://dns.alidns.com/dns-query',
+      'https://doh.pub/dns-query'
+    ]);
+    expect(config.dns['respect-rules']).toBe(true);
   });
 
   it('enables TUN with strict routing when requested', () => {
@@ -365,6 +379,53 @@ rules:
     expect(config.rules).toContain('MATCH,DIRECT');
     expect(config.rules).not.toContain('GEOSITE,cn,DIRECT');
     expect(config.rules).not.toContain('GEOIP,CN,DIRECT');
+  });
+
+  it('uses YouYu rulesets for full airport configs by default without removing airport nodes', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/sub',
+      secret: 'local-secret',
+      subscriptionConfigText: `
+proxies:
+  - name: HK 01
+    type: ss
+    server: 127.0.0.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - HK 01
+rules:
+  - DOMAIN-SUFFIX,example.com,DIRECT
+  - MATCH,DIRECT
+`
+    });
+    const config = parse(yamlText);
+
+    expect(config.proxies.map((proxy: { name: string }) => proxy.name)).toEqual(['HK 01']);
+    expect(config['proxy-groups'].map((group: { name: string }) => group.name)).toEqual(
+      expect.arrayContaining(['PROXY', 'AI', 'Discord', '开发平台', '验证码', '微软服务'])
+    );
+    expect(config['rule-providers']).toMatchObject({
+      OpenAI: expect.objectContaining({ proxy: 'PROXY' }),
+      GitHub: expect.objectContaining({ proxy: 'PROXY' }),
+      Discord: expect.objectContaining({ proxy: 'PROXY' })
+    });
+    expect(config.rules).toEqual(
+      expect.arrayContaining([
+        'PROCESS-NAME,ToDesk.exe,DIRECT',
+        'RULE-SET,OpenAI,AI',
+        'RULE-SET,Discord,Discord',
+        'RULE-SET,GitHub,开发平台',
+        'RULE-SET,China,DIRECT',
+        'MATCH,PROXY'
+      ])
+    );
+    expect(config.rules).not.toContain('DOMAIN-SUFFIX,example.com,DIRECT');
+    expect(config.rules).not.toContain('MATCH,DIRECT');
   });
 
   it('promotes subscription direct rules before subscription proxy rules', () => {

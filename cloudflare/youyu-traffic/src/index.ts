@@ -353,7 +353,7 @@ function adminPageV3(): Response {
     .control-grid { display: grid; grid-template-columns: 112px 142px 142px 124px; gap: 10px; }
     .node-line { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; }
     .rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-    .admin-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 380px); align-items: start; gap: 12px; }
+    .admin-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(380px, 460px); align-items: start; gap: 12px; }
     .side-stack { min-width: 0; max-height: calc(100dvh - 36px); display: grid; gap: 12px; position: sticky; top: 18px; overflow: auto; scrollbar-gutter: stable; }
     .side-placeholder { display: grid; gap: 8px; min-height: 104px; align-content: center; }
     .side-stack .control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -453,7 +453,7 @@ function adminPageV3(): Response {
         <summary>高级</summary>
         <div class="control-grid">
         <label>状态<select id="globalEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
-        <label>规则<select id="globalRuleProfile"><option value="">不覆盖</option><option value="subscription">机场配置</option><option value="smart">智能规则</option><option value="global">全局代理</option></select></label>
+        <label>规则<select id="globalRuleProfile"><option value="">不覆盖</option><option value="ruleset">智能规则</option><option value="subscription">兼容机场</option><option value="smart">本地规则</option><option value="global">全局代理</option></select></label>
         <label>策略<select id="globalStrategy"><option value="">不覆盖</option><option value="auto">自动</option><option value="fallback">故障</option><option value="load-balance">均衡</option><option value="direct">直连</option></select></label>
         <label>阈值 MB<input id="globalThreshold" type="number" min="1" step="1" /></label>
       </div>
@@ -490,7 +490,7 @@ function adminPageV3(): Response {
             <summary>高级</summary>
             <div class="control-grid">
             <label>状态<select id="userEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
-            <label>规则<select id="userRuleProfile"><option value="">不覆盖</option><option value="subscription">机场配置</option><option value="smart">智能规则</option><option value="global">全局代理</option></select></label>
+            <label>规则<select id="userRuleProfile"><option value="">不覆盖</option><option value="ruleset">智能规则</option><option value="subscription">兼容机场</option><option value="smart">本地规则</option><option value="global">全局代理</option></select></label>
             <label>策略<select id="userStrategy"><option value="">不覆盖</option><option value="auto">自动</option><option value="fallback">故障</option><option value="load-balance">均衡</option><option value="direct">直连</option></select></label>
             <label>启动选择<select id="userNode"></select></label>
           </div>
@@ -983,7 +983,7 @@ function adminPageV2(): Response {
       <div class="toolbar"><h2>远程配置</h2><button id="saveGlobal">保存</button></div>
       <div class="grid">
         <label>启用<select id="globalEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
-        <label>规则<select id="globalRuleProfile"><option value="">不覆盖</option><option value="subscription">机场配置</option><option value="smart">智能规则</option><option value="global">全局代理</option></select></label>
+        <label>规则<select id="globalRuleProfile"><option value="">不覆盖</option><option value="ruleset">智能规则</option><option value="subscription">兼容机场</option><option value="smart">本地规则</option><option value="global">全局代理</option></select></label>
         <label>策略<select id="globalStrategy"><option value="">不覆盖</option><option value="auto">自动</option><option value="fallback">故障</option><option value="load-balance">均衡</option><option value="direct">直连</option></select></label>
         <label>阈值 MB<input id="globalThreshold" type="number" min="1" step="1" /></label>
       </div>
@@ -998,7 +998,7 @@ function adminPageV2(): Response {
       <div class="toolbar"><h2 id="userConfigTitle">用户配置</h2><div class="row"><button class="secondary" id="resetUserConfig">重置</button><button id="saveUserConfig">保存</button></div></div>
       <div class="grid">
         <label>启用<select id="userEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
-        <label>规则<select id="userRuleProfile"><option value="">不覆盖</option><option value="subscription">机场配置</option><option value="smart">智能规则</option><option value="global">全局代理</option></select></label>
+        <label>规则<select id="userRuleProfile"><option value="">不覆盖</option><option value="ruleset">智能规则</option><option value="subscription">兼容机场</option><option value="smart">本地规则</option><option value="global">全局代理</option></select></label>
         <label>策略<select id="userStrategy"><option value="">不覆盖</option><option value="auto">自动</option><option value="fallback">故障</option><option value="load-balance">均衡</option><option value="direct">直连</option></select></label>
         <label>节点<input id="userNode" placeholder="留空不覆盖" /></label>
       </div>
@@ -1617,7 +1617,7 @@ function normalizeRemoteConfigInput(
   input: RemoteConfigInput,
   fallback: RemoteControlConfig
 ): RemoteControlConfig {
-  const ruleProfile = normalizeChoice(input.ruleProfile, ['smart', 'global', 'subscription']) ?? fallback.ruleProfile;
+  const ruleProfile = normalizeChoice(input.ruleProfile, ['ruleset', 'smart', 'global', 'subscription']) ?? fallback.ruleProfile;
   const preferredStrategy =
     normalizeChoice(input.preferredStrategy, ['manual', 'auto', 'fallback', 'load-balance', 'direct']) ??
     fallback.preferredStrategy;
@@ -1653,7 +1653,7 @@ function normalizeUserRemoteConfigInput(input: RemoteConfigInput): Partial<Remot
       input.subscriptionUrl === null || typeof input.subscriptionUrl === 'undefined'
         ? undefined
         : normalizeSubscriptionUrl(input.subscriptionUrl),
-    ruleProfile: normalizeChoice(input.ruleProfile, ['smart', 'global', 'subscription']),
+    ruleProfile: normalizeChoice(input.ruleProfile, ['ruleset', 'smart', 'global', 'subscription']),
     preferredNode: normalizeText(input.preferredNode, 120) ?? undefined,
     preferredStrategy: normalizeChoice(input.preferredStrategy, ['manual', 'auto', 'fallback', 'load-balance', 'direct']),
     directRules: input.directRules === null || typeof input.directRules === 'undefined' ? undefined : parseRuleList(input.directRules),

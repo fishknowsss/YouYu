@@ -116,6 +116,7 @@ let runtimePorts = {
 let activeNodeTestController: AbortController | undefined;
 let lastError: string | undefined;
 const appLogs: string[] = [];
+const foldedMihomoDialWarnings = new Map<string, { count: number; lastAt: number }>();
 const petFeatureEnabled = !__YOUYU_DISABLE_PET__;
 const petWindowSize = {
   width: 190,
@@ -251,11 +252,55 @@ function readPackageVersion(): string {
 }
 
 function appendLog(message: string) {
-  const line = `${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ${message}`;
+  const normalizedMessage = normalizeDiagnosticLog(message);
+  if (!normalizedMessage) return;
+
+  const line = `${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ${normalizedMessage}`;
   appLogs.push(line);
   if (appLogs.length > 200) {
     appLogs.splice(0, appLogs.length - 200);
   }
+}
+
+function normalizeDiagnosticLog(message: string): string | undefined {
+  const warning = parseMihomoDialWarning(message);
+  if (!warning) return message;
+
+  const now = Date.now();
+  const previous = foldedMihomoDialWarnings.get(warning.signature);
+  if (previous && now - previous.lastAt < 120000) {
+    previous.count += 1;
+    previous.lastAt = now;
+    return undefined;
+  }
+
+  const foldedText = previous?.count ? `，已折叠 ${previous.count} 条` : '';
+  foldedMihomoDialWarnings.set(warning.signature, { count: 0, lastAt: now });
+  trimFoldedMihomoDialWarnings();
+  return `连接警告：${warning.target} 访问失败（${warning.network}${foldedText}）`;
+}
+
+function parseMihomoDialWarning(
+  message: string
+): { signature: string; target: string; network: string } | undefined {
+  if (!message.includes('[mihomo]') || !/level=warning/i.test(message) || !/\[(?:TCP|UDP)\]\s+dial/i.test(message)) {
+    return undefined;
+  }
+
+  const network = message.match(/\[(TCP|UDP)\]\s+dial/i)?.[1]?.toUpperCase() ?? '连接';
+  const rulePayload = message.match(/match\s+([A-Za-z-]+\/[^")\s]+)/i)?.[1];
+  const target = rulePayload?.split('/').pop()?.trim() || message.match(/dial\s+([^ ]+)/i)?.[1] || '外部站点';
+  return {
+    signature: `${network}:${rulePayload ?? target}`.toLowerCase(),
+    target,
+    network
+  };
+}
+
+function trimFoldedMihomoDialWarnings() {
+  if (foldedMihomoDialWarnings.size <= 40) return;
+  const oldest = [...foldedMihomoDialWarnings.entries()].sort((a, b) => a[1].lastAt - b[1].lastAt)[0]?.[0];
+  if (oldest) foldedMihomoDialWarnings.delete(oldest);
 }
 
 function formatError(error: unknown): string {

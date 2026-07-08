@@ -1,5 +1,14 @@
 import YAML from 'yaml';
 import type { MihomoMode, RemoteControlConfig, RuleProfile, StrategyKey } from '../../shared/ipc';
+import {
+  buildYouYuCriticalProxyRules,
+  buildYouYuPolicyGroups,
+  buildYouYuRuleProviders,
+  buildYouYuRuleSetRules,
+  isYouYuCriticalProxyDomain,
+  mergeProxyGroupsByName,
+  pickExistingGroupRefs
+} from './rulesets';
 
 const selectorName = '节点选择';
 const preferredDefaultNodeKeywords = ['台湾', '08', '家宽'];
@@ -73,6 +82,12 @@ const carrierNoticeExcludeFilter =
 const noticeNodeExcludeFilter =
   `(?i)(剩余流量|剩余|订阅|官网|官网地址|订阅地址|订阅链接|距离下次重置|重置剩余|套餐到期|失去支持|更新.*客户端|丛雨云|全部超时|congyu\\.org|全球直连|节点选择|自动选择|全球拦截|traffic|remaining|subscription|subscribe|official|address|expire|reset|${carrierTransitNoticeExcludeFilter}|${carrierNoticeExcludeFilter})`;
 const aiFlowDomains = [
+  'openai.com',
+  'chatgpt.com',
+  'oaistatic.com',
+  'oaiusercontent.com',
+  'anthropic.com',
+  'claude.ai',
   'flow.google.com',
   'labs.google',
   'google.com',
@@ -86,6 +101,17 @@ const aiFlowDomains = [
   'withgoogle.com',
   'firebaseapp.com',
   'firebaseio.com'
+];
+const microsoftStoreDirectDomains = [
+  'apps.microsoft.com',
+  'storeedgefd.dsx.mp.microsoft.com',
+  'displaycatalog.mp.microsoft.com',
+  'purchase.mp.microsoft.com',
+  'dl.delivery.mp.microsoft.com',
+  'tlu.dl.delivery.mp.microsoft.com',
+  'login.live.com',
+  'windowsupdate.com',
+  'update.microsoft.com'
 ];
 const steamAccelerationDomains = [
   'steampowered.com',
@@ -318,6 +344,8 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
     }
   }
 
+  const ruleProfile = input.ruleProfile ?? 'ruleset';
+  const useRuleSet = ruleProfile === 'ruleset';
   const config = {
     ...buildRuntimeOptions(input),
     'proxy-providers': {
@@ -336,41 +364,17 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
         }
       }
     },
-    'proxy-groups': [
-      {
-        name: '节点选择',
-        type: 'select',
-        use: ['airport'],
-        proxies: ['自动选择', '故障转移', '负载均衡', 'DIRECT']
-      },
-      {
-        name: '自动选择',
-        type: 'url-test',
-        use: ['airport'],
-        url: 'https://www.gstatic.com/generate_204',
-        interval: nodeHealthCheckIntervalSeconds,
-        tolerance: autoSelectToleranceMs,
-        lazy: true
-      },
-      {
-        name: '故障转移',
-        type: 'fallback',
-        use: ['airport'],
-        url: 'https://www.gstatic.com/generate_204',
-        interval: nodeHealthCheckIntervalSeconds,
-        lazy: true
-      },
-      {
-        name: '负载均衡',
-        type: 'load-balance',
-        strategy: 'consistent-hashing',
-        use: ['airport'],
-        url: 'https://www.gstatic.com/generate_204',
-        interval: nodeHealthCheckIntervalSeconds,
-        lazy: true
-      }
-    ],
-    rules: buildManagedRules(input.ruleProfile ?? 'subscription', selectorName, input.remoteConfig)
+    ...(useRuleSet ? { 'rule-providers': buildYouYuRuleProviders(selectorName) } : {}),
+    'proxy-groups': useRuleSet
+      ? [...buildProviderProxyGroups(), ...buildYouYuPolicyGroups({ proxyTarget: selectorName })]
+      : buildProviderProxyGroups(),
+    rules: useRuleSet
+      ? dedupeRules([
+          ...buildRulePrefix(selectorName, input.remoteConfig),
+          ...buildPriorityProxyRules(selectorName),
+          ...buildYouYuRuleSetRules({ proxyTarget: selectorName })
+        ])
+      : buildManagedRules(ruleProfile, selectorName, input.remoteConfig)
   };
 
   return YAML.stringify(config);
@@ -400,43 +404,22 @@ function buildInlineSubscriptionConfig(input: MihomoConfigInput): string | null 
     }
     const orderedProxyNames = orderProxyNames(proxyNames);
 
+    const ruleProfile = input.ruleProfile ?? 'ruleset';
+    const useRuleSet = ruleProfile === 'ruleset';
     const config = {
       ...buildRuntimeOptions(input),
       proxies: validProxies,
-      'proxy-groups': [
-        {
-          name: '节点选择',
-          type: 'select',
-          proxies: ['自动选择', orderedProxyNames[0], '故障转移', '负载均衡', 'DIRECT', ...orderedProxyNames.slice(1)]
-        },
-        {
-          name: '自动选择',
-          type: 'url-test',
-          proxies: orderedProxyNames,
-          url: 'https://www.gstatic.com/generate_204',
-          interval: nodeHealthCheckIntervalSeconds,
-          tolerance: autoSelectToleranceMs,
-          lazy: true
-        },
-        {
-          name: '故障转移',
-          type: 'fallback',
-          proxies: orderedProxyNames,
-          url: 'https://www.gstatic.com/generate_204',
-          interval: nodeHealthCheckIntervalSeconds,
-          lazy: true
-        },
-        {
-          name: '负载均衡',
-          type: 'load-balance',
-          proxies: orderedProxyNames,
-          url: 'https://www.gstatic.com/generate_204',
-          interval: nodeHealthCheckIntervalSeconds,
-          strategy: 'consistent-hashing',
-          lazy: true
-        }
-      ],
-      rules: buildManagedRules(input.ruleProfile ?? 'subscription', selectorName, input.remoteConfig)
+      ...(useRuleSet ? { 'rule-providers': buildYouYuRuleProviders(selectorName) } : {}),
+      'proxy-groups': useRuleSet
+        ? [...buildInlineProxyGroups(orderedProxyNames), ...buildYouYuPolicyGroups({ proxyTarget: selectorName })]
+        : buildInlineProxyGroups(orderedProxyNames),
+      rules: useRuleSet
+        ? dedupeRules([
+            ...buildRulePrefix(selectorName, input.remoteConfig),
+            ...buildPriorityProxyRules(selectorName),
+            ...buildYouYuRuleSetRules({ proxyTarget: selectorName })
+          ])
+        : buildManagedRules(ruleProfile, selectorName, input.remoteConfig)
     };
 
     return YAML.stringify(config);
@@ -501,6 +484,86 @@ export const strategyLabels: Record<StrategyKey, string> = {
   direct: '直连'
 };
 
+function buildProviderProxyGroups() {
+  return [
+    {
+      name: selectorName,
+      type: 'select',
+      use: ['airport'],
+      proxies: [strategyTargets.auto, strategyTargets.fallback, strategyTargets['load-balance'], strategyTargets.direct]
+    },
+    {
+      name: strategyTargets.auto,
+      type: 'url-test',
+      use: ['airport'],
+      url: 'https://www.gstatic.com/generate_204',
+      interval: nodeHealthCheckIntervalSeconds,
+      tolerance: autoSelectToleranceMs,
+      lazy: true
+    },
+    {
+      name: strategyTargets.fallback,
+      type: 'fallback',
+      use: ['airport'],
+      url: 'https://www.gstatic.com/generate_204',
+      interval: nodeHealthCheckIntervalSeconds,
+      lazy: true
+    },
+    {
+      name: strategyTargets['load-balance'],
+      type: 'load-balance',
+      strategy: 'consistent-hashing',
+      use: ['airport'],
+      url: 'https://www.gstatic.com/generate_204',
+      interval: nodeHealthCheckIntervalSeconds,
+      lazy: true
+    }
+  ];
+}
+
+function buildInlineProxyGroups(orderedProxyNames: string[]) {
+  return [
+    {
+      name: selectorName,
+      type: 'select',
+      proxies: [
+        strategyTargets.auto,
+        orderedProxyNames[0],
+        strategyTargets.fallback,
+        strategyTargets['load-balance'],
+        strategyTargets.direct,
+        ...orderedProxyNames.slice(1)
+      ]
+    },
+    {
+      name: strategyTargets.auto,
+      type: 'url-test',
+      proxies: orderedProxyNames,
+      url: 'https://www.gstatic.com/generate_204',
+      interval: nodeHealthCheckIntervalSeconds,
+      tolerance: autoSelectToleranceMs,
+      lazy: true
+    },
+    {
+      name: strategyTargets.fallback,
+      type: 'fallback',
+      proxies: orderedProxyNames,
+      url: 'https://www.gstatic.com/generate_204',
+      interval: nodeHealthCheckIntervalSeconds,
+      lazy: true
+    },
+    {
+      name: strategyTargets['load-balance'],
+      type: 'load-balance',
+      proxies: orderedProxyNames,
+      url: 'https://www.gstatic.com/generate_204',
+      interval: nodeHealthCheckIntervalSeconds,
+      strategy: 'consistent-hashing',
+      lazy: true
+    }
+  ];
+}
+
 function buildRuntimeOptions(input: MihomoConfigInput) {
   const options: Record<string, unknown> = {
     'mixed-port': input.mixedPort ?? 7890,
@@ -536,10 +599,18 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
         'localhost.ptlogin2.qq.com',
         'dns.msftncsi.com',
         'www.msftconnecttest.com',
+        '*.msftconnecttest.com',
+        '*.msftncsi.com',
+        '*.xboxlive.com',
+        '*.xboxservices.com',
         ...gamingFakeIpFilterDomains
       ],
       'default-nameserver': ['223.5.5.5', '119.29.29.29'],
-      nameserver: ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query', '1.1.1.1']
+      nameserver: ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
+      'direct-nameserver': ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
+      'proxy-server-nameserver': ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
+      'direct-nameserver-follow-policy': false,
+      'respect-rules': true
     };
   }
 
@@ -616,13 +687,29 @@ function buildSubscriptionConfig(input: MihomoConfigInput): string | null {
     sanitizeDnsConfig(merged);
     sanitizeSubscriptionNoticeNodes(merged);
 
+    const ruleProfile = input.ruleProfile ?? 'ruleset';
     const proxyTarget = findPrimaryProxyTarget(merged) ?? selectorName;
-    merged.rules = buildRulesForFullSubscription(
-      input.ruleProfile ?? 'subscription',
-      merged.rules,
-      proxyTarget,
-      input.remoteConfig
-    );
+    if (ruleProfile === 'ruleset') {
+      const existingRuleProviders = isRecord(merged['rule-providers']) ? merged['rule-providers'] : {};
+      merged['rule-providers'] = {
+        ...existingRuleProviders,
+        ...buildYouYuRuleProviders(proxyTarget)
+      };
+      merged['proxy-groups'] = mergeProxyGroupsByName(
+        merged['proxy-groups'],
+        buildYouYuPolicyGroups({
+          proxyTarget,
+          generatedBaseGroupRefs: pickExistingGroupRefs(merged['proxy-groups'])
+        })
+      );
+      merged.rules = dedupeRules([
+        ...buildRulePrefix(proxyTarget, input.remoteConfig),
+        ...buildPriorityProxyRules(proxyTarget),
+        ...buildYouYuRuleSetRules({ proxyTarget })
+      ]);
+    } else {
+      merged.rules = buildRulesForFullSubscription(ruleProfile, merged.rules, proxyTarget, input.remoteConfig);
+    }
 
     return YAML.stringify(merged);
   } catch {
@@ -748,6 +835,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function buildPriorityProxyRules(proxyTarget: string): string[] {
   return [
     ...steamProcessNames.map((name) => `PROCESS-NAME,${name},${proxyTarget}`),
+    ...buildYouYuCriticalProxyRules(proxyTarget),
     ...[...aiFlowDomains, ...steamAccelerationDomains].map((domain) => `DOMAIN-SUFFIX,${domain},${proxyTarget}`)
   ];
 }
@@ -756,6 +844,7 @@ function buildRulePrefix(proxyTarget: string, remoteConfig?: RemoteControlConfig
   return dedupeStringRules([
     ...buildRemoteDesktopDirectRules(),
     ...buildDomesticAppDirectRules(),
+    ...buildMicrosoftStoreDirectRules(),
     ...normalizeRemoteRules(remoteConfig?.directRules, 'DIRECT'),
     ...normalizeRemoteRules(remoteConfig?.proxyRules, proxyTarget)
   ]);
@@ -767,6 +856,10 @@ function buildRemoteDesktopDirectRules(): string[] {
 
 function buildDomesticAppDirectRules(): string[] {
   return domesticDirectProcessNames.map((name) => `PROCESS-NAME,${name},DIRECT`);
+}
+
+function buildMicrosoftStoreDirectRules(): string[] {
+  return microsoftStoreDirectDomains.map((domain) => `DOMAIN-SUFFIX,${domain},DIRECT`);
 }
 
 function buildChinaDirectRules(): string[] {
@@ -792,7 +885,18 @@ function normalizeRemoteRule(rule: string, fallbackTarget: string): string | und
   if (parts.length < 2) return undefined;
 
   const type = parts[0].toUpperCase();
-  if (!['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'PROCESS-NAME'].includes(type)) {
+  if (
+    ![
+      'DOMAIN',
+      'DOMAIN-SUFFIX',
+      'DOMAIN-KEYWORD',
+      'DOMAIN-WILDCARD',
+      'IP-CIDR',
+      'IP-CIDR6',
+      'PROCESS-NAME',
+      'PROCESS-PATH'
+    ].includes(type)
+  ) {
     return undefined;
   }
 
@@ -818,7 +922,7 @@ function isPriorityProxyRule(normalizedRule: string): boolean {
 
   return (
     (type === 'domain' || type === 'domain-suffix') &&
-    [...aiFlowDomains, ...steamAccelerationDomains].includes(domain)
+    ([...aiFlowDomains, ...steamAccelerationDomains].includes(domain) || isYouYuCriticalProxyDomain(domain))
   );
 }
 

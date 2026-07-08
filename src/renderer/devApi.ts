@@ -37,6 +37,12 @@ const devConnectivity: Array<{
   { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai', totalMs: 248 },
   { key: 'flow', name: 'Flow', url: 'https://labs.google/fx/tools/flow', category: 'special', totalMs: 338 },
   { key: 'pixverse', name: 'PixVerse', url: 'https://app.pixverse.ai', category: 'ai', totalMs: 428 },
+  { key: 'github', name: 'GitHub', url: 'https://github.com', category: 'global', totalMs: 194 },
+  { key: 'microsoftStore', name: 'Microsoft 商店', url: 'https://apps.microsoft.com', category: 'special', totalMs: 232 },
+  { key: 'discord', name: 'Discord', url: 'https://discord.com', category: 'special', totalMs: 266 },
+  { key: 'turnstile', name: 'Cloudflare 验证', url: 'https://challenges.cloudflare.com', category: 'special', totalMs: 188 },
+  { key: 'recaptcha', name: 'Google 验证', url: 'https://www.recaptcha.net', category: 'special', totalMs: 246 },
+  { key: 'hcaptcha', name: 'hCaptcha', url: 'https://js.hcaptcha.com', category: 'special', totalMs: 221 },
   { key: 'google', name: 'Google', url: 'https://www.google.com', category: 'global', totalMs: 168 },
   { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global', totalMs: 198, ip: '216.236.40.177', region: 'Hong Kong' }
 ];
@@ -52,7 +58,7 @@ export function createDevYouYuApi(): YouYuApi {
     strategies: createStrategies('auto'),
     mode: 'rule',
     strategy: 'auto',
-    ruleProfile: 'subscription',
+    ruleProfile: 'ruleset',
     features: {
       systemProxyEnabled: true,
       dnsEnhanced: true,
@@ -295,11 +301,11 @@ export function createDevYouYuApi(): YouYuApi {
         ruleProfile: settings.ruleProfile ?? snapshot.ruleProfile,
         features: {
           ...snapshot.features,
-          systemProxyEnabled: settings.systemProxyEnabled ?? snapshot.features.systemProxyEnabled,
-          dnsEnhanced: settings.dnsEnhanced ?? snapshot.features.dnsEnhanced,
-          snifferEnabled: settings.snifferEnabled ?? snapshot.features.snifferEnabled,
+          systemProxyEnabled: true,
+          dnsEnhanced: true,
+          snifferEnabled: true,
           tunEnabled: settings.tunEnabled ?? snapshot.features.tunEnabled,
-          strictRouteEnabled: settings.strictRouteEnabled ?? snapshot.features.strictRouteEnabled,
+          strictRouteEnabled: true,
           allowLan: settings.allowLan ?? snapshot.features.allowLan,
           subscriptionRefreshIntervalHours:
             settings.subscriptionRefreshIntervalHours ??

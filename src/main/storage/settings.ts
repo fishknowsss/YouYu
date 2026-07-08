@@ -34,10 +34,11 @@ type AppSettingsNormalizerInput = Omit<Partial<AppSettings>, 'selectedNode' | 'p
 };
 
 const settingsFileName = 'settings.json';
-const currentSettingsVersion = 3;
+const currentSettingsVersion = 4;
+const bundledSelectionMigrationVersion = 3;
 const validModes: MihomoMode[] = ['rule', 'global', 'direct'];
 const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-balance', 'direct'];
-const validRuleProfiles: RuleProfile[] = ['smart', 'global', 'subscription'];
+const validRuleProfiles: RuleProfile[] = ['ruleset', 'smart', 'global', 'subscription'];
 const defaultSubscriptionRefreshIntervalHours = 12;
 const validSubscriptionRefreshIntervalHours = [0, 6, 12, 24];
 
@@ -115,16 +116,14 @@ export class SettingsStore {
       strategy: resetBundledSelection ? 'auto' : normalizedStrategy,
       ruleProfile: validRuleProfiles.includes(legacyRuleProfile as RuleProfile)
         ? (legacyRuleProfile as RuleProfile)
-        : 'subscription',
+        : 'ruleset',
       selectedNode: resetBundledSelection ? '' : typeof value.selectedNode === 'string' ? value.selectedNode.trim() : '',
       petWindow: normalizePetWindow(value.petWindow),
-      systemProxyEnabled:
-        typeof value.systemProxyEnabled === 'boolean' ? value.systemProxyEnabled : true,
-      dnsEnhanced: normalizeDnsEnhanced(value),
+      systemProxyEnabled: true,
+      dnsEnhanced: true,
       snifferEnabled: true,
       tunEnabled: typeof value.tunEnabled === 'boolean' ? value.tunEnabled : false,
-      strictRouteEnabled:
-        typeof value.strictRouteEnabled === 'boolean' ? value.strictRouteEnabled : true,
+      strictRouteEnabled: true,
       allowLan: false,
       subscriptionRefreshIntervalHours: normalizeSubscriptionRefreshInterval(
         value.subscriptionRefreshIntervalHours
@@ -139,7 +138,11 @@ export class SettingsStore {
         normalized.localSubscriptionUrl ||
       normalizeSubscriptionUrl(parsed.remoteSubscriptionUrl) !== normalized.remoteSubscriptionUrl ||
       parsed.strategy !== normalized.strategy ||
+      parsed.ruleProfile !== normalized.ruleProfile ||
+      parsed.systemProxyEnabled !== normalized.systemProxyEnabled ||
+      parsed.dnsEnhanced !== normalized.dnsEnhanced ||
       parsed.snifferEnabled !== normalized.snifferEnabled ||
+      parsed.strictRouteEnabled !== normalized.strictRouteEnabled ||
       (typeof parsed.selectedNode === 'string' ? parsed.selectedNode.trim() : '') !== normalized.selectedNode
     );
   }
@@ -152,7 +155,7 @@ export class SettingsStore {
       value.strategy === 'manual' || (typeof value.selectedNode === 'string' && value.selectedNode.trim().length > 0);
     if (!hasCachedManualSelection) return false;
 
-    return settingsVersion < currentSettingsVersion || storedSubscriptionUrl !== this.defaultSubscriptionUrl;
+    return settingsVersion < bundledSelectionMigrationVersion || storedSubscriptionUrl !== this.defaultSubscriptionUrl;
   }
 
   private createDefaults(): AppSettings {
@@ -164,7 +167,7 @@ export class SettingsStore {
       controllerSecret: this.createSecret(),
       mode: 'rule',
       strategy: 'auto',
-      ruleProfile: 'subscription',
+      ruleProfile: 'ruleset',
       selectedNode: '',
       petWindow: undefined,
       systemProxyEnabled: true,
@@ -191,14 +194,6 @@ function normalizeSubscriptionRefreshInterval(value: unknown): number {
 function normalizeSubscriptionUrl(value: unknown): string | undefined {
   const text = typeof value === 'string' ? value.trim() : '';
   return text ? text : undefined;
-}
-
-function normalizeDnsEnhanced(value: AppSettingsNormalizerInput): boolean {
-  if (typeof value.settingsVersion === 'number' && value.settingsVersion >= 2) {
-    return typeof value.dnsEnhanced === 'boolean' ? value.dnsEnhanced : true;
-  }
-
-  return true;
 }
 
 function normalizePetWindow(value: unknown): PetWindowPosition | undefined {

@@ -26,7 +26,7 @@ type JsonResponse = {
 };
 
 const remoteConfigFileName = 'remote-config.json';
-const validRuleProfiles: RuleProfile[] = ['smart', 'global', 'subscription'];
+const validRuleProfiles: RuleProfile[] = ['ruleset', 'smart', 'global', 'subscription'];
 const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-balance', 'direct'];
 
 export class RemoteConfigClient {

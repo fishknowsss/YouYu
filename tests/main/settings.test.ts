@@ -26,9 +26,9 @@ describe('SettingsStore', () => {
     const second = await store.read();
 
     expect(first.subscriptionUrl).toBe('');
-    expect(first.settingsVersion).toBe(3);
+    expect(first.settingsVersion).toBe(4);
     expect(first.controllerSecret).toHaveLength(32);
-    expect(first.ruleProfile).toBe('subscription');
+    expect(first.ruleProfile).toBe('ruleset');
     expect(first.dnsEnhanced).toBe(true);
     expect(first.tunEnabled).toBe(false);
     expect(first.strictRouteEnabled).toBe(true);
@@ -109,7 +109,7 @@ describe('SettingsStore', () => {
     expect(migrated.strictRouteEnabled).toBe(true);
     expect(migrated.ruleProfile).toBe('subscription');
     expect(migrated.subscriptionRefreshIntervalHours).toBe(12);
-    expect(migrated.settingsVersion).toBe(3);
+    expect(migrated.settingsVersion).toBe(4);
   });
 
   it('persists allowed subscription refresh intervals', async () => {
@@ -121,7 +121,7 @@ describe('SettingsStore', () => {
     expect(after.subscriptionRefreshIntervalHours).toBe(6);
   });
 
-  it('migrates missing rule profile to the airport config default', async () => {
+  it('migrates missing rule profile to the smart rules default', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'youyu-settings-'));
     tempDirs.push(dir);
     await writeFile(
@@ -144,7 +144,7 @@ describe('SettingsStore', () => {
     const store = new SettingsStore(dir);
     const migrated = await store.read();
 
-    expect(migrated.ruleProfile).toBe('subscription');
+    expect(migrated.ruleProfile).toBe('ruleset');
   });
 
   it('preserves smart routing after settings have been versioned', async () => {

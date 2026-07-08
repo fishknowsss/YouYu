@@ -26,10 +26,7 @@ export function Settings({
 }: SettingsProps) {
   const [subscriptionUrl, setSubscriptionUrl] = useState(snapshot.subscriptionUrl);
   const [ruleProfile, setRuleProfile] = useState<RuleProfile>(snapshot.ruleProfile);
-  const [systemProxyEnabled, setSystemProxyEnabled] = useState(snapshot.features.systemProxyEnabled);
-  const [dnsEnhanced, setDnsEnhanced] = useState(snapshot.features.dnsEnhanced);
   const [tunEnabled, setTunEnabled] = useState(snapshot.features.tunEnabled);
-  const [strictRouteEnabled, setStrictRouteEnabled] = useState(snapshot.features.strictRouteEnabled);
   const [subscriptionRefreshIntervalHours, setSubscriptionRefreshIntervalHours] = useState(
     snapshot.features.subscriptionRefreshIntervalHours
   );
@@ -45,10 +42,7 @@ export function Settings({
 
     setSubscriptionUrl(snapshot.subscriptionUrl);
     setRuleProfile(snapshot.ruleProfile);
-    setSystemProxyEnabled(snapshot.features.systemProxyEnabled);
-    setDnsEnhanced(snapshot.features.dnsEnhanced);
     setTunEnabled(snapshot.features.tunEnabled);
-    setStrictRouteEnabled(snapshot.features.strictRouteEnabled);
     setSubscriptionRefreshIntervalHours(snapshot.features.subscriptionRefreshIntervalHours);
     setSettingsDirty(false);
     pendingSettingsKey.current = undefined;
@@ -57,11 +51,11 @@ export function Settings({
   function save() {
     const nextSettings: AppSettingsInput = {
       ruleProfile,
-      systemProxyEnabled,
-      dnsEnhanced,
+      systemProxyEnabled: true,
+      dnsEnhanced: true,
       snifferEnabled: true,
       tunEnabled,
-      strictRouteEnabled,
+      strictRouteEnabled: true,
       subscriptionRefreshIntervalHours
     };
     if (!remoteManaged) {
@@ -87,7 +81,7 @@ export function Settings({
       </div>
       <section className="panel settings-panel">
         <div className="settings-main">
-          <div className="settings-config-grid">
+          <div className="settings-stack">
             <label className="field settings-subscription-field">
               <span>订阅</span>
               <input
@@ -100,7 +94,7 @@ export function Settings({
                 placeholder="https://..."
               />
             </label>
-            <div className="form-grid">
+            <div className="settings-meta-grid">
               <label className="field">
                 <span>规则来源</span>
                 <select
@@ -111,9 +105,10 @@ export function Settings({
                     setRuleProfile(event.target.value as RuleProfile);
                   }}
                 >
-                  <option value="smart">智能分流</option>
-                  <option value="global">全部代理</option>
-                  <option value="subscription">机场配置</option>
+                  <option value="ruleset">智能规则</option>
+                  <option value="subscription">兼容机场</option>
+                  <option value="smart">本地规则</option>
+                  <option value="global">全局代理</option>
                 </select>
               </label>
               <label className="field">
@@ -144,61 +139,40 @@ export function Settings({
                 修复
               </button>
             </div>
-          </div>
-          <div className="toggle-grid">
-            <label className="toggle-row">
-              <input
-                type="checkbox"
-                checked={systemProxyEnabled}
-                disabled={busy}
-                onChange={(event) => {
-                  setSettingsDirty(true);
-                  setSystemProxyEnabled(event.target.checked);
-                }}
-              />
-              <span>系统代理</span>
-            </label>
-            <label className="toggle-row">
-              <input
-                type="checkbox"
-                checked={dnsEnhanced}
-                disabled={busy}
-                onChange={(event) => {
-                  setSettingsDirty(true);
-                  setDnsEnhanced(event.target.checked);
-                }}
-              />
-              <span>DNS 增强</span>
-            </label>
-            <label className="toggle-row">
-              <input
-                type="checkbox"
-                checked={tunEnabled}
-                disabled={busy}
-                onChange={(event) => {
-                  setSettingsDirty(true);
-                  setTunEnabled(event.target.checked);
-                }}
-              />
-              <span>TUN</span>
-            </label>
-            <label className="toggle-row">
-              <input
-                type="checkbox"
-                checked={strictRouteEnabled}
-                disabled={busy}
-                onChange={(event) => {
-                  setSettingsDirty(true);
-                  setStrictRouteEnabled(event.target.checked);
-                }}
-              />
-              <span>严格路由</span>
-            </label>
+            <div className="network-section">
+              <label className="network-tun-toggle">
+                <input
+                  type="checkbox"
+                  checked={tunEnabled}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setSettingsDirty(true);
+                    setTunEnabled(event.target.checked);
+                  }}
+                />
+                <span>TUN</span>
+              </label>
+              <div className="network-status-grid">
+                <NetworkStatus label="系统代理" value="开启" />
+                <NetworkStatus label="DNS" value="开启" />
+                <NetworkStatus label="嗅探" value="开启" />
+                <NetworkStatus label="严格路由" value={tunEnabled ? '开启' : '待用'} />
+              </div>
+            </div>
           </div>
         </div>
         <p className="inline-message">{message || ' '}</p>
         <UpdatePanel snapshot={snapshot} busy={busy} onCheckUpdate={onCheckUpdate} onInstallUpdate={onInstallUpdate} />
       </section>
+    </div>
+  );
+}
+
+function NetworkStatus({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="network-status-item">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }
@@ -285,11 +259,11 @@ function getSnapshotSettingsKey(snapshot: AppSnapshot): string {
   return getInputSettingsKey({
     subscriptionUrl: snapshot.subscriptionUrl,
     ruleProfile: snapshot.ruleProfile,
-    systemProxyEnabled: snapshot.features.systemProxyEnabled,
-    dnsEnhanced: snapshot.features.dnsEnhanced,
+    systemProxyEnabled: true,
+    dnsEnhanced: true,
     snifferEnabled: true,
     tunEnabled: snapshot.features.tunEnabled,
-    strictRouteEnabled: snapshot.features.strictRouteEnabled,
+    strictRouteEnabled: true,
     subscriptionRefreshIntervalHours: snapshot.features.subscriptionRefreshIntervalHours
   });
 }
@@ -297,7 +271,7 @@ function getSnapshotSettingsKey(snapshot: AppSnapshot): string {
 function getInputSettingsKey(settings: AppSettingsInput): string {
   return JSON.stringify({
     subscriptionUrl: settings.subscriptionUrl ?? '',
-    ruleProfile: settings.ruleProfile ?? 'subscription',
+    ruleProfile: settings.ruleProfile ?? 'ruleset',
     systemProxyEnabled: settings.systemProxyEnabled ?? true,
     dnsEnhanced: settings.dnsEnhanced ?? true,
     snifferEnabled: true,

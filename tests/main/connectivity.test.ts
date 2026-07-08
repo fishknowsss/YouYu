@@ -42,7 +42,7 @@ describe('parseTraceData', () => {
 });
 
 describe('connectivityServices', () => {
-  it('keeps the 10-site availability list with PixVerse on the global app domain', () => {
+  it('keeps the availability list with gaming, AI, development, captcha, and global services', () => {
     expect(connectivityServices[0]).toMatchObject({
       key: 'steam',
       name: 'Steam',
@@ -58,7 +58,7 @@ describe('connectivityServices', () => {
       name: 'Steam 云同步',
       host: 'steamcloud-ugc.storage.googleapis.com'
     });
-    expect(connectivityServices).toHaveLength(10);
+    expect(connectivityServices).toHaveLength(16);
     expect(connectivityServices).toContainEqual(
       expect.objectContaining({
         key: 'pixverse',
@@ -67,6 +67,16 @@ describe('connectivityServices', () => {
         probeUrl: 'https://app.pixverse.ai',
         host: 'app.pixverse.ai'
       })
+    );
+    expect(connectivityServices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'github', host: 'github.com' }),
+        expect.objectContaining({ key: 'microsoftStore', host: 'apps.microsoft.com' }),
+        expect.objectContaining({ key: 'discord', host: 'discord.com' }),
+        expect.objectContaining({ key: 'turnstile', host: 'challenges.cloudflare.com' }),
+        expect.objectContaining({ key: 'recaptcha', host: 'www.recaptcha.net' }),
+        expect.objectContaining({ key: 'hcaptcha', host: 'js.hcaptcha.com' })
+      ])
     );
     expect(connectivityServices.map((service) => service.key)).not.toEqual(
       expect.arrayContaining(['bytedance', 'runway', 'tencent', 'ehentai'])

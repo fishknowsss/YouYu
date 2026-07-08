@@ -123,6 +123,60 @@ export const connectivityServices: ConnectivityService[] = [
     kind: 'http'
   },
   {
+    key: 'github',
+    name: 'GitHub',
+    url: 'https://github.com',
+    probeUrl: 'https://github.com',
+    host: 'github.com',
+    category: 'global',
+    kind: 'http'
+  },
+  {
+    key: 'microsoftStore',
+    name: 'Microsoft 商店',
+    url: 'https://apps.microsoft.com',
+    probeUrl: 'https://apps.microsoft.com',
+    host: 'apps.microsoft.com',
+    category: 'special',
+    kind: 'http'
+  },
+  {
+    key: 'discord',
+    name: 'Discord',
+    url: 'https://discord.com',
+    probeUrl: 'https://discord.com/api/v10/gateway',
+    host: 'discord.com',
+    category: 'special',
+    kind: 'http'
+  },
+  {
+    key: 'turnstile',
+    name: 'Cloudflare 验证',
+    url: 'https://challenges.cloudflare.com',
+    probeUrl: 'https://challenges.cloudflare.com/turnstile/v0/api.js',
+    host: 'challenges.cloudflare.com',
+    category: 'special',
+    kind: 'http'
+  },
+  {
+    key: 'recaptcha',
+    name: 'Google 验证',
+    url: 'https://www.recaptcha.net',
+    probeUrl: 'https://www.recaptcha.net/recaptcha/api.js',
+    host: 'www.recaptcha.net',
+    category: 'special',
+    kind: 'http'
+  },
+  {
+    key: 'hcaptcha',
+    name: 'hCaptcha',
+    url: 'https://js.hcaptcha.com',
+    probeUrl: 'https://js.hcaptcha.com/1/api.js',
+    host: 'js.hcaptcha.com',
+    category: 'special',
+    kind: 'http'
+  },
+  {
     key: 'google',
     name: 'Google',
     url: 'https://www.google.com',
