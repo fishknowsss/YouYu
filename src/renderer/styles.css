@@ -310,6 +310,11 @@ select:focus-visible {
   grid-template-rows: 56px minmax(0, 1fr) 22px;
 }
 
+.settings-workspace {
+  grid-template-rows: 56px auto;
+  align-content: start;
+}
+
 .advanced-workspace {
   grid-template-rows: 56px minmax(0, 1fr);
   gap: 12px;
@@ -628,10 +633,10 @@ select:focus-visible {
 .easy-power-button.stopping:hover .brand-mark-lg,
 .easy-power-button.stopping .brand-mark-lg {
   filter:
-    grayscale(0.08) saturate(1.08) contrast(1.02) opacity(0.92)
-    drop-shadow(0 14px 26px rgb(182 78 116 / 18%))
-    drop-shadow(0 0 12px rgb(182 78 116 / 14%));
-  transform: translateY(2px) scale(0.965);
+    grayscale(0.16) saturate(1.02) contrast(0.98) opacity(0.86)
+    drop-shadow(0 14px 26px rgb(94 76 122 / 12%))
+    drop-shadow(0 0 10px rgb(143 88 215 / 10%));
+  transform: translateY(1px) scale(0.982);
 }
 
 .easy-power-button.starting .brand-mark-lg {
@@ -640,6 +645,13 @@ select:focus-visible {
     drop-shadow(0 18px 34px rgb(143 88 215 / 22%))
     drop-shadow(0 0 18px rgb(143 88 215 / 20%));
   transform: translateY(-2px) scale(1.025);
+}
+
+.easy-power-button.failed .brand-mark-lg {
+  filter:
+    grayscale(0.55) saturate(0.76) contrast(0.92) opacity(0.72)
+    drop-shadow(0 10px 20px rgb(64 42 84 / 8%));
+  transform: translateY(0) scale(1);
 }
 
 .easy-power-button:disabled {
@@ -706,13 +718,13 @@ select:focus-visible {
   background:
     conic-gradient(
       from var(--ring-angle),
-      rgb(182 78 116 / 88%),
-      rgb(255 231 240 / 28%),
-      rgb(182 78 116 / 74%),
-      rgb(255 231 240 / 36%),
-      rgb(182 78 116 / 88%)
+      rgb(112 93 141 / 82%),
+      rgb(222 210 236 / 28%),
+      rgb(143 88 215 / 68%),
+      rgb(222 210 236 / 36%),
+      rgb(112 93 141 / 82%)
     );
-  filter: drop-shadow(0 0 10px rgb(182 78 116 / 18%));
+  filter: drop-shadow(0 0 8px rgb(143 88 215 / 12%));
   animation: startup-ring-spin 760ms linear infinite;
 }
 
@@ -2020,10 +2032,16 @@ select:focus-visible {
 }
 
 .settings-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  align-self: start;
+  display: grid;
+  gap: 12px;
   min-height: 0;
+}
+
+.settings-main {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
 }
 
 .form-grid {
@@ -2121,9 +2139,21 @@ select:focus-visible {
 
 .toggle-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: start;
   gap: 8px;
+}
+
+.settings-control-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 8px;
+  align-items: start;
+}
+
+.settings-control-grid .settings-actions {
+  grid-template-columns: 1fr;
 }
 
 .toggle-row {
@@ -2155,15 +2185,18 @@ select:focus-visible {
 
 .update-row {
   min-width: 0;
-  min-height: 46px;
+  min-height: 44px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 160px 88px;
+  grid-template-columns: minmax(0, 1fr) 88px;
   align-items: center;
   gap: 10px;
-  margin-top: auto;
   border-radius: 8px;
   padding: 0 10px;
   background: var(--accent-tint);
+}
+
+.update-row.is-downloading {
+  grid-template-columns: minmax(0, 1fr) 130px 88px;
 }
 
 .update-copy {
@@ -2220,9 +2253,13 @@ select:focus-visible {
 }
 
 .update-row button {
-  grid-column: 3;
+  grid-column: 2;
   width: 100%;
   height: 34px;
+}
+
+.update-row.is-downloading button {
+  grid-column: 3;
 }
 
 .usage-registration {
@@ -2331,7 +2368,7 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 28px minmax(0, 1fr);
+  grid-template-rows: 26px minmax(0, 1fr);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
@@ -2360,18 +2397,20 @@ select:focus-visible {
   color: var(--muted);
   background: var(--surface-raised);
   border-bottom: 1px solid var(--line);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
 }
 
 .route-test-body {
   min-width: 0;
   min-height: 0;
+  display: grid;
+  grid-template-rows: repeat(10, minmax(0, 1fr));
   overflow: hidden;
 }
 
 .route-test-row {
-  min-height: 30px;
+  min-height: 0;
   padding: 0 10px;
   border-bottom: 1px solid #eee7f5;
   color: var(--ink);
@@ -2404,12 +2443,12 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 850;
 }
 
 .test-service-name {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 950;
 }
 
@@ -2432,7 +2471,7 @@ select:focus-visible {
 .test-category {
   width: fit-content;
   min-width: 34px;
-  height: 19px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2441,7 +2480,7 @@ select:focus-visible {
   padding: 0 7px;
   color: #2250b8;
   background: #edf3ff;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
   line-height: 1;
 }
@@ -2465,13 +2504,13 @@ select:focus-visible {
 }
 
 .test-status {
-  width: 54px;
-  height: 21px;
+  width: 50px;
+  height: 19px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 950;
   line-height: 1;
 }
@@ -2498,12 +2537,12 @@ select:focus-visible {
 }
 
 .test-retry {
-  width: 46px;
-  height: 24px;
+  width: 44px;
+  height: 22px;
   border-radius: 7px;
   color: var(--accent);
   background: var(--accent-soft);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 950;
 }
 
@@ -2591,6 +2630,14 @@ select:focus-visible {
   .connection-actions {
     grid-template-columns: 146px 108px minmax(0, 128px);
     gap: 7px;
+  }
+
+  .settings-control-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-control-grid .settings-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .node-mode-toggle {

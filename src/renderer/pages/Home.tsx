@@ -7,6 +7,7 @@ type HomeProps = {
   usageMode: UsageMode;
   snapshot: AppSnapshot;
   busy: boolean;
+  busyLabel: string;
   message: string;
   onQuickStart: (subscriptionUrl: string) => void;
   onStart: () => void;
@@ -30,9 +31,28 @@ export function Home(props: HomeProps) {
 
 function EasyHome(props: HomeProps) {
   const running = props.snapshot.status === 'running';
-  const starting = props.busy && !running;
-  const stopping = props.busy && running;
-  const primaryLabel = props.busy ? '处理中' : running ? '停止使用' : '一键连接';
+  const failed = props.snapshot.status === 'failed';
+  const starting = props.busyLabel === '启动中';
+  const stopping = props.busyLabel === '停止中';
+  const primaryLabel = props.busy ? props.busyLabel || '处理中' : running ? '停止使用' : '一键连接';
+  const boardClassName = [
+    'home-board',
+    'easy-board',
+    running ? 'is-running' : '',
+    failed && !starting ? 'is-failed' : '',
+    starting ? 'is-starting' : '',
+    stopping ? 'is-stopping' : ''
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const powerButtonClassName = [
+    'easy-power-button',
+    running ? 'running' : failed && !starting ? 'failed' : 'idle',
+    starting ? 'starting' : '',
+    stopping ? 'stopping' : ''
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   function handlePrimaryAction() {
     if (running) {
@@ -45,16 +65,10 @@ function EasyHome(props: HomeProps) {
 
   return (
     <div className="workspace easy-workspace">
-      <section
-        className={`home-board easy-board ${running ? 'is-running' : ''} ${starting ? 'is-starting' : ''} ${
-          stopping ? 'is-stopping' : ''
-        }`}
-      >
+      <section className={boardClassName}>
         <div className="launch-panel">
           <button
-            className={`easy-power-button ${running ? 'running' : 'idle'} ${starting ? 'starting' : ''} ${
-              stopping ? 'stopping' : ''
-            }`}
+            className={powerButtonClassName}
             disabled={props.busy}
             onClick={handlePrimaryAction}
             aria-label={primaryLabel}
@@ -94,9 +108,18 @@ function EasyUpdateNotice({
   const downloaded = update.status === 'downloaded';
   const downloading = update.status === 'downloading';
   const version = update.downloadedVersion || update.availableVersion;
-  const text = downloaded ? `已下载 ${version ?? '新版本'}` : version ? `正在下载 ${version}` : '正在下载更新';
+  const text = downloaded
+    ? `已下载 ${version ?? '新版本'}`
+    : downloading
+      ? version
+        ? `下载中 ${version}`
+        : '下载中'
+      : version
+        ? `发现 ${version}`
+        : '发现更新';
   const progress = typeof update.percent === 'number' ? update.percent : 0;
   const noticeClass = downloaded ? 'is-ready' : downloading ? 'is-downloading' : 'is-available';
+  const buttonLabel = downloaded ? '安装' : downloading ? '下载中' : '准备中';
 
   return (
     <aside className={`easy-update-notice ${noticeClass}`} aria-live="polite">
@@ -114,7 +137,7 @@ function EasyUpdateNotice({
         disabled={busy || !downloaded}
         onClick={downloaded ? onInstallUpdate : onCheckUpdate}
       >
-        {downloaded ? '安装' : '下载中'}
+        {buttonLabel}
       </button>
     </aside>
   );

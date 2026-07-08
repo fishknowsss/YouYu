@@ -309,10 +309,11 @@ export function App() {
             usageMode={usageMode}
             snapshot={snapshot}
             busy={busy}
+            busyLabel={busyLabel}
             message={message}
             onQuickStart={quickStart}
             onStart={() => runAction((api) => api.start(), '已启动', '启动中')}
-            onStop={() => runAction((api) => api.stop(), '已停止')}
+            onStop={() => runAction((api) => api.stop(), '已停止', '停止中')}
             onRepair={() => runAction((api) => api.repair(), '已修复', '修复中')}
             onModeChange={(mode: MihomoMode) => runAction((api) => api.setMode(mode), '模式已切换')}
             onStrategyChange={(strategy) => runAction((api) => api.selectStrategy(strategy), '已切换')}

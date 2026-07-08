@@ -77,7 +77,7 @@ export function Settings({
   }
 
   return (
-    <div className="workspace">
+    <div className="workspace settings-workspace">
       <div className="workspace-header">
         <div>
           <h1>设置</h1>
@@ -88,131 +88,130 @@ export function Settings({
         </button>
       </div>
       <section className="panel settings-panel">
-        <div className="form-grid">
-          <label className="field field-wide">
-            <span>订阅</span>
-            <input
-              value={subscriptionUrl}
-              disabled={busy || remoteManaged}
-              onChange={(event) => {
-                setSettingsDirty(true);
-                setSubscriptionUrl(event.target.value);
-              }}
-              placeholder="https://..."
-            />
-          </label>
-          <label className="field">
-            <span>规则来源</span>
-            <select
-              value={ruleProfile}
-              disabled={busy}
-              onChange={(event) => {
-                setSettingsDirty(true);
-                setRuleProfile(event.target.value as RuleProfile);
-              }}
-            >
-              <option value="smart">智能分流</option>
-              <option value="global">全部代理</option>
-              <option value="subscription">机场配置</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>后台刷新</span>
-            <select
-              value={subscriptionRefreshIntervalHours}
-              disabled={busy}
-              onChange={(event) => {
-                setSettingsDirty(true);
-                setSubscriptionRefreshIntervalHours(Number(event.target.value));
-              }}
-            >
-              <option value={0}>关闭</option>
-              <option value={6}>6 小时</option>
-              <option value={12}>12 小时</option>
-              <option value={24}>24 小时</option>
-            </select>
-          </label>
-        </div>
-        <div className="toggle-grid">
-          <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={systemProxyEnabled}
-              disabled={busy}
-              onChange={(event) => {
-                setSettingsDirty(true);
-                setSystemProxyEnabled(event.target.checked);
-              }}
-            />
-            <span>系统代理</span>
-          </label>
-          <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={dnsEnhanced}
-              disabled={busy}
-              onChange={(event) => {
-                setSettingsDirty(true);
-                setDnsEnhanced(event.target.checked);
-              }}
-            />
-            <span>DNS 增强</span>
-          </label>
-          <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={snifferEnabled}
-              disabled={busy}
-              onChange={(event) => {
-                setSettingsDirty(true);
-                setSnifferEnabled(event.target.checked);
-              }}
-            />
-            <span>流量嗅探</span>
-          </label>
-          <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={tunEnabled}
-              disabled={busy}
-              onChange={(event) => {
-                setSettingsDirty(true);
-                setTunEnabled(event.target.checked);
-              }}
-            />
-            <span>TUN</span>
-          </label>
-          <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={strictRouteEnabled}
-              disabled={busy}
-              onChange={(event) => {
-                setSettingsDirty(true);
-                setStrictRouteEnabled(event.target.checked);
-              }}
-            />
-            <span>严格路由</span>
-          </label>
-        </div>
-        <div className="settings-actions">
-          <button className="wide-button" disabled={busy} onClick={save}>
-            保存
-          </button>
-          <button className="secondary-button" disabled={busy} onClick={onSyncRemoteConfig}>
-            同步
-          </button>
-          <button className="secondary-button" disabled={busy} onClick={onRepair}>
-            修复
-          </button>
+        <div className="settings-main">
+          <div className="form-grid">
+            <label className="field field-wide">
+              <span>订阅</span>
+              <input
+                value={subscriptionUrl}
+                disabled={busy || remoteManaged}
+                onChange={(event) => {
+                  setSettingsDirty(true);
+                  setSubscriptionUrl(event.target.value);
+                }}
+                placeholder="https://..."
+              />
+            </label>
+            <label className="field">
+              <span>规则来源</span>
+              <select
+                value={ruleProfile}
+                disabled={busy}
+                onChange={(event) => {
+                  setSettingsDirty(true);
+                  setRuleProfile(event.target.value as RuleProfile);
+                }}
+              >
+                <option value="smart">智能分流</option>
+                <option value="global">全部代理</option>
+                <option value="subscription">机场配置</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>后台刷新</span>
+              <select
+                value={subscriptionRefreshIntervalHours}
+                disabled={busy}
+                onChange={(event) => {
+                  setSettingsDirty(true);
+                  setSubscriptionRefreshIntervalHours(Number(event.target.value));
+                }}
+              >
+                <option value={0}>关闭</option>
+                <option value={6}>6 小时</option>
+                <option value={12}>12 小时</option>
+                <option value={24}>24 小时</option>
+              </select>
+            </label>
+          </div>
+          <div className="settings-control-grid">
+            <div className="toggle-grid">
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={systemProxyEnabled}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setSettingsDirty(true);
+                    setSystemProxyEnabled(event.target.checked);
+                  }}
+                />
+                <span>系统代理</span>
+              </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={dnsEnhanced}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setSettingsDirty(true);
+                    setDnsEnhanced(event.target.checked);
+                  }}
+                />
+                <span>DNS 增强</span>
+              </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={snifferEnabled}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setSettingsDirty(true);
+                    setSnifferEnabled(event.target.checked);
+                  }}
+                />
+                <span>流量嗅探</span>
+              </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={tunEnabled}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setSettingsDirty(true);
+                    setTunEnabled(event.target.checked);
+                  }}
+                />
+                <span>TUN</span>
+              </label>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={strictRouteEnabled}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setSettingsDirty(true);
+                    setStrictRouteEnabled(event.target.checked);
+                  }}
+                />
+                <span>严格路由</span>
+              </label>
+            </div>
+            <div className="settings-actions">
+              <button className="wide-button" disabled={busy} onClick={save}>
+                保存
+              </button>
+              <button className="secondary-button" disabled={busy} onClick={onSyncRemoteConfig}>
+                同步
+              </button>
+              <button className="secondary-button" disabled={busy} onClick={onRepair}>
+                修复
+              </button>
+            </div>
+          </div>
         </div>
         <p className="inline-message">{message || ' '}</p>
-        <UpdatePanel
-          snapshot={snapshot}
-          busy={busy}
-          onCheckUpdate={onCheckUpdate}
-          onInstallUpdate={onInstallUpdate}
-        />
+        <UpdatePanel snapshot={snapshot} busy={busy} onCheckUpdate={onCheckUpdate} onInstallUpdate={onInstallUpdate} />
       </section>
     </div>
   );
@@ -231,27 +230,32 @@ function UpdatePanel({
 }) {
   const update = snapshot.update;
   const ready = update.status === 'downloaded';
+  const downloading = update.status === 'downloading';
   const waiting = update.status === 'checking' || update.status === 'downloading' || update.status === 'available';
   const buttonLabel = ready
     ? '安装'
-    : update.status === 'downloading'
+    : downloading
       ? '下载中'
-    : update.status === 'checking'
-      ? '检查中'
-      : update.status === 'available'
-        ? '下载中'
-        : '检查';
+      : update.status === 'checking'
+        ? '检查中'
+        : update.status === 'available'
+          ? '准备中'
+          : '检查';
   const progress = typeof update.percent === 'number' ? update.percent : 0;
 
   const statusText = formatUpdateStatus(update);
 
   return (
-    <div className={`update-row ${waiting ? 'is-busy' : ''} ${update.status === 'failed' ? 'is-failed' : ''}`}>
+    <div
+      className={`update-row ${waiting ? 'is-busy' : ''} ${downloading ? 'is-downloading' : ''} ${
+        update.status === 'failed' ? 'is-failed' : ''
+      }`}
+    >
       <div className="update-copy">
         <span>软件更新</span>
         <strong title={statusText}>{statusText}</strong>
       </div>
-      {update.status === 'downloading' && (
+      {downloading && (
         <div className="update-progress" aria-hidden="true">
           <span style={{ width: `${Math.max(8, progress)}%` }} />
         </div>
