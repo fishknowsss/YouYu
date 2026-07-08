@@ -100,9 +100,6 @@ export function App() {
     const dispose = window.youyu?.onSnapshotUpdated((next) => {
       setSnapshot(next);
       setSnapshotLoaded(true);
-      if (!testingAllNodesRef.current) {
-        setBusy(false);
-      }
     });
     return dispose;
   }, []);
@@ -466,9 +463,11 @@ function RegistrationGate({
 }) {
   const [name, setName] = useState('');
   const [passphrase, setPassphrase] = useState('');
+  const canSubmit = Boolean(name.trim() && passphrase.trim());
 
   function submit() {
-    onRegister({ name, passphrase });
+    if (busy || !canSubmit) return;
+    onRegister({ name: name.trim(), passphrase: passphrase.trim() });
   }
 
   return (
@@ -480,7 +479,14 @@ function RegistrationGate({
         </div>
         <label className="field">
           <span>姓名</span>
-          <input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') submit();
+            }}
+            autoFocus
+          />
         </label>
         <label className="field">
           <span>口令</span>
@@ -493,7 +499,7 @@ function RegistrationGate({
             }}
           />
         </label>
-        <button className="wide-button" disabled={busy} onClick={submit}>
+        <button className="wide-button" disabled={busy || !canSubmit} onClick={submit}>
           登记
         </button>
         <div className="registration-status" aria-live="polite">
@@ -532,7 +538,10 @@ function getActionErrorMessage(error: unknown): string {
   if (message.includes('missing traffic user name')) return '先填写姓名';
   if (message.includes('missing traffic passphrase')) return '先填写口令';
   if (message.includes('traffic activation failed: 403')) return '口令不对';
+  if (message.includes('traffic activation failed: 429')) return '请求太频繁';
   if (message.includes('traffic activation failed: 5')) return '后台暂时不可用';
+  if (message.includes('remote config failed: 401') || message.includes('traffic report failed: 401')) return '请重新登记';
+  if (message.includes('signature required') || message.includes('invalid signature') || message.includes('stale signature')) return '请重新登记';
   if (message.includes('traffic request timed out')) return '连接后台超时';
   if (message.includes('fetch failed') || message.includes('Failed to fetch')) return '连接后台失败';
   if (message.includes('mihomo api failed')) return '更新失败';

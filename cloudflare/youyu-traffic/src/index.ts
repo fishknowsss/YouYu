@@ -14,6 +14,7 @@ type ActivateInput = {
 };
 
 type TrafficReportInput = {
+  reportId?: string;
   userId?: string;
   deviceId?: string;
   uploadDelta?: number;
@@ -73,7 +74,7 @@ type RemoteControlConfig = {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === 'OPTIONS') return json({});
+    if (request.method === 'OPTIONS') return optionsResponse();
 
     try {
       if (request.method === 'POST' && url.pathname === '/api/activate') {
@@ -86,19 +87,19 @@ export default {
         return await getClientConfig(request, env);
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/users') {
-        requireAdmin(request, env);
+        await requireAdmin(request, env);
         return listUsers(env);
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/config') {
-        requireAdmin(request, env);
+        await requireAdmin(request, env);
         return await getAdminConfig(env);
       }
       if (request.method === 'POST' && url.pathname === '/api/admin/config') {
-        requireAdmin(request, env);
+        await requireAdmin(request, env);
         return await updateAdminConfig(request, env);
       }
       if (request.method === 'POST' && url.pathname === '/api/admin/config/sync-users') {
-        requireAdmin(request, env);
+        await requireAdmin(request, env);
         return await syncGlobalConfigToUsers(env);
       }
       if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/admin')) {
@@ -106,22 +107,22 @@ export default {
       }
       const userTrafficMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/traffic$/);
       if (request.method === 'GET' && userTrafficMatch) {
-        requireAdmin(request, env);
+        await requireAdmin(request, env);
         return await getUserTraffic(env, userTrafficMatch[1]);
       }
       const userConfigMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/config$/);
       if (userConfigMatch) {
-        requireAdmin(request, env);
+        await requireAdmin(request, env);
         if (request.method === 'GET') return await getAdminUserConfig(env, userConfigMatch[1]);
         if (request.method === 'POST') return await updateAdminUserConfig(request, env, userConfigMatch[1]);
       }
       const userConfigResetMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/config\/reset$/);
       if (request.method === 'POST' && userConfigResetMatch) {
-        requireAdmin(request, env);
+        await requireAdmin(request, env);
         return await resetAdminUserConfig(env, userConfigResetMatch[1]);
       }
       if (request.method === 'GET' && url.pathname === '/api/admin/anomalies') {
-        requireAdmin(request, env);
+        await requireAdmin(request, env);
         return await listAnomalies(env);
       }
       return json({ error: 'not found' }, 404);
@@ -147,9 +148,13 @@ async function activate(request: Request, env: Env): Promise<Response> {
   if (!expectedPassphrase) {
     throw new HttpError(503, 'registration disabled');
   }
+  const rateLimitKey = `activate:${getClientIp(request)}:${normalizedName || 'unknown'}`;
+  await assertRateLimit(env, rateLimitKey, 8, 15 * 60 * 1000);
   if (passphrase !== expectedPassphrase) {
+    await recordRateLimitFailure(env, rateLimitKey, 15 * 60 * 1000);
     throw new HttpError(403, 'invalid passphrase');
   }
+  await clearRateLimit(env, rateLimitKey);
 
   await env.DB.prepare(
     'INSERT OR IGNORE INTO users (id, name, normalized_name, status, created_at) VALUES (?, ?, ?, ?, ?)'
@@ -202,7 +207,7 @@ async function getClientConfig(request: Request, env: Env): Promise<Response> {
   const deviceId = url.searchParams.get('deviceId')?.trim() ?? '';
   if (!userId || !deviceId) throw new HttpError(400, 'missing identity');
 
-  await requireKnownDevice(env, userId, deviceId);
+  await verifyDeviceRequest(request, env, userId, deviceId, '');
   return json({ config: await getEffectiveRemoteConfig(env, userId) });
 }
 
@@ -324,44 +329,58 @@ function adminPageV3(): Response {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>YouYu 后台</title>
   <style>
-    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f4f5f7; color: #1f2328; }
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f6f8; color: #1f2328; }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 24px; }
-    main { max-width: 1180px; margin: 0 auto; display: grid; gap: 14px; }
-    header, .panel-head, .toolbar, .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    h1, h2 { margin: 0; letter-spacing: 0; }
+    main { width: 100%; max-width: 1220px; min-width: 0; margin: 0 auto; display: grid; gap: 14px; }
+    main > *, .panel, .auth, .subscription-box, .table-wrap { min-width: 0; }
+    .topbar, .panel-head, .toolbar, .actions, .subscription-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    h1, h2, h3, p { margin: 0; letter-spacing: 0; }
     h1 { font-size: 28px; line-height: 1.1; }
     h2 { font-size: 18px; line-height: 1.2; }
-    .muted { color: #667085; }
+    .status-text, .muted { color: #667085; }
     .panel, .auth { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 2px rgb(16 24 40 / 6%); }
     .auth { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 10px; }
-    .config-panel { display: grid; gap: 14px; }
-    .control-grid { display: grid; grid-template-columns: 120px 150px 150px minmax(240px, 1fr) 130px; gap: 10px; }
+    .config-panel { display: grid; gap: 16px; }
+    .subscription-box { display: grid; gap: 10px; padding: 14px; border: 1px solid #e4e7ec; border-radius: 8px; background: #fbfcfd; }
+    .subscription-field { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; }
+    .subscription-field span { color: #344054; font-size: 13px; font-weight: 800; }
+    .field-error { min-height: 18px; color: #b42318; font-size: 13px; font-weight: 800; }
+    .advanced { display: grid; gap: 12px; border: 0; padding: 0; }
+    .advanced summary { width: fit-content; height: 34px; display: inline-flex; align-items: center; border-radius: 8px; padding: 0 12px; background: #eef1f4; color: #1f2328; font-size: 13px; font-weight: 900; cursor: pointer; }
+    .advanced[open] summary { margin-bottom: 12px; }
+    .danger-zone { display: flex; justify-content: flex-end; padding-top: 2px; }
+    .control-grid { display: grid; grid-template-columns: 120px 150px 150px 130px; gap: 10px; }
     .node-line { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; }
     .rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     label { min-width: 0; display: grid; gap: 6px; color: #344054; font-size: 13px; font-weight: 800; }
     .node-line > span { color: #344054; font-size: 13px; font-weight: 800; }
     input, select, button { border-radius: 8px; font: inherit; }
-    input, select { width: 100%; height: 40px; border: 1px solid #d0d5dd; padding: 0 10px; background: #fff; color: #1f2328; }
+    input, select { width: 100%; min-width: 0; height: 40px; border: 1px solid #d0d5dd; padding: 0 10px; background: #fff; color: #1f2328; }
     input::placeholder { color: #98a2b3; }
     button { height: 40px; border: 0; padding: 0 16px; background: #1f2328; color: #fff; font-weight: 900; cursor: pointer; }
     button.secondary { background: #eef1f4; color: #1f2328; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
     .chip { height: 30px; display: inline-flex; align-items: center; border-radius: 999px; padding: 0 10px; background: #eef1f4; color: #344054; font-size: 13px; font-weight: 800; }
+    .chip.good { background: #e8f5ee; color: #166534; }
+    .chip.warn { background: #fff4e5; color: #9a3412; }
+    .chip.off { background: #f2f4f7; color: #667085; }
     .rule-card { min-width: 0; display: grid; gap: 10px; border: 1px solid #edf0f2; border-radius: 8px; padding: 12px; background: #fcfcfd; }
     .rule-card h3 { margin: 0; color: #344054; font-size: 13px; line-height: 1.2; }
     .check-list { display: grid; gap: 8px; }
     .check-list label { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border: 1px solid #d0d5dd; border-radius: 8px; background: #fff; color: #1f2328; font-weight: 700; cursor: pointer; }
     .check-list input { width: 16px; height: 16px; margin: 1px 0 0; flex: 0 0 auto; }
     .check-list span { display: grid; gap: 2px; }
-    .check-list small { color: #667085; font-size: 12px; font-weight: 500; line-height: 1.35; }
+    .check-list small { color: #475467; font-size: 13px; font-weight: 500; line-height: 1.35; }
     .preserved-rules { display: flex; flex-wrap: wrap; gap: 6px; min-height: 0; }
     .preserved-rules:empty { display: none; }
     .preserved-rules .chip { max-width: 100%; height: auto; min-height: 28px; overflow-wrap: anywhere; }
     .chip-remove { width: 20px; height: 20px; margin-left: 6px; padding: 0; border-radius: 999px; background: #d0d5dd; color: #1f2328; font-size: 12px; line-height: 20px; }
+    .table-wrap { overflow-x: auto; }
     td.actions-cell, th.actions-cell { text-align: right; }
     td.actions-cell .actions { justify-content: flex-end; gap: 8px; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 11px 8px; border-bottom: 1px solid #edf0f2; text-align: left; white-space: nowrap; }
+    table { width: 100%; min-width: 560px; border-collapse: collapse; }
+    th, td { padding: 11px 8px; border-bottom: 1px solid #edf0f2; text-align: left; white-space: nowrap; vertical-align: middle; }
     th { color: #667085; font-size: 13px; }
     th.sortable { padding: 0; }
     th.sortable button { width: 100%; height: auto; min-height: 42px; padding: 11px 8px; border-radius: 0; background: transparent; color: #667085; text-align: inherit; font-size: 13px; font-weight: 900; }
@@ -375,60 +394,81 @@ function adminPageV3(): Response {
     .hidden { display: none; }
     @media (max-width: 860px) {
       body { padding: 14px; }
-      header, .panel-head, .toolbar, .actions { align-items: start; flex-direction: column; }
-      .auth, .control-grid, .node-line, .rules { grid-template-columns: 1fr; }
-      table { display: block; overflow-x: auto; }
+      .topbar, .panel-head, .toolbar, .actions, .subscription-head { align-items: start; flex-direction: column; }
+      .auth, .control-grid, .node-line, .rules, .subscription-field { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <main>
-    <header>
-      <div><h1>YouYu 后台</h1><div class="muted" id="status">未加载</div></div>
+    <header class="topbar">
+      <div><h1>YouYu 后台</h1><p class="status-text" id="status">未加载</p></div>
       <button class="secondary" id="refresh">刷新</button>
     </header>
     <section class="auth">
-      <input id="token" type="password" placeholder="管理 token" autocomplete="current-password" />
+      <input id="token" type="password" placeholder="管理令牌" autocomplete="current-password" />
       <button id="login">进入</button>
     </section>
     <section class="panel config-panel">
       <div class="panel-head">
-        <div><h2>远程配置</h2></div>
-        <div class="actions"><span class="chip" id="globalVersion">v1</span><button class="secondary" id="syncGlobalUsers">同步所有用户</button><button id="saveGlobal">保存</button></div>
+        <div><h2>全局配置</h2></div>
+        <div class="actions"><span class="chip" id="globalVersion">v1</span><button id="saveGlobal">保存</button></div>
       </div>
-      <div class="control-grid">
+      <div class="subscription-box">
+        <div class="subscription-head">
+          <h3>全局订阅</h3>
+          <span class="chip off" id="globalSubscriptionState">未配置</span>
+        </div>
+        <label class="subscription-field"><span>订阅链接</span><input id="globalSubscription" placeholder="https://..." autocomplete="off" spellcheck="false" /></label>
+        <div class="field-error" id="globalSubscriptionError"></div>
+      </div>
+      <details class="advanced">
+        <summary>高级</summary>
+        <div class="control-grid">
         <label>状态<select id="globalEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
         <label>规则<select id="globalRuleProfile"><option value="">不覆盖</option><option value="subscription">机场配置</option><option value="smart">智能规则</option><option value="global">全局代理</option></select></label>
         <label>策略<select id="globalStrategy"><option value="">不覆盖</option><option value="auto">自动</option><option value="fallback">故障</option><option value="load-balance">均衡</option><option value="direct">直连</option></select></label>
-        <label>订阅<input id="globalSubscription" placeholder="留空不覆盖" /></label>
         <label>阈值 MB<input id="globalThreshold" type="number" min="1" step="1" /></label>
       </div>
       <div class="node-line"><span>启动选择</span><select id="globalNode"></select></div>
-      <div class="rules">
+        <div class="rules">
         <div class="rule-card"><h3>直连规则</h3><div class="check-list" id="globalDirect"></div><div class="preserved-rules" id="globalDirectCustom"></div></div>
         <div class="rule-card"><h3>代理规则</h3><div class="check-list" id="globalProxy"></div><div class="preserved-rules" id="globalProxyCustom"></div></div>
-      </div>
+        </div>
+        <div class="danger-zone"><button class="secondary" id="syncGlobalUsers">清除覆盖</button></div>
+      </details>
     </section>
     <section class="panel">
       <div class="toolbar"><h2>用户</h2><span class="muted" id="userCount">0 个用户</span></div>
-      <table><thead><tr><th class="sortable" data-sort="name"><button type="button">姓名</button></th><th class="num sortable" data-sort="devices"><button type="button">设备</button></th><th class="num sortable" data-sort="uploadBytes"><button type="button">上传</button></th><th class="num sortable" data-sort="downloadBytes"><button type="button">下载</button></th><th class="num sortable" data-sort="anomalies"><button type="button">异常</button></th><th class="sortable" data-sort="lastSeenAt"><button type="button">最后在线</button></th><th class="actions-cell"></th></tr></thead><tbody id="users"></tbody></table>
+      <div class="table-wrap"><table><thead><tr><th class="sortable" data-sort="name"><button type="button">姓名</button></th><th class="sortable" data-sort="subscriptionState"><button type="button">订阅</button></th><th class="num sortable" data-sort="devices"><button type="button">设备</button></th><th class="sortable" data-sort="lastSeenAt"><button type="button">最后在线</button></th><th class="actions-cell"></th></tr></thead><tbody id="users"></tbody></table></div>
     </section>
     <section class="panel hidden" id="userConfigPanel">
       <div class="toolbar"><h2 id="userConfigTitle">用户配置</h2><div class="actions"><button class="secondary" id="resetUserConfig">重置</button><button id="saveUserConfig">保存</button></div></div>
-      <div class="control-grid">
+      <div class="subscription-box">
+        <div class="subscription-head">
+          <h3>用户订阅</h3>
+          <span class="chip off" id="userSubscriptionState">跟随全局</span>
+        </div>
+        <label class="subscription-field"><span>模式</span><select id="userMode"><option value="follow">跟随全局</option><option value="custom">单独配置</option><option value="disabled">停用</option></select></label>
+        <label class="subscription-field"><span>订阅链接</span><input id="userSubscription" placeholder="https://..." autocomplete="off" spellcheck="false" /></label>
+        <div class="field-error" id="userSubscriptionError"></div>
+      </div>
+      <details class="advanced">
+        <summary>高级</summary>
+        <div class="control-grid">
         <label>状态<select id="userEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
         <label>规则<select id="userRuleProfile"><option value="">不覆盖</option><option value="subscription">机场配置</option><option value="smart">智能规则</option><option value="global">全局代理</option></select></label>
         <label>策略<select id="userStrategy"><option value="">不覆盖</option><option value="auto">自动</option><option value="fallback">故障</option><option value="load-balance">均衡</option><option value="direct">直连</option></select></label>
-        <label>订阅<input id="userSubscription" placeholder="留空跟随全局" /></label>
         <label>启动选择<select id="userNode"></select></label>
       </div>
-      <div class="rules">
+        <div class="rules">
         <div class="rule-card"><h3>直连规则</h3><div class="check-list" id="userDirect"></div><div class="preserved-rules" id="userDirectCustom"></div></div>
         <div class="rule-card"><h3>代理规则</h3><div class="check-list" id="userProxy"></div><div class="preserved-rules" id="userProxyCustom"></div></div>
-      </div>
+        </div>
+      </details>
     </section>
-    <section class="panel hidden" id="detailPanel"><div class="toolbar"><h2 id="detailTitle">明细</h2><button class="secondary" id="closeDetail">收起</button></div><table><thead><tr><th>日期</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>更新时间</th></tr></thead><tbody id="details"></tbody></table></section>
-    <section class="panel"><div class="toolbar"><h2>异常</h2><span class="muted" id="anomalyCount">0 条</span></div><table><thead><tr><th>用户</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>时间</th></tr></thead><tbody id="anomalies"></tbody></table></section>
+    <section class="panel hidden" id="detailPanel"><div class="toolbar"><h2 id="detailTitle">明细</h2><button class="secondary" id="closeDetail">收起</button></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>更新时间</th></tr></thead><tbody id="details"></tbody></table></div></section>
+    <section class="panel hidden"><div class="toolbar"><h2>异常</h2><span class="muted" id="anomalyCount">0 条</span></div><div class="table-wrap"><table><thead><tr><th>用户</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>时间</th></tr></thead><tbody id="anomalies"></tbody></table></div></section>
   </main>
   <script>
     const tokenInput = document.getElementById('token');
@@ -438,6 +478,9 @@ function adminPageV3(): Response {
     const statusEl = document.getElementById('status');
     const userCountEl = document.getElementById('userCount');
     const anomalyCountEl = document.getElementById('anomalyCount');
+    const globalSubscriptionState = document.getElementById('globalSubscriptionState');
+    const userSubscriptionState = document.getElementById('userSubscriptionState');
+    const userModeEl = document.getElementById('userMode');
     const detailPanel = document.getElementById('detailPanel');
     const detailTitle = document.getElementById('detailTitle');
     const userConfigPanel = document.getElementById('userConfigPanel');
@@ -463,20 +506,25 @@ function adminPageV3(): Response {
       ]
     };
     const customRules = { global: { direct: [], proxy: [] }, user: { direct: [], proxy: [] } };
-    const userSort = { key: 'downloadBytes', direction: 'desc' };
+    const userSort = { key: 'lastSeenAt', direction: 'desc' };
     let loadedUsers = [];
     let activeUserId = '';
     let activeUserName = '';
     initConfigControls('global');
     initConfigControls('user');
-    tokenInput.value = localStorage.getItem('youyu_admin_token') || '';
-    document.getElementById('login').onclick = () => { localStorage.setItem('youyu_admin_token', tokenInput.value.trim()); loadAll(); };
+    tokenInput.value = sessionStorage.getItem('youyu_admin_token') || localStorage.getItem('youyu_admin_token') || '';
+    document.getElementById('login').onclick = () => {
+      sessionStorage.setItem('youyu_admin_token', tokenInput.value.trim());
+      localStorage.removeItem('youyu_admin_token');
+      loadAll();
+    };
     document.getElementById('refresh').onclick = loadAll;
     document.getElementById('closeDetail').onclick = () => detailPanel.classList.add('hidden');
     document.getElementById('saveGlobal').onclick = saveGlobalConfig;
     document.getElementById('syncGlobalUsers').onclick = syncGlobalUsers;
     document.getElementById('saveUserConfig').onclick = saveUserConfig;
     document.getElementById('resetUserConfig').onclick = resetUserConfig;
+    userModeEl.onchange = updateUserModeState;
     document.querySelectorAll('th.sortable button').forEach((button) => {
       button.onclick = () => {
         const key = button.closest('th').dataset.sort;
@@ -490,16 +538,18 @@ function adminPageV3(): Response {
       };
     });
     async function api(path, options) {
-      const token = tokenInput.value.trim() || localStorage.getItem('youyu_admin_token') || '';
+      const token = tokenInput.value.trim() || sessionStorage.getItem('youyu_admin_token') || '';
       const headers = Object.assign({ authorization: 'Bearer ' + token }, options && options.headers ? options.headers : {});
       const res = await fetch(path, Object.assign({}, options || {}, { headers }));
-      if (!res.ok) throw new Error('请求失败');
-      return res.json();
+      const text = await res.text();
+      const data = parseJson(text);
+      if (!res.ok) throw new Error(formatApiError(res.status, data));
+      return data || {};
     }
     async function loadAll() {
       statusEl.textContent = '加载中';
       try { await Promise.all([loadGlobalConfig(), loadUsers(), loadAnomalies()]); statusEl.textContent = '已更新'; }
-      catch { statusEl.textContent = '无法加载'; }
+      catch (error) { statusEl.textContent = formatAdminError(error); }
     }
     async function loadGlobalConfig() {
       const data = await api('/api/admin/config');
@@ -507,19 +557,24 @@ function adminPageV3(): Response {
       document.getElementById('globalVersion').textContent = 'v' + ((data.config && data.config.version) || 1);
     }
     async function saveGlobalConfig() {
+      if (!validateSubscriptionField('global')) return;
       const data = await api('/api/admin/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(readConfigFields('global', true)) });
       setConfigFields('global', data.config || {});
       document.getElementById('globalVersion').textContent = 'v' + ((data.config && data.config.version) || 1);
-      statusEl.textContent = '已保存';
+      await loadUsers();
+      statusEl.textContent = '已保存，客户端会自动同步';
     }
     async function syncGlobalUsers() {
-      if (!confirm('确认让所有用户跟随顶部远程配置？这会清除每个用户的单独配置覆盖。')) return;
+      if (prompt('清除所有用户的单独配置？输入“清除”确认') !== '清除') return;
       const data = await api('/api/admin/config/sync-users', { method: 'POST' });
-      statusEl.textContent = '已同步所有用户，清除 ' + (data.clearedUsers || 0) + ' 个覆盖';
+      statusEl.textContent = '已清除 ' + (data.clearedUsers || 0) + ' 个覆盖';
       if (activeUserId) {
         setConfigFields('user', data.config || {});
-        userConfigTitle.textContent = activeUserName + ' 配置（跟随全局）';
+        setUserMode('follow');
+        setUserSubscriptionState(data.config || {}, null);
+        userConfigTitle.textContent = activeUserName + ' 配置';
       }
+      await loadUsers();
     }
     async function loadUsers() {
       const data = await api('/api/admin/users');
@@ -532,8 +587,7 @@ function adminPageV3(): Response {
       updateSortHeaders();
       for (const user of sortUsers(loadedUsers)) {
         const tr = document.createElement('tr');
-        const anomalyText = user.anomalies ? '<span class="danger">' + user.anomalies + '</span>' : '0';
-        tr.innerHTML = '<td>' + escapeHtml(user.name || '') + '</td><td class="num">' + (user.devices || 0) + '</td><td class="num">' + formatBytes(user.uploadBytes || 0) + '</td><td class="num">' + formatBytes(user.downloadBytes || 0) + '</td><td class="num">' + anomalyText + '</td><td>' + formatTime(user.lastSeenAt) + '</td><td class="actions-cell"><div class="actions"><button class="secondary" data-action="detail" data-id="' + user.id + '" data-name="' + escapeHtml(user.name || '') + '">明细</button><button data-action="config" data-id="' + user.id + '" data-name="' + escapeHtml(user.name || '') + '">配置</button></div></td>';
+        tr.innerHTML = '<td>' + escapeHtml(user.name || '') + '</td><td>' + subscriptionBadge(user.subscriptionState) + '</td><td class="num">' + (user.devices || 0) + '</td><td>' + formatTime(user.lastSeenAt) + '</td><td class="actions-cell"><div class="actions"><button class="secondary" data-action="detail" data-id="' + user.id + '" data-name="' + escapeHtml(user.name || '') + '">流量</button><button data-action="config" data-id="' + user.id + '" data-name="' + escapeHtml(user.name || '') + '">设置</button></div></td>';
         usersBody.appendChild(tr);
       }
       usersBody.querySelectorAll('button[data-action="detail"]').forEach((button) => { button.onclick = () => loadDetails(button.dataset.id, button.dataset.name); });
@@ -555,6 +609,7 @@ function adminPageV3(): Response {
     }
     function compareUserValue(a, b, key) {
       if (key === 'name') return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
+      if (key === 'subscriptionState') return String(a.subscriptionState || '').localeCompare(String(b.subscriptionState || ''), 'zh-CN');
       if (key === 'lastSeenAt') return dateValue(a.lastSeenAt) - dateValue(b.lastSeenAt);
       return numberValue(a[key]) - numberValue(b[key]);
     }
@@ -565,19 +620,44 @@ function adminPageV3(): Response {
       const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/config');
       const hasOverride = Boolean(data.override);
       setConfigFields('user', hasOverride ? data.override : data.effective || {});
-      userConfigTitle.textContent = name + (hasOverride ? ' 配置' : ' 配置（跟随全局）');
+      setUserMode(getUserModeFromConfig(data.override || null));
+      setUserSubscriptionState(data.effective || {}, data.override || null);
+      userConfigTitle.textContent = name + ' 配置';
       userConfigPanel.classList.remove('hidden');
     }
     async function saveUserConfig() {
       if (!activeUserId) return;
-      await api('/api/admin/users/' + encodeURIComponent(activeUserId) + '/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(readConfigFields('user', false)) });
+      const mode = getUserMode();
+      if (mode === 'follow') {
+        const data = await api('/api/admin/users/' + encodeURIComponent(activeUserId) + '/config/reset', { method: 'POST' });
+        setConfigFields('user', data.effective || {});
+        setUserMode('follow');
+        setUserSubscriptionState(data.effective || {}, null);
+        userConfigTitle.textContent = activeUserName + ' 配置';
+        await loadUsers();
+        statusEl.textContent = activeUserName + ' 已跟随全局';
+        return;
+      }
+      if (!validateSubscriptionField('user')) return;
+      const payload = readConfigFields('user', false);
+      payload.enabled = mode !== 'disabled';
+      if (mode !== 'custom') payload.subscriptionUrl = null;
+      const data = await api('/api/admin/users/' + encodeURIComponent(activeUserId) + '/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      setConfigFields('user', data.override || data.effective || {});
+      setUserMode(getUserModeFromConfig(data.override || null));
+      setUserSubscriptionState(data.effective || {}, data.override || null);
+      userConfigTitle.textContent = activeUserName + ' 配置';
+      await loadUsers();
       statusEl.textContent = activeUserName + ' 已保存';
     }
     async function resetUserConfig() {
       if (!activeUserId) return;
       const data = await api('/api/admin/users/' + encodeURIComponent(activeUserId) + '/config/reset', { method: 'POST' });
       setConfigFields('user', data.effective || {});
-      userConfigTitle.textContent = activeUserName + ' 配置（跟随全局）';
+      setUserMode('follow');
+      setUserSubscriptionState(data.effective || {}, null);
+      userConfigTitle.textContent = activeUserName + ' 配置';
+      await loadUsers();
       statusEl.textContent = activeUserName + ' 已重置为跟随全局';
     }
     async function loadDetails(userId, name) {
@@ -592,13 +672,15 @@ function adminPageV3(): Response {
     }
     async function loadAnomalies() {
       const data = await api('/api/admin/anomalies');
+      const anomalies = data.anomalies || [];
       anomaliesBody.innerHTML = '';
-      for (const row of data.anomalies || []) {
+      for (const row of anomalies) {
         const tr = document.createElement('tr');
         tr.innerHTML = '<td>' + escapeHtml(row.userName || row.userId || '') + '</td><td>' + escapeHtml(row.deviceName || row.deviceId || '') + '</td><td class="num danger">' + formatBytes(row.uploadBytes || 0) + '</td><td class="num danger">' + formatBytes(row.downloadBytes || 0) + '</td><td>' + formatTime(row.createdAt) + '</td>';
         anomaliesBody.appendChild(tr);
       }
-      anomalyCountEl.textContent = (data.anomalies || []).length + ' 条';
+      anomalyCountEl.textContent = anomalies.length + ' 条';
+      anomaliesBody.closest('section')?.classList.toggle('hidden', anomalies.length === 0);
     }
     function setConfigFields(prefix, config) {
       document.getElementById(prefix + 'Enabled').value = config.enabled === false ? 'false' : 'true';
@@ -608,13 +690,51 @@ function adminPageV3(): Response {
       setNodeChoice(prefix, config.preferredNode || '');
       setRuleChoices(prefix, 'direct', config.directRules || []);
       setRuleChoices(prefix, 'proxy', config.proxyRules || []);
-      if (prefix === 'global') document.getElementById('globalThreshold').value = Math.round((config.anomalyThresholdBytes || 1073741824) / 1024 / 1024);
+      if (prefix === 'global') {
+        document.getElementById('globalThreshold').value = Math.round((config.anomalyThresholdBytes || 1073741824) / 1024 / 1024);
+        setGlobalSubscriptionState(config);
+      }
     }
     function readConfigFields(prefix, includeThreshold) {
       const nodeChoice = document.getElementById(prefix + 'Node').value;
       const value = { enabled: document.getElementById(prefix + 'Enabled').value === 'true', subscriptionUrl: document.getElementById(prefix + 'Subscription').value.trim() || null, ruleProfile: document.getElementById(prefix + 'RuleProfile').value || null, preferredStrategy: document.getElementById(prefix + 'Strategy').value || null, preferredNode: nodeChoice === '__default__' ? null : nodeChoice || null, directRules: readRuleChoices(prefix, 'direct'), proxyRules: readRuleChoices(prefix, 'proxy') };
       if (includeThreshold) value.anomalyThresholdBytes = Math.max(1, Number(document.getElementById('globalThreshold').value || 1024)) * 1024 * 1024;
       return value;
+    }
+    function validateSubscriptionField(prefix) {
+      const input = document.getElementById(prefix + 'Subscription');
+      const error = document.getElementById(prefix + 'SubscriptionError');
+      const value = input.value.trim();
+      if (error) error.textContent = '';
+      if (value && !value.startsWith('https://')) {
+        const message = '订阅链接需以 https:// 开头';
+        if (error) error.textContent = message;
+        statusEl.textContent = message;
+        input.focus();
+        return false;
+      }
+      return true;
+    }
+    function getUserMode() {
+      const value = userModeEl.value;
+      return value === 'custom' || value === 'disabled' ? value : 'follow';
+    }
+    function setUserMode(mode) {
+      userModeEl.value = mode;
+      updateUserModeState();
+    }
+    function getUserModeFromConfig(override) {
+      if (!override) return 'follow';
+      if (override.enabled === false) return 'disabled';
+      return 'custom';
+    }
+    function updateUserModeState() {
+      const mode = getUserMode();
+      const editable = mode === 'custom';
+      document.getElementById('userSubscription').disabled = !editable;
+      document.querySelectorAll('#userConfigPanel details.advanced input, #userConfigPanel details.advanced select').forEach((field) => {
+        field.disabled = !editable;
+      });
     }
     function initConfigControls(prefix) {
       const nodeSelect = document.getElementById(prefix + 'Node');
@@ -669,6 +789,48 @@ function adminPageV3(): Response {
           renderCustomRules(prefix, kind);
         };
       });
+    }
+    function setGlobalSubscriptionState(config) {
+      if (config.enabled === false) return setSubscriptionChip(globalSubscriptionState, '已停用');
+      if (config.subscriptionUrl) return setSubscriptionChip(globalSubscriptionState, '已设置');
+      setSubscriptionChip(globalSubscriptionState, '未配置');
+    }
+    function setUserSubscriptionState(effective, override) {
+      if (override && override.enabled === false) return setSubscriptionChip(userSubscriptionState, '已停用');
+      if (override && override.subscriptionUrl) return setSubscriptionChip(userSubscriptionState, '单独订阅');
+      if (override) return setSubscriptionChip(userSubscriptionState, '单独配置');
+      if (effective && effective.subscriptionUrl) return setSubscriptionChip(userSubscriptionState, '跟随全局');
+      setSubscriptionChip(userSubscriptionState, '未配置');
+    }
+    function setSubscriptionChip(el, text) {
+      el.textContent = text;
+      el.className = 'chip ' + subscriptionClass(text);
+    }
+    function subscriptionBadge(value) {
+      const text = value || '未配置';
+      return '<span class="chip ' + subscriptionClass(text) + '">' + escapeHtml(text) + '</span>';
+    }
+    function subscriptionClass(value) {
+      if (value === '已设置' || value === '单独订阅' || value === '跟随全局') return 'good';
+      if (value === '已停用') return 'off';
+      return 'warn';
+    }
+    function parseJson(text) {
+      if (!text) return null;
+      try { return JSON.parse(text); } catch { return null; }
+    }
+    function formatApiError(status, data) {
+      const error = data && data.error ? String(data.error) : '';
+      if (status === 403) return error === 'admin disabled' ? '后台未启用管理' : '管理 token 不对';
+      if (status === 401) return '设备签名无效';
+      if (status === 429) return '请求太频繁';
+      if (status === 400) return error === 'invalid subscription url' ? '订阅链接无效' : '请求内容有误';
+      if (status === 404) return '接口不存在';
+      if (status >= 500) return '后台暂时不可用';
+      return '请求失败';
+    }
+    function formatAdminError(error) {
+      return error instanceof Error && error.message ? error.message : '无法加载';
     }
     function normalizeRuleText(rule) { return String(rule || '').split(',').map((part) => part.trim()).filter(Boolean).join(','); }
     function dedupeRules(rules) { return [...new Set(rules.map(normalizeRuleText).filter(Boolean))]; }
@@ -1141,7 +1303,10 @@ function adminPage(): Response {
 }
 
 async function reportTraffic(request: Request, env: Env): Promise<Response> {
-  const input = (await request.json()) as TrafficReportInput;
+  const bodyText = await request.text();
+  const input = safeParseJson(bodyText) as TrafficReportInput;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'invalid json');
+  const reportId = normalizeReportId(input.reportId);
   const userId = String(input.userId ?? '').trim();
   const deviceId = String(input.deviceId ?? '').trim();
   const upload = normalizeBytes(input.uploadDelta);
@@ -1150,13 +1315,18 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
   const date = now.slice(0, 10);
 
   if (!userId || !deviceId) throw new HttpError(400, 'missing identity');
-  if (upload === 0 && download === 0) return json({ ok: true });
+  if (!reportId) throw new HttpError(400, 'missing report id');
 
-  await requireKnownDevice(env, userId, deviceId);
+  await verifyDeviceRequest(request, env, userId, deviceId, bodyText);
+  if (upload === 0 && download === 0) return json({ ok: true });
 
   const config = await getEffectiveRemoteConfig(env, userId);
   const anomaly = upload >= config.anomalyThresholdBytes || download >= config.anomalyThresholdBytes;
   const writes = [
+    env.DB.prepare(
+      `INSERT INTO traffic_reports (id, user_id, device_id, upload_delta, download_delta, reported_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(reportId, userId, deviceId, upload, download, cleanOptional(input.reportedAt) ?? now, now),
     env.DB.prepare('UPDATE devices SET last_seen_at = ?, app_version = COALESCE(?, app_version) WHERE id = ?').bind(
       now,
       cleanOptional(input.appVersion),
@@ -1180,7 +1350,12 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
     );
   }
 
-  await env.DB.batch(writes);
+  try {
+    await env.DB.batch(writes);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) return json({ ok: true, anomaly: false, duplicate: true });
+    throw error;
+  }
 
   return json({ ok: true, anomaly });
 }
@@ -1191,6 +1366,14 @@ async function listUsers(env: Env): Promise<Response> {
        users.id,
        users.name,
        users.status,
+       CASE
+         WHEN user_remote_config.user_id IS NOT NULL AND user_remote_config.enabled = 0 THEN '已停用'
+         WHEN user_remote_config.user_id IS NOT NULL AND COALESCE(TRIM(user_remote_config.subscription_url), '') <> '' THEN '单独订阅'
+         WHEN user_remote_config.user_id IS NOT NULL THEN '单独配置'
+         WHEN remote_config.enabled = 0 THEN '已停用'
+         WHEN COALESCE(TRIM(remote_config.subscription_url), '') <> '' THEN '跟随全局'
+         ELSE '未配置'
+       END AS subscriptionState,
        COALESCE(device_totals.devices, 0) AS devices,
        COALESCE(traffic_totals.uploadBytes, 0) AS uploadBytes,
        COALESCE(traffic_totals.downloadBytes, 0) AS downloadBytes,
@@ -1208,12 +1391,14 @@ async function listUsers(env: Env): Promise<Response> {
        FROM traffic_daily
        GROUP BY user_id
      ) traffic_totals ON traffic_totals.user_id = users.id
-     LEFT JOIN (
-       SELECT user_id, COUNT(*) AS anomalies, MAX(created_at) AS lastAnomalyAt
-       FROM traffic_anomalies
-       GROUP BY user_id
-     ) anomaly_totals ON anomaly_totals.user_id = users.id
-     ORDER BY downloadBytes DESC, uploadBytes DESC, lastSeenAt DESC`
+      LEFT JOIN (
+        SELECT user_id, COUNT(*) AS anomalies, MAX(created_at) AS lastAnomalyAt
+        FROM traffic_anomalies
+        GROUP BY user_id
+      ) anomaly_totals ON anomaly_totals.user_id = users.id
+      LEFT JOIN user_remote_config ON user_remote_config.user_id = users.id
+      LEFT JOIN remote_config ON remote_config.id = 1
+      ORDER BY downloadBytes DESC, uploadBytes DESC, lastSeenAt DESC`
   ).all();
   return json({ users: result.results });
 }
@@ -1293,7 +1478,7 @@ async function getUserRemoteConfig(env: Env, userId: string): Promise<Partial<Re
 
   return {
     enabled: typeof row.enabled === 'number' ? row.enabled === 1 : undefined,
-    subscriptionUrl: cleanOptional(row.subscription_url) ?? undefined,
+    subscriptionUrl: normalizeStoredSubscriptionUrl(row.subscription_url),
     ruleProfile: cleanOptional(row.rule_profile) ?? undefined,
     preferredNode: cleanOptional(row.preferred_node) ?? undefined,
     preferredStrategy: cleanOptional(row.preferred_strategy) ?? undefined,
@@ -1325,7 +1510,7 @@ function normalizeRemoteConfigRow(row: RemoteConfigRow): RemoteControlConfig {
   return {
     version: typeof row.version === 'number' && row.version > 0 ? row.version : 1,
     enabled: row.enabled !== 0,
-    subscriptionUrl: cleanOptional(row.subscription_url) ?? undefined,
+    subscriptionUrl: normalizeStoredSubscriptionUrl(row.subscription_url),
     ruleProfile: cleanOptional(row.rule_profile) ?? undefined,
     preferredNode: cleanOptional(row.preferred_node) ?? undefined,
     preferredStrategy: cleanOptional(row.preferred_strategy) ?? undefined,
@@ -1353,11 +1538,15 @@ function normalizeRemoteConfigInput(
     input.anomalyThresholdBytes > 0
       ? Math.floor(input.anomalyThresholdBytes)
       : fallback.anomalyThresholdBytes;
+  const subscriptionUrl =
+    typeof input.subscriptionUrl === 'undefined'
+      ? fallback.subscriptionUrl
+      : normalizeSubscriptionUrl(input.subscriptionUrl);
 
   return {
     version: fallback.version,
     enabled: typeof input.enabled === 'boolean' ? input.enabled : fallback.enabled,
-    subscriptionUrl: normalizeSubscriptionUrl(input.subscriptionUrl) ?? undefined,
+    subscriptionUrl,
     ruleProfile,
     preferredNode: normalizeText(input.preferredNode, 120) ?? undefined,
     preferredStrategy,
@@ -1395,20 +1584,96 @@ async function requireKnownDevice(env: Env, userId: string, deviceId: string): P
   if (!device) throw new HttpError(403, 'unknown device');
 }
 
-function requireAdmin(request: Request, env: Env) {
+async function verifyDeviceRequest(
+  request: Request,
+  env: Env,
+  userId: string,
+  deviceId: string,
+  bodyText: string
+): Promise<void> {
+  const device = await env.DB.prepare('SELECT id, device_seed AS deviceSeed FROM devices WHERE id = ? AND user_id = ?')
+    .bind(deviceId, userId)
+    .first<{ id: string; deviceSeed: string }>();
+  if (!device?.deviceSeed) throw new HttpError(403, 'unknown device');
+
+  const timestamp = request.headers.get('x-youyu-timestamp')?.trim() ?? '';
+  const signature = request.headers.get('x-youyu-signature')?.trim() ?? '';
+  if (!timestamp || !signature) throw new HttpError(401, 'signature required');
+
+  const requestTime = Number(timestamp);
+  if (!Number.isFinite(requestTime) || Math.abs(Date.now() - requestTime) > 5 * 60 * 1000) {
+    throw new HttpError(401, 'stale signature');
+  }
+
+  const expected = await signDeviceRequest(request.method, new URL(request.url), bodyText, device.deviceSeed, timestamp);
+  if (!constantTimeEqual(signature, expected)) throw new HttpError(401, 'invalid signature');
+}
+
+async function signDeviceRequest(
+  method: string,
+  url: URL,
+  bodyText: string,
+  secret: string,
+  timestamp: string
+): Promise<string> {
+  const canonical = [
+    method.toUpperCase(),
+    `${url.pathname}${url.search}`,
+    timestamp,
+    await sha256Hex(bodyText)
+  ].join('\n');
+  return hmacSha256Hex(secret, canonical);
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return bytesToHex(new Uint8Array(digest));
+}
+
+async function hmacSha256Hex(secret: string, value: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(value));
+  return bytesToHex(new Uint8Array(signature));
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function requireAdmin(request: Request, env: Env): Promise<void> {
   if (!env.ADMIN_TOKEN) throw new HttpError(403, 'admin disabled');
+  const rateLimitKey = `admin:${getClientIp(request)}`;
+  await assertRateLimit(env, rateLimitKey, 10, 15 * 60 * 1000);
   const token = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim();
-  if (token !== env.ADMIN_TOKEN) throw new HttpError(403, 'forbidden');
+  if (!constantTimeEqual(token ?? '', env.ADMIN_TOKEN.trim())) {
+    await recordRateLimitFailure(env, rateLimitKey, 15 * 60 * 1000);
+    throw new HttpError(403, 'forbidden');
+  }
+  await clearRateLimit(env, rateLimitKey);
 }
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET, POST, OPTIONS',
-      'access-control-allow-headers': 'content-type, authorization'
+      'content-type': 'application/json; charset=utf-8'
+    }
+  });
+}
+
+function optionsResponse(): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      allow: 'GET, POST, OPTIONS'
     }
   });
 }
@@ -1417,8 +1682,57 @@ function normalizeName(value: string): string {
   return value.replace(/\s+/g, '').toLowerCase();
 }
 
+function getClientIp(request: Request): string {
+  return (
+    request.headers.get('cf-connecting-ip')?.trim() ||
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    'unknown'
+  );
+}
+
+async function assertRateLimit(env: Env, key: string, maxAttempts: number, windowMs: number): Promise<void> {
+  const now = Date.now();
+  const row = await env.DB.prepare('SELECT attempts, reset_at AS resetAt FROM rate_limits WHERE key = ?')
+    .bind(key)
+    .first<{ attempts: number; resetAt: number }>();
+  if (!row) return;
+  if (row.resetAt <= now) {
+    await env.DB.prepare('DELETE FROM rate_limits WHERE key = ?').bind(key).run();
+    return;
+  }
+  if (row.attempts >= maxAttempts) throw new HttpError(429, 'too many attempts');
+}
+
+async function recordRateLimitFailure(env: Env, key: string, windowMs: number): Promise<void> {
+  const now = Date.now();
+  const row = await env.DB.prepare('SELECT attempts, reset_at AS resetAt FROM rate_limits WHERE key = ?')
+    .bind(key)
+    .first<{ attempts: number; resetAt: number }>();
+  const attempts = row && row.resetAt > now ? row.attempts + 1 : 1;
+  const resetAt = row && row.resetAt > now ? row.resetAt : now + windowMs;
+  await env.DB.prepare(
+    `INSERT INTO rate_limits (key, attempts, reset_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       attempts = excluded.attempts,
+       reset_at = excluded.reset_at,
+       updated_at = excluded.updated_at`
+  )
+    .bind(key, attempts, resetAt, new Date(now).toISOString())
+    .run();
+}
+
+async function clearRateLimit(env: Env, key: string): Promise<void> {
+  await env.DB.prepare('DELETE FROM rate_limits WHERE key = ?').bind(key).run();
+}
+
 function normalizeBytes(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function normalizeReportId(value: unknown): string | undefined {
+  const text = normalizeText(value, 120);
+  return text && /^[A-Za-z0-9:_-]{8,120}$/.test(text) ? text : undefined;
 }
 
 function parseRuleList(value: unknown): string[] {
@@ -1440,7 +1754,7 @@ function safeParseJson(value: string): unknown {
   try {
     return JSON.parse(value);
   } catch {
-    return [];
+    return undefined;
   }
 }
 
@@ -1455,7 +1769,19 @@ function normalizeSubscriptionUrl(value: unknown): string | undefined {
 
   try {
     const url = new URL(text);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? text : undefined;
+    if (url.protocol !== 'https:') throw new Error('unsupported protocol');
+    return text;
+  } catch {
+    throw new HttpError(400, 'invalid subscription url');
+  }
+}
+
+function normalizeStoredSubscriptionUrl(value: unknown): string | undefined {
+  const text = cleanOptional(value);
+  if (!text) return undefined;
+  try {
+    const url = new URL(text);
+    return url.protocol === 'https:' ? text : undefined;
   } catch {
     return undefined;
   }
@@ -1469,6 +1795,20 @@ function normalizeChoice(value: unknown, choices: string[]): string | undefined 
 function cleanOptional(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
   return text || null;
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  const maxLength = Math.max(a.length, b.length);
+  let diff = a.length ^ b.length;
+  for (let index = 0; index < maxLength; index += 1) {
+    diff |= (a.charCodeAt(index) || 0) ^ (b.charCodeAt(index) || 0);
+  }
+  return diff === 0;
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /unique|constraint/i.test(message);
 }
 
 class HttpError extends Error {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type {
   AppSnapshot,
   ConnectivityCategory,
@@ -36,18 +36,24 @@ const services: Array<{
   { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global' }
 ];
 
-let cachedResults: TestResults | undefined;
-let cachedActiveKey: ConnectivityServiceKey = 'steam';
+const cachedResultsByNode = new Map<string, TestResults>();
+const cachedActiveKeyByNode = new Map<string, ConnectivityServiceKey>();
 
 export function TestPage({ snapshot }: TestPageProps) {
-  const [results, setResults] = useState<TestResults>(() => getCachedResults());
-  const [activeKey, setActiveKey] = useState<ConnectivityServiceKey>(() => cachedActiveKey);
+  const cacheKey = getCacheKey(snapshot);
+  const [results, setResults] = useState<TestResults>(() => getCachedResults(cacheKey));
+  const [activeKey, setActiveKey] = useState<ConnectivityServiceKey>(() => getCachedActiveKey(cacheKey));
   const [busyAll, setBusyAll] = useState(false);
   const apiReady = Boolean(window.youyu);
   const proxyReady = snapshot.status === 'running';
   const rows = useMemo(() => services.map((service) => results[service.key]), [results]);
   const active = results[activeKey];
   const summary = getSummary(rows);
+
+  useEffect(() => {
+    setResults(getCachedResults(cacheKey));
+    setActiveKey(getCachedActiveKey(cacheKey));
+  }, [cacheKey]);
 
   async function testOne(key: ConnectivityServiceKey) {
     const api = window.youyu;
@@ -98,13 +104,13 @@ export function TestPage({ snapshot }: TestPageProps) {
   }
 
   function selectActiveKey(key: ConnectivityServiceKey) {
-    cachedActiveKey = key;
+    cachedActiveKeyByNode.set(cacheKey, key);
     setActiveKey(key);
   }
 
   function commitResults(updater: (current: TestResults) => TestResults) {
-    const next = updater(getCachedResults());
-    cachedResults = next;
+    const next = updater(getCachedResults(cacheKey));
+    cachedResultsByNode.set(cacheKey, next);
     setResults(next);
   }
 
@@ -251,9 +257,20 @@ function SummaryItem({
   );
 }
 
-function getCachedResults(): TestResults {
-  cachedResults ??= createInitialResults();
-  return cachedResults;
+function getCacheKey(snapshot: AppSnapshot): string {
+  return snapshot.currentNode || '未连接';
+}
+
+function getCachedActiveKey(cacheKey: string): ConnectivityServiceKey {
+  return cachedActiveKeyByNode.get(cacheKey) ?? 'steam';
+}
+
+function getCachedResults(cacheKey: string): TestResults {
+  const cached = cachedResultsByNode.get(cacheKey);
+  if (cached) return cached;
+  const initial = createInitialResults();
+  cachedResultsByNode.set(cacheKey, initial);
+  return initial;
 }
 
 function createInitialResults(): TestResults {

@@ -35,6 +35,7 @@ const currentVersion = 1;
 
 export class TrafficStore {
   private readonly filePath: string;
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly baseDir: string) {
     this.filePath = join(baseDir, trafficFileName);
@@ -66,75 +67,81 @@ export class TrafficStore {
     const download = normalizeBytes(downloadDelta);
     if (upload === 0 && download === 0) return;
 
-    const current = await this.read();
-    const dateKey = toDateKey(now);
-    const day = current.daily[dateKey] ?? { upload: 0, download: 0 };
-    const next: TrafficFile = {
-      ...current,
-      totalUpload: current.totalUpload + upload,
-      totalDownload: current.totalDownload + download,
-      pendingUpload: current.pendingUpload + upload,
-      pendingDownload: current.pendingDownload + download,
-      daily: {
-        ...current.daily,
-        [dateKey]: {
-          upload: day.upload + upload,
-          download: day.download + download
-        }
-      },
-      lastUpdatedAt: now.toISOString(),
-      reportStatus: current.identity ? 'pending' : current.reportStatus ?? 'idle',
-      reportError: undefined
-    };
-    await this.write(next);
+    await this.enqueue(async () => {
+      const current = await this.read();
+      const dateKey = toDateKey(now);
+      const day = current.daily[dateKey] ?? { upload: 0, download: 0 };
+      const next: TrafficFile = {
+        ...current,
+        totalUpload: current.totalUpload + upload,
+        totalDownload: current.totalDownload + download,
+        pendingUpload: current.pendingUpload + upload,
+        pendingDownload: current.pendingDownload + download,
+        daily: {
+          ...current.daily,
+          [dateKey]: {
+            upload: day.upload + upload,
+            download: day.download + download
+          }
+        },
+        lastUpdatedAt: now.toISOString(),
+        reportStatus: current.identity ? 'pending' : current.reportStatus ?? 'idle',
+        reportError: undefined
+      };
+      await this.write(next);
+    });
   }
 
   async registerIdentity(identity: Omit<TrafficIdentity, 'registeredAt'>): Promise<TrafficIdentity> {
-    const current = await this.read();
-    const registered: TrafficIdentity = {
-      ...identity,
-      name: identity.name.trim(),
-      deviceName: identity.deviceName?.trim() || hostname(),
-      registeredAt: current.identity?.registeredAt ?? new Date().toISOString(),
-      lastReportedAt: current.identity?.lastReportedAt,
-      verificationStatus: identity.verificationStatus ?? 'verified'
-    };
-    await this.write({
-      ...current,
-      identity: registered,
-      pendingRegistration: registered.verificationStatus === 'pending' ? current.pendingRegistration : undefined,
-      reportStatus: current.pendingUpload || current.pendingDownload ? 'pending' : 'idle',
-      reportError: undefined
+    return this.enqueue(async () => {
+      const current = await this.read();
+      const registered: TrafficIdentity = {
+        ...identity,
+        name: identity.name.trim(),
+        deviceName: identity.deviceName?.trim() || hostname(),
+        registeredAt: current.identity?.registeredAt ?? new Date().toISOString(),
+        lastReportedAt: current.identity?.lastReportedAt,
+        verificationStatus: identity.verificationStatus ?? 'verified'
+      };
+      await this.write({
+        ...current,
+        identity: registered,
+        pendingRegistration: registered.verificationStatus === 'pending' ? current.pendingRegistration : undefined,
+        reportStatus: current.pendingUpload || current.pendingDownload ? 'pending' : 'idle',
+        reportError: undefined
+      });
+      return registered;
     });
-    return registered;
   }
 
   async registerPendingIdentity(input: TrafficRegistrationSecret): Promise<TrafficIdentity> {
-    const name = input.name.trim();
-    const passphrase = input.passphrase.trim();
-    const current = await this.read();
-    const deviceSeed = current.deviceSeed || randomUUID();
-    const registered: TrafficIdentity = {
-      userId: `pending:${deviceSeed}`,
-      deviceId: `pending:${deviceSeed}`,
-      name,
-      deviceName: hostname(),
-      registeredAt: current.identity?.registeredAt ?? new Date().toISOString(),
-      lastReportedAt: current.identity?.lastReportedAt,
-      verificationStatus: 'pending'
-    };
-    await this.write({
-      ...current,
-      deviceSeed,
-      identity: registered,
-      pendingRegistration: {
+    return this.enqueue(async () => {
+      const name = input.name.trim();
+      const passphrase = input.passphrase.trim();
+      const current = await this.read();
+      const deviceSeed = current.deviceSeed || randomUUID();
+      const registered: TrafficIdentity = {
+        userId: `pending:${deviceSeed}`,
+        deviceId: `pending:${deviceSeed}`,
         name,
-        passphrase
-      },
-      reportStatus: 'pending',
-      reportError: 'traffic activation pending'
+        deviceName: hostname(),
+        registeredAt: current.identity?.registeredAt ?? new Date().toISOString(),
+        lastReportedAt: current.identity?.lastReportedAt,
+        verificationStatus: 'pending'
+      };
+      await this.write({
+        ...current,
+        deviceSeed,
+        identity: registered,
+        pendingRegistration: {
+          name,
+          passphrase
+        },
+        reportStatus: 'pending',
+        reportError: 'traffic activation pending'
+      });
+      return registered;
     });
-    return registered;
   }
 
   async getPendingRegistration(): Promise<TrafficRegistrationSecret | undefined> {
@@ -149,62 +156,79 @@ export class TrafficStore {
   }
 
   async clearIdentity(message?: string): Promise<void> {
-    const current = await this.read();
-    await this.write({
-      ...current,
-      identity: undefined,
-      pendingRegistration: undefined,
-      reportStatus: message ? 'failed' : 'idle',
-      reportError: message
+    await this.enqueue(async () => {
+      const current = await this.read();
+      await this.write({
+        ...current,
+        identity: undefined,
+        pendingRegistration: undefined,
+        reportStatus: message ? 'failed' : 'idle',
+        reportError: message
+      });
     });
   }
 
   async createDeviceSeed(): Promise<string> {
-    const current = await this.read();
-    if (current.deviceSeed) return current.deviceSeed;
-    const deviceSeed = randomUUID();
-    await this.write({ ...current, deviceSeed });
-    return deviceSeed;
+    return this.enqueue(async () => {
+      const current = await this.read();
+      if (current.deviceSeed) return current.deviceSeed;
+      const deviceSeed = randomUUID();
+      await this.write({ ...current, deviceSeed });
+      return deviceSeed;
+    });
   }
 
   async markReported(upload: number, download: number, reportedAt = new Date()): Promise<void> {
-    const current = await this.read();
-    const pendingUpload = Math.max(0, current.pendingUpload - normalizeBytes(upload));
-    const pendingDownload = Math.max(0, current.pendingDownload - normalizeBytes(download));
-    const lastReportedAt = reportedAt.toISOString();
-    await this.write({
-      ...current,
-      pendingUpload,
-      pendingDownload,
-      lastReportedAt,
-      identity: current.identity ? { ...current.identity, lastReportedAt } : undefined,
-      reportStatus: pendingUpload || pendingDownload ? 'pending' : 'synced',
-      reportError: undefined
+    await this.enqueue(async () => {
+      const current = await this.read();
+      const pendingUpload = Math.max(0, current.pendingUpload - normalizeBytes(upload));
+      const pendingDownload = Math.max(0, current.pendingDownload - normalizeBytes(download));
+      const lastReportedAt = reportedAt.toISOString();
+      await this.write({
+        ...current,
+        pendingUpload,
+        pendingDownload,
+        lastReportedAt,
+        identity: current.identity ? { ...current.identity, lastReportedAt } : undefined,
+        reportStatus: pendingUpload || pendingDownload ? 'pending' : 'synced',
+        reportError: undefined
+      });
     });
   }
 
   async markReportFailed(message: string): Promise<void> {
-    const current = await this.read();
-    await this.write({
-      ...current,
-      reportStatus: 'failed',
-      reportError: message
+    await this.enqueue(async () => {
+      const current = await this.read();
+      await this.write({
+        ...current,
+        reportStatus: 'failed',
+        reportError: message
+      });
     });
   }
 
   async markNotConfigured(): Promise<void> {
-    const current = await this.read();
-    await this.write({
-      ...current,
-      reportStatus: 'not-configured',
-      reportError: undefined
+    await this.enqueue(async () => {
+      const current = await this.read();
+      await this.write({
+        ...current,
+        reportStatus: 'not-configured',
+        reportError: undefined
+      });
     });
+  }
+
+  async getDeviceSecret(): Promise<string | undefined> {
+    await this.queue.catch(() => undefined);
+    const current = await this.read();
+    return current.deviceSeed;
   }
 
   async getSnapshot(now = new Date()): Promise<{
     identity?: TrafficIdentity;
     stats: PersistentTrafficStats;
   }> {
+    await this.queue.catch(() => undefined);
     const current = await this.read();
     const today = current.daily[toDateKey(now)] ?? { upload: 0, download: 0 };
     return {
@@ -227,6 +251,12 @@ export class TrafficStore {
   private async write(value: TrafficFile): Promise<void> {
     await mkdir(this.baseDir, { recursive: true });
     await writeFile(this.filePath, `${JSON.stringify(this.normalize(value), null, 2)}\n`, 'utf8');
+  }
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task, task);
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
   private normalize(value: Partial<TrafficFile>): TrafficFile {

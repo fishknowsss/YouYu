@@ -30,6 +30,19 @@ describe('TrafficStore', () => {
     expect(snapshot.stats.pendingDownload).toBe(950);
   });
 
+  it('keeps concurrent traffic increments instead of overwriting them', async () => {
+    const store = new TrafficStore(dir);
+    const now = new Date('2026-05-10T08:00:00.000Z');
+
+    await Promise.all(Array.from({ length: 20 }, () => store.addTraffic(5, 7, now)));
+
+    const snapshot = await store.getSnapshot(now);
+    expect(snapshot.stats.totalUpload).toBe(100);
+    expect(snapshot.stats.totalDownload).toBe(140);
+    expect(snapshot.stats.pendingUpload).toBe(100);
+    expect(snapshot.stats.pendingDownload).toBe(140);
+  });
+
   it('keeps identity and clears reported pending bytes', async () => {
     const store = new TrafficStore(dir);
 

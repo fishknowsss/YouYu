@@ -77,6 +77,8 @@ let petDockBehavior:
     }
   | undefined;
 let subscriptionRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+let remoteConfigSyncTimer: ReturnType<typeof setInterval> | undefined;
+let remoteConfigSyncRunning = false;
 let updateCheckTimer: ReturnType<typeof setTimeout> | undefined;
 let updateCheckRunning = false;
 let autoUpdatesConfigured = false;
@@ -130,6 +132,7 @@ const nodeHealthIntervalMs = currentNodeDelayRefreshMs;
 const nodeHealthRepairDelayMs = 3000;
 const nodeHealthRetryDelayMs = 8000;
 const nodeHealthFailureThreshold = 2;
+const remoteConfigSyncIntervalMs = 3 * 60 * 1000;
 const updateInitialDelayMs = 8 * 1000;
 const updateDailyIntervalMs = 24 * 60 * 60 * 1000;
 const runtimeRecoveryInitialDelayMs = 1500;
@@ -293,6 +296,33 @@ async function syncRemoteConfig(options: { proxyUrl?: string; restartIfRunning?:
     }
   } catch (error) {
     appendLog(`remote config sync failed: ${formatError(error)}`);
+  }
+}
+
+function startRemoteConfigPolling() {
+  if (remoteConfigSyncTimer) return;
+  remoteConfigSyncTimer = setInterval(() => {
+    void syncRemoteConfigInBackground();
+  }, remoteConfigSyncIntervalMs);
+  void syncRemoteConfigInBackground();
+}
+
+function stopRemoteConfigPolling() {
+  if (!remoteConfigSyncTimer) return;
+  clearInterval(remoteConfigSyncTimer);
+  remoteConfigSyncTimer = undefined;
+}
+
+async function syncRemoteConfigInBackground(): Promise<void> {
+  if (remoteConfigSyncRunning || cleanupStarted || cleanupFinished || isQuitting) return;
+  remoteConfigSyncRunning = true;
+  try {
+    await syncRemoteConfig({
+      proxyUrl: getRuntimeTrafficProxyUrl(),
+      restartIfRunning: true
+    });
+  } finally {
+    remoteConfigSyncRunning = false;
   }
 }
 
@@ -1265,6 +1295,7 @@ async function registerTrafficIdentity(input: Parameters<TrafficReporter['regist
     trafficTracker.start();
     trafficReporter.start();
   }
+  startRemoteConfigPolling();
   clearLastError();
   return createSnapshot();
 }
@@ -2369,6 +2400,7 @@ async function createPetWindow() {
 async function cleanupBeforeExit() {
   if (cleanupStarted) return;
   cleanupStarted = true;
+  stopRemoteConfigPolling();
   if (petFeatureEnabled) {
     stopPetDrag({ settle: false });
     clearPetDockBehavior();
@@ -2406,6 +2438,7 @@ if (!gotSingleInstanceLock) {
     createTray();
     void migrateLegacyLaunchAtLogin();
     void createWindow();
+    startRemoteConfigPolling();
     if (petFeatureEnabled) {
       void createPetWindow();
     }

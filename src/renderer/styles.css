@@ -1865,7 +1865,7 @@ select:focus-visible {
 .node {
   min-height: 60px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(0, 1fr) 52px;
   align-items: center;
   gap: 8px;
   border: 1px solid var(--line);
@@ -1933,7 +1933,7 @@ select:focus-visible {
 }
 
 .node-test {
-  width: 40px;
+  width: 52px;
   height: 40px;
   border-radius: 7px;
   color: var(--accent);

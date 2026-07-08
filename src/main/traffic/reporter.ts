@@ -1,8 +1,10 @@
 import { hostname } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import type { TrafficRegistrationInput } from '../../shared/ipc';
+import { createDeviceAuthHeaders } from '../deviceAuth';
 import type { TrafficStore } from './store';
 
 type TrafficReporterOptions = {
@@ -104,18 +106,28 @@ export class TrafficReporter {
 
     const upload = stats.pendingUpload;
     const download = stats.pendingDownload;
+    const body = {
+      reportId: randomUUID(),
+      userId: identity.userId,
+      deviceId: identity.deviceId,
+      uploadDelta: upload,
+      downloadDelta: download,
+      appVersion: this.options.appVersion,
+      reportedAt: new Date().toISOString()
+    };
+    const secret = await this.options.store.getDeviceSecret();
+    if (!secret) {
+      const message = 'traffic device secret missing';
+      await this.options.store.markReportFailed(message);
+      throw new Error(message);
+    }
+
     const response = await postJson(
       `${endpoint}/api/traffic/report`,
-      {
-        userId: identity.userId,
-        deviceId: identity.deviceId,
-        uploadDelta: upload,
-        downloadDelta: download,
-        appVersion: this.options.appVersion,
-        reportedAt: new Date().toISOString()
-      },
+      body,
       this.options.getProxyUrl?.(),
-      this.options.requestTimeoutMs
+      this.options.requestTimeoutMs,
+      (bodyText, url) => createDeviceAuthHeaders('POST', url, bodyText, secret)
     );
 
     if (!response.ok) {
@@ -142,16 +154,18 @@ async function postJson(
   url: string,
   value: unknown,
   proxyUrl?: string,
-  timeoutMs = 15000
+  timeoutMs = 15000,
+  createAuthHeaders?: (body: string, url: string) => Record<string, string>
 ): Promise<JsonResponse> {
   const body = JSON.stringify(value);
+  const authHeaders = createAuthHeaders?.(body, url) ?? {};
   if (!proxyUrl) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error('traffic request timed out')), timeoutMs);
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...authHeaders },
         body,
         signal: controller.signal
       });
@@ -165,20 +179,22 @@ async function postJson(
     }
   }
 
-  return postJsonViaProxy(url, body, proxyUrl, timeoutMs);
+  return postJsonViaProxy(url, body, proxyUrl, timeoutMs, authHeaders);
 }
 
 async function postJsonViaProxy(
   url: string,
   body: string,
   proxyUrl: string,
-  timeoutMs: number
+  timeoutMs: number,
+  authHeaders: Record<string, string>
 ): Promise<JsonResponse> {
   const target = new URL(url);
   const proxy = new URL(proxyUrl);
   const headers = {
     'content-type': 'application/json',
-    'content-length': Buffer.byteLength(body).toString()
+    'content-length': Buffer.byteLength(body).toString(),
+    ...authHeaders
   };
 
   if (target.protocol === 'https:') {

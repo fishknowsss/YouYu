@@ -4,6 +4,7 @@ import { connect as tlsConnect } from 'node:tls';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RemoteControlConfig, RuleProfile, StrategyKey } from '../shared/ipc';
+import { createDeviceAuthHeaders } from './deviceAuth';
 import type { TrafficStore } from './traffic/store';
 
 type RemoteConfigClientOptions = {
@@ -59,7 +60,17 @@ export class RemoteConfigClient {
     url.searchParams.set('deviceId', identity.deviceId);
     url.searchParams.set('appVersion', this.options.appVersion);
 
-    const response = await getJson(url.toString(), options.proxyUrl, this.options.requestTimeoutMs);
+    const secret = await this.options.store.getDeviceSecret();
+    if (!secret) {
+      throw new Error('remote config device secret missing');
+    }
+
+    const response = await getJson(
+      url.toString(),
+      createDeviceAuthHeaders('GET', url.toString(), '', secret),
+      options.proxyUrl,
+      this.options.requestTimeoutMs
+    );
     if (!response.ok) {
       throw new Error(`remote config failed: ${response.status}`);
     }
@@ -145,7 +156,7 @@ function normalizeSubscriptionUrl(value: unknown): string | undefined {
 
   try {
     const url = new URL(text);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? text : undefined;
+    return url.protocol === 'https:' ? text : undefined;
   } catch {
     return undefined;
   }
@@ -158,16 +169,21 @@ function normalizeTextList(value: unknown, maxLength: number): string[] {
     .filter((item): item is string => Boolean(item));
 }
 
-async function getJson(url: string, proxyUrl?: string, timeoutMs = 12000): Promise<JsonResponse> {
+async function getJson(
+  url: string,
+  headers: Record<string, string>,
+  proxyUrl?: string,
+  timeoutMs = 12000
+): Promise<JsonResponse> {
   if (proxyUrl) {
-    return getJsonViaProxy(url, proxyUrl, timeoutMs);
+    return getJsonViaProxy(url, headers, proxyUrl, timeoutMs);
   }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error('remote config request timed out')), timeoutMs);
   try {
     const response = await fetch(url, {
-      headers: { accept: 'application/json' },
+      headers: { accept: 'application/json', ...headers },
       signal: controller.signal
     });
     return {
@@ -182,13 +198,14 @@ async function getJson(url: string, proxyUrl?: string, timeoutMs = 12000): Promi
 
 async function getJsonViaProxy(
   url: string,
+  headers: Record<string, string>,
   proxyUrl: string,
   timeoutMs: number
 ): Promise<JsonResponse> {
   const target = new URL(url);
   const proxy = new URL(proxyUrl);
   if (target.protocol !== 'https:') {
-    return getJsonViaHttpProxy(target, proxy, timeoutMs);
+    return getJsonViaHttpProxy(target, proxy, headers, timeoutMs);
   }
 
   return new Promise((resolve, reject) => {
@@ -219,6 +236,7 @@ async function getJsonViaProxy(
             `GET ${target.pathname}${target.search} HTTP/1.1`,
             `Host: ${target.host}`,
             'Accept: application/json',
+            ...formatHeaderLines(headers),
             'Connection: close',
             '',
             ''
@@ -238,6 +256,7 @@ async function getJsonViaProxy(
 async function getJsonViaHttpProxy(
   target: URL,
   proxy: URL,
+  authHeaders: Record<string, string>,
   timeoutMs: number
 ): Promise<JsonResponse> {
   return new Promise((resolve, reject) => {
@@ -249,7 +268,8 @@ async function getJsonViaHttpProxy(
         path: target.toString(),
         timeout: timeoutMs,
         headers: {
-          accept: 'application/json'
+          accept: 'application/json',
+          ...authHeaders
         }
       },
       (res) => {
@@ -268,6 +288,10 @@ async function getJsonViaHttpProxy(
     req.on('error', reject);
     req.end();
   });
+}
+
+function formatHeaderLines(headers: Record<string, string>): string[] {
+  return Object.entries(headers).map(([name, value]) => `${name}: ${value}`);
 }
 
 function parseHttpResponse(raw: string): JsonResponse {

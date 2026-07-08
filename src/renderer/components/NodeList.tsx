@@ -28,8 +28,13 @@ export function NodeList({ nodes, busy, switchingNode, emptyText = '先更新订
               <span className="node-name">{node.name}</span>
               <span className={getDelayClass(node)}>{formatDelay(node, switching)}</span>
             </button>
-            <button className="node-test" disabled={busy || switching} onClick={() => onTestNode(node.name)}>
-              测
+            <button
+              className="node-test"
+              disabled={busy || switching}
+              aria-label={`${node.name} 测速`}
+              onClick={() => onTestNode(node.name)}
+            >
+              测速
             </button>
           </div>
         );

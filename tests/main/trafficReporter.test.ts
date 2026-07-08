@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -138,17 +138,61 @@ describe('TrafficReporter', () => {
       }
     });
   });
+
+  it('signs traffic reports and sends a report id', async () => {
+    let reportCount = 0;
+    const endpoint = await startJsonServer(async (body, request) => {
+      reportCount += 1;
+      expect(request.url).toBe('/api/traffic/report');
+      expect(request.headers['x-youyu-timestamp']).toEqual(expect.any(String));
+      expect(request.headers['x-youyu-signature']).toEqual(expect.any(String));
+      expect(body.reportId).toEqual(expect.any(String));
+      expect(body.userId).toBe('user_1');
+      expect(body.deviceId).toBe('device_1');
+      expect(body.uploadDelta).toBe(100);
+      expect(body.downloadDelta).toBe(200);
+      return {
+        status: 200,
+        body: { ok: true }
+      };
+    });
+    const store = new TrafficStore(dir);
+    const reporter = new TrafficReporter({
+      store,
+      endpoint,
+      appVersion: '0.8.7'
+    });
+
+    await store.createDeviceSeed();
+    await store.registerIdentity({
+      userId: 'user_1',
+      deviceId: 'device_1',
+      name: 'Alice',
+      deviceName: 'DESKTOP'
+    });
+    await store.addTraffic(100, 200);
+    await reporter.reportPending();
+
+    expect(reportCount).toBe(1);
+    await expect(store.getSnapshot()).resolves.toMatchObject({
+      stats: {
+        pendingUpload: 0,
+        pendingDownload: 0,
+        reportStatus: 'synced'
+      }
+    });
+  });
 });
 
 async function startJsonServer(
-  handler: (body: Record<string, unknown>) => Promise<{ status: number; body: unknown }>
+  handler: (body: Record<string, unknown>, request: IncomingMessage) => Promise<{ status: number; body: unknown }>
 ): Promise<string> {
   server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
     request.on('end', async () => {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as Record<string, unknown>;
-      const result = await handler(body);
+      const result = await handler(body, request);
       response.writeHead(result.status, { 'content-type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify(result.body));
     });
