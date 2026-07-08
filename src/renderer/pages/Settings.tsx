@@ -227,7 +227,15 @@ function UpdatePanel({
   const update = snapshot.update;
   const installing = update.status === 'downloaded';
   const waiting = update.status === 'checking' || update.status === 'downloading';
-  const buttonLabel = installing ? '安装' : update.status === 'downloading' ? '下载中' : update.status === 'checking' ? '检查中' : '检查';
+  const buttonLabel = installing
+    ? '安装'
+    : update.status === 'downloading'
+      ? '下载中'
+      : update.status === 'checking'
+        ? '检查中'
+        : update.status === 'available'
+          ? '更新'
+          : '检查';
   const progress = typeof update.percent === 'number' ? update.percent : 0;
 
   const statusText = formatUpdateStatus(update);
@@ -255,7 +263,6 @@ function UpdatePanel({
 }
 
 function formatUpdateStatus(update: AppSnapshot['update']): string {
-  const suffix = getUpdateChannelSuffix(update.buildChannel);
   if (update.status === 'checking') return '检查中';
   if (update.status === 'available') return update.availableVersion ? `发现 ${update.availableVersion}` : '发现更新';
   if (update.status === 'downloading') {
@@ -266,7 +273,7 @@ function formatUpdateStatus(update: AppSnapshot['update']): string {
   }
   if (update.status === 'not-available') return update.message || '已是最新';
   if (update.status === 'failed') return formatUpdateFailure(update.message);
-  return `当前 ${update.currentVersion}${suffix}`;
+  return '待检查';
 }
 
 function formatUpdateFailure(message: string | undefined): string {
@@ -277,12 +284,6 @@ function formatUpdateFailure(message: string | undefined): string {
   if (message.includes('ENOTFOUND') || message.includes('EAI_AGAIN')) return '失败：无法连接 GitHub';
   if (message.includes('net::ERR_INTERNET_DISCONNECTED')) return '失败：网络未连接';
   return `失败：${message}`;
-}
-
-function getUpdateChannelSuffix(channel: AppSnapshot['update']['buildChannel']): string {
-  if (channel === 'in') return ' · 内部版';
-  if (channel === 'no') return ' · 无桌宠';
-  return '';
 }
 
 function getSnapshotSettingsKey(snapshot: AppSnapshot): string {

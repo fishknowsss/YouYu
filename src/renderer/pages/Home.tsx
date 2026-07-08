@@ -16,6 +16,8 @@ type HomeProps = {
   onStrategyChange: (strategy: StrategyKey) => void;
   onOpenNodes: () => void;
   onUsageModeChange: (mode: UsageMode) => void;
+  onCheckUpdate: () => void;
+  onInstallUpdate: () => void;
 };
 
 export function Home(props: HomeProps) {
@@ -63,8 +65,57 @@ function EasyHome(props: HomeProps) {
             <span className={`startup-ring ${starting ? 'is-starting' : ''}`} aria-hidden="true" />
           </button>
         </div>
+        <EasyUpdateNotice
+          snapshot={props.snapshot}
+          busy={props.busy}
+          onCheckUpdate={props.onCheckUpdate}
+          onInstallUpdate={props.onInstallUpdate}
+        />
       </section>
     </div>
+  );
+}
+
+function EasyUpdateNotice({
+  snapshot,
+  busy,
+  onCheckUpdate,
+  onInstallUpdate
+}: {
+  snapshot: AppSnapshot;
+  busy: boolean;
+  onCheckUpdate: () => void;
+  onInstallUpdate: () => void;
+}) {
+  const update = snapshot.update;
+  const visible = update.status === 'available' || update.status === 'downloading' || update.status === 'downloaded';
+  if (!visible) return null;
+
+  const downloaded = update.status === 'downloaded';
+  const downloading = update.status === 'downloading';
+  const version = update.downloadedVersion || update.availableVersion;
+  const text = downloaded ? `已下载 ${version ?? '新版本'}` : downloading ? '正在下载更新' : `发现 ${version ?? '新版本'}`;
+  const progress = typeof update.percent === 'number' ? update.percent : 0;
+
+  return (
+    <aside className={`easy-update-notice ${downloaded ? 'is-ready' : ''}`} aria-live="polite">
+      <div className="easy-update-copy">
+        <span>软件更新</span>
+        <strong>{text}</strong>
+      </div>
+      {downloading && (
+        <div className="easy-update-progress" aria-hidden="true">
+          <span style={{ width: `${Math.max(8, progress)}%` }} />
+        </div>
+      )}
+      <button
+        className={downloaded ? 'wide-button' : 'secondary-button'}
+        disabled={busy || downloading}
+        onClick={downloaded ? onInstallUpdate : onCheckUpdate}
+      >
+        {downloaded ? '安装' : downloading ? '下载中' : '更新'}
+      </button>
+    </aside>
   );
 }
 

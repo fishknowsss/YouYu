@@ -451,6 +451,89 @@ select:focus-visible {
   transform: translateY(-30px);
 }
 
+.easy-update-notice {
+  position: absolute;
+  right: 18px;
+  bottom: 16px;
+  width: 248px;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgb(143 88 215 / 13%);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgb(255 255 255 / 82%);
+  box-shadow:
+    0 16px 34px rgb(58 42 82 / 10%),
+    inset 0 1px 0 rgb(255 255 255 / 72%);
+  backdrop-filter: blur(10px);
+  animation: easy-update-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.easy-update-notice.is-ready {
+  border-color: rgb(58 149 119 / 18%);
+}
+
+.easy-update-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.easy-update-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.easy-update-copy strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.easy-update-notice button {
+  width: 72px;
+  height: 34px;
+}
+
+.easy-update-progress {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 999px;
+  background: rgb(221 212 232 / 72%);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgb(143 88 215 / 10%);
+}
+
+.easy-update-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgb(143 88 215 / 48%), rgb(143 88 215 / 92%));
+  transition: width 180ms ease;
+}
+
+@keyframes easy-update-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .easy-board.is-running .launch-panel,
 .advanced-board.is-running .connection-card {
   border-color: #b9dfcf;

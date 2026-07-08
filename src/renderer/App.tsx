@@ -321,6 +321,8 @@ export function App() {
             onStrategyChange={(strategy) => runAction((api) => api.selectStrategy(strategy), '已切换')}
             onOpenNodes={() => setPage('nodes')}
             onUsageModeChange={changeUsageMode}
+            onCheckUpdate={() => runAction((api) => api.checkForUpdates(), '', '检查中')}
+            onInstallUpdate={() => runAction((api) => api.installUpdate(), '', '安装中')}
           />
         )}
         {page === 'nodes' && (
