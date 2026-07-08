@@ -326,6 +326,13 @@ export function createDevYouYuApi(): YouYuApi {
         }
       });
     },
+    async syncRemoteConfig() {
+      requireTrafficIdentity();
+      return publish({
+        remoteSubscriptionUrl: snapshot.remoteSubscriptionUrl,
+        subscriptionUrl: snapshot.subscriptionUrl
+      });
+    },
     async checkForUpdates() {
       return publish({
         update: {

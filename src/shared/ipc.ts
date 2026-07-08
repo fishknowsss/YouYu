@@ -267,6 +267,7 @@ export type YouYuApi = {
   updateSubscription: () => Promise<AppSnapshot>;
   saveSettings: (settings: AppSettingsInput) => Promise<AppSnapshot>;
   registerTrafficIdentity: (input: TrafficRegistrationInput) => Promise<AppSnapshot>;
+  syncRemoteConfig: () => Promise<AppSnapshot>;
   checkForUpdates: () => Promise<AppSnapshot>;
   installUpdate: () => Promise<AppSnapshot>;
 };
@@ -296,6 +297,7 @@ export const ipcChannels = {
   updateSubscription: 'youyu:update-subscription',
   saveSettings: 'youyu:save-settings',
   registerTrafficIdentity: 'youyu:register-traffic-identity',
+  syncRemoteConfig: 'youyu:sync-remote-config',
   checkForUpdates: 'youyu:check-for-updates',
   installUpdate: 'youyu:install-update'
 } as const;

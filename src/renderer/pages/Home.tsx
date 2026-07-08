@@ -94,11 +94,12 @@ function EasyUpdateNotice({
   const downloaded = update.status === 'downloaded';
   const downloading = update.status === 'downloading';
   const version = update.downloadedVersion || update.availableVersion;
-  const text = downloaded ? `已下载 ${version ?? '新版本'}` : downloading ? '正在下载更新' : `发现 ${version ?? '新版本'}`;
+  const text = downloaded ? `已下载 ${version ?? '新版本'}` : version ? `正在下载 ${version}` : '正在下载更新';
   const progress = typeof update.percent === 'number' ? update.percent : 0;
+  const noticeClass = downloaded ? 'is-ready' : downloading ? 'is-downloading' : 'is-available';
 
   return (
-    <aside className={`easy-update-notice ${downloaded ? 'is-ready' : ''}`} aria-live="polite">
+    <aside className={`easy-update-notice ${noticeClass}`} aria-live="polite">
       <div className="easy-update-copy">
         <span>软件更新</span>
         <strong>{text}</strong>
@@ -110,10 +111,10 @@ function EasyUpdateNotice({
       )}
       <button
         className={downloaded ? 'wide-button' : 'secondary-button'}
-        disabled={busy || downloading}
+        disabled={busy || !downloaded}
         onClick={downloaded ? onInstallUpdate : onCheckUpdate}
       >
-        {downloaded ? '安装' : downloading ? '下载中' : '更新'}
+        {downloaded ? '安装' : '下载中'}
       </button>
     </aside>
   );

@@ -8,6 +8,7 @@ type SettingsProps = {
   onBack: () => void;
   onRepair: () => void;
   onSave: (settings: AppSettingsInput) => void;
+  onSyncRemoteConfig: () => void;
   onCheckUpdate: () => void;
   onInstallUpdate: () => void;
 };
@@ -19,6 +20,7 @@ export function Settings({
   onBack,
   onRepair,
   onSave,
+  onSyncRemoteConfig,
   onCheckUpdate,
   onInstallUpdate
 }: SettingsProps) {
@@ -197,6 +199,9 @@ export function Settings({
           <button className="wide-button" disabled={busy} onClick={save}>
             保存
           </button>
+          <button className="secondary-button" disabled={busy} onClick={onSyncRemoteConfig}>
+            同步
+          </button>
           <button className="secondary-button" disabled={busy} onClick={onRepair}>
             修复
           </button>
@@ -225,17 +230,17 @@ function UpdatePanel({
   onInstallUpdate: () => void;
 }) {
   const update = snapshot.update;
-  const installing = update.status === 'downloaded';
-  const waiting = update.status === 'checking' || update.status === 'downloading';
-  const buttonLabel = installing
+  const ready = update.status === 'downloaded';
+  const waiting = update.status === 'checking' || update.status === 'downloading' || update.status === 'available';
+  const buttonLabel = ready
     ? '安装'
     : update.status === 'downloading'
       ? '下载中'
-      : update.status === 'checking'
-        ? '检查中'
-        : update.status === 'available'
-          ? '更新'
-          : '检查';
+    : update.status === 'checking'
+      ? '检查中'
+      : update.status === 'available'
+        ? '下载中'
+        : '检查';
   const progress = typeof update.percent === 'number' ? update.percent : 0;
 
   const statusText = formatUpdateStatus(update);
@@ -252,9 +257,9 @@ function UpdatePanel({
         </div>
       )}
       <button
-        className={installing ? 'wide-button' : 'secondary-button'}
+        className={ready ? 'wide-button' : 'secondary-button'}
         disabled={busy || waiting}
-        onClick={installing ? onInstallUpdate : onCheckUpdate}
+        onClick={ready ? onInstallUpdate : onCheckUpdate}
       >
         {buttonLabel}
       </button>

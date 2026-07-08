@@ -347,6 +347,7 @@ export function App() {
             onBack={() => setPage('home')}
             onRepair={() => runAction((api) => api.repair(), '已修复', '修复中')}
             onSave={(settings: AppSettingsInput) => runAction((api) => api.saveSettings(settings), '已保存')}
+            onSyncRemoteConfig={() => runAction((api) => api.syncRemoteConfig(), '已同步', '同步中')}
             onCheckUpdate={() => runAction((api) => api.checkForUpdates(), '', '检查中')}
             onInstallUpdate={() => runAction((api) => api.installUpdate(), '', '安装中')}
           />

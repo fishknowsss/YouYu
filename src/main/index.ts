@@ -284,18 +284,23 @@ function getRuntimeTrafficProxyUrl(): string | undefined {
   return lifecycle?.getStatus() === 'running' ? `http://127.0.0.1:${runtimePorts.mixedPort}` : undefined;
 }
 
-async function syncRemoteConfig(options: { proxyUrl?: string; restartIfRunning?: boolean } = {}): Promise<void> {
+async function syncRemoteConfig(
+  options: { proxyUrl?: string; restartIfRunning?: boolean; throwOnError?: boolean } = {}
+): Promise<boolean> {
   try {
     const result = await remoteConfigClient.sync({ proxyUrl: options.proxyUrl });
     const subscriptionChanged = await applyRemoteSubscription(result.config);
-    if (!result.changed && !subscriptionChanged) return;
+    if (!result.changed && !subscriptionChanged) return false;
 
     appendLog(`remote config updated: v${result.config?.version ?? 0}`);
     if (options.restartIfRunning && lifecycle.getStatus() === 'running') {
       await lifecycle.restart();
     }
+    return true;
   } catch (error) {
     appendLog(`remote config sync failed: ${formatError(error)}`);
+    if (options.throwOnError) throw error;
+    return false;
   }
 }
 
@@ -1548,6 +1553,17 @@ function registerIpc() {
     const snapshot = await registerTrafficIdentity(input);
     sendSnapshotToWindows(snapshot);
     return snapshot;
+  });
+  ipcMain.handle(ipcChannels.syncRemoteConfig, async () => {
+    return withTrayRefresh(async () => {
+      await requireTrafficIdentity();
+      await syncRemoteConfig({
+        proxyUrl: getRuntimeTrafficProxyUrl(),
+        restartIfRunning: true,
+        throwOnError: true
+      });
+      return createSnapshot();
+    });
   });
   ipcMain.handle(ipcChannels.checkForUpdates, async () => {
     return checkForUpdatesNow(true);

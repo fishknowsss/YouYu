@@ -332,7 +332,7 @@ function adminPageV3(): Response {
     :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f6f8; color: #1f2328; }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 24px; }
-    main { width: 100%; max-width: 1220px; min-width: 0; margin: 0 auto; display: grid; gap: 14px; }
+    main { width: 100%; max-width: 1420px; min-width: 0; margin: 0 auto; display: grid; gap: 14px; }
     main > *, .panel, .auth, .subscription-box, .table-wrap { min-width: 0; }
     .topbar, .panel-head, .toolbar, .actions, .subscription-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     h1, h2, h3, p { margin: 0; letter-spacing: 0; }
@@ -353,6 +353,14 @@ function adminPageV3(): Response {
     .control-grid { display: grid; grid-template-columns: 120px 150px 150px 130px; gap: 10px; }
     .node-line { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; }
     .rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .admin-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 430px); align-items: start; gap: 14px; }
+    .side-stack { min-width: 0; display: grid; gap: 14px; position: sticky; top: 18px; }
+    .side-placeholder { display: grid; gap: 8px; min-height: 104px; align-content: center; }
+    .side-stack .control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .side-stack .rules { grid-template-columns: 1fr; }
+    .side-stack #detailPanel table { min-width: 360px; }
+    .users-panel { min-width: 0; }
+    .users-panel .table-wrap { max-height: 560px; overflow: auto; }
     label { min-width: 0; display: grid; gap: 6px; color: #344054; font-size: 13px; font-weight: 800; }
     .node-line > span { color: #344054; font-size: 13px; font-weight: 800; }
     input, select, button { border-radius: 8px; font: inherit; }
@@ -379,7 +387,10 @@ function adminPageV3(): Response {
     .table-wrap { overflow-x: auto; }
     td.actions-cell, th.actions-cell { text-align: right; }
     td.actions-cell .actions { justify-content: flex-end; gap: 8px; }
-    table { width: 100%; min-width: 560px; border-collapse: collapse; }
+    table { width: 100%; min-width: 620px; border-collapse: collapse; }
+    .users-table { min-width: 800px; }
+    .users-table th, .users-table td { padding-left: 6px; padding-right: 6px; }
+    .users-table tbody tr { cursor: pointer; }
     th, td { padding: 11px 8px; border-bottom: 1px solid #edf0f2; text-align: left; white-space: nowrap; vertical-align: middle; }
     th { color: #667085; font-size: 13px; }
     th.sortable { padding: 0; }
@@ -390,12 +401,26 @@ function adminPageV3(): Response {
     th.sortable[data-active="true"][data-direction="asc"] button::after { content: '  ↑'; color: #1f2328; }
     th.sortable[data-active="true"][data-direction="desc"] button::after { content: '  ↓'; color: #1f2328; }
     td.num, th.num { text-align: right; }
+    tr.is-active td { background: #f7faf9; }
+    .anomaly-panel { padding: 0; overflow: hidden; }
+    .anomaly-panel summary { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px; cursor: pointer; list-style: none; }
+    .anomaly-panel summary::-webkit-details-marker { display: none; }
+    .anomaly-panel summary strong { display: block; font-size: 18px; line-height: 1.2; }
+    .anomaly-panel .table-wrap { border-top: 1px solid #edf0f2; }
+    .summary-action { color: #344054; font-size: 13px; font-weight: 900; }
+    .summary-action::before { content: '展开'; }
+    .anomaly-panel[open] .summary-action::before { content: '收起'; }
     .danger { color: #b42318; font-weight: 900; }
     .hidden { display: none; }
+    @media (max-width: 1180px) {
+      .admin-grid { grid-template-columns: 1fr; }
+      .side-stack { position: static; }
+    }
     @media (max-width: 860px) {
       body { padding: 14px; }
       .topbar, .panel-head, .toolbar, .actions, .subscription-head { align-items: start; flex-direction: column; }
-      .auth, .control-grid, .node-line, .rules, .subscription-field { grid-template-columns: 1fr; }
+      .auth, .control-grid, .node-line, .rules, .subscription-field, .admin-grid { grid-template-columns: 1fr; }
+      .side-stack { position: static; }
     }
   </style>
 </head>
@@ -403,9 +428,9 @@ function adminPageV3(): Response {
   <main>
     <header class="topbar">
       <div><h1>YouYu 后台</h1><p class="status-text" id="status">未加载</p></div>
-      <button class="secondary" id="refresh">刷新</button>
+      <div class="actions"><button class="secondary" id="changeToken">令牌</button><button class="secondary" id="refresh">刷新</button></div>
     </header>
-    <section class="auth">
+    <section class="auth" id="authPanel">
       <input id="token" type="password" placeholder="管理令牌" autocomplete="current-password" />
       <button id="login">进入</button>
     </section>
@@ -438,37 +463,45 @@ function adminPageV3(): Response {
         <div class="danger-zone"><button class="secondary" id="syncGlobalUsers">清除覆盖</button></div>
       </details>
     </section>
-    <section class="panel">
-      <div class="toolbar"><h2>用户</h2><span class="muted" id="userCount">0 个用户</span></div>
-      <div class="table-wrap"><table><thead><tr><th class="sortable" data-sort="name"><button type="button">姓名</button></th><th class="sortable" data-sort="subscriptionState"><button type="button">订阅</button></th><th class="num sortable" data-sort="devices"><button type="button">设备</button></th><th class="sortable" data-sort="lastSeenAt"><button type="button">最后在线</button></th><th class="actions-cell"></th></tr></thead><tbody id="users"></tbody></table></div>
-    </section>
-    <section class="panel hidden" id="userConfigPanel">
-      <div class="toolbar"><h2 id="userConfigTitle">用户配置</h2><div class="actions"><button class="secondary" id="resetUserConfig">重置</button><button id="saveUserConfig">保存</button></div></div>
-      <div class="subscription-box">
-        <div class="subscription-head">
-          <h3>用户订阅</h3>
-          <span class="chip off" id="userSubscriptionState">跟随全局</span>
-        </div>
-        <label class="subscription-field"><span>模式</span><select id="userMode"><option value="follow">跟随全局</option><option value="custom">单独配置</option><option value="disabled">停用</option></select></label>
-        <label class="subscription-field"><span>订阅链接</span><input id="userSubscription" placeholder="https://..." autocomplete="off" spellcheck="false" /></label>
-        <div class="field-error" id="userSubscriptionError"></div>
-      </div>
-      <details class="advanced">
-        <summary>高级</summary>
-        <div class="control-grid">
-        <label>状态<select id="userEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
-        <label>规则<select id="userRuleProfile"><option value="">不覆盖</option><option value="subscription">机场配置</option><option value="smart">智能规则</option><option value="global">全局代理</option></select></label>
-        <label>策略<select id="userStrategy"><option value="">不覆盖</option><option value="auto">自动</option><option value="fallback">故障</option><option value="load-balance">均衡</option><option value="direct">直连</option></select></label>
-        <label>启动选择<select id="userNode"></select></label>
-      </div>
-        <div class="rules">
-        <div class="rule-card"><h3>直连规则</h3><div class="check-list" id="userDirect"></div><div class="preserved-rules" id="userDirectCustom"></div></div>
-        <div class="rule-card"><h3>代理规则</h3><div class="check-list" id="userProxy"></div><div class="preserved-rules" id="userProxyCustom"></div></div>
-        </div>
-      </details>
-    </section>
-    <section class="panel hidden" id="detailPanel"><div class="toolbar"><h2 id="detailTitle">明细</h2><button class="secondary" id="closeDetail">收起</button></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>更新时间</th></tr></thead><tbody id="details"></tbody></table></div></section>
-    <section class="panel hidden"><div class="toolbar"><h2>异常</h2><span class="muted" id="anomalyCount">0 条</span></div><div class="table-wrap"><table><thead><tr><th>用户</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>时间</th></tr></thead><tbody id="anomalies"></tbody></table></div></section>
+    <div class="admin-grid">
+      <section class="panel users-panel">
+        <div class="toolbar"><h2>用户</h2><span class="muted" id="userCount">0 个用户</span></div>
+        <div class="table-wrap"><table class="users-table"><thead><tr><th class="sortable" data-sort="name"><button type="button">姓名</button></th><th class="sortable" data-sort="subscriptionState"><button type="button">订阅</button></th><th class="num sortable" data-sort="devices"><button type="button">设备</button></th><th class="num sortable" data-sort="uploadBytes"><button type="button">上传</button></th><th class="num sortable" data-sort="downloadBytes"><button type="button">下载</button></th><th class="num sortable" data-sort="totalBytes"><button type="button">总量</button></th><th class="num sortable" data-sort="anomalies"><button type="button">异常</button></th><th class="sortable" data-sort="lastSeenAt"><button type="button">最后在线</button></th><th class="actions-cell"></th></tr></thead><tbody id="users"></tbody></table></div>
+      </section>
+      <aside class="side-stack">
+        <section class="panel side-placeholder" id="sidePlaceholder">
+          <h2>用户明细</h2>
+          <p class="status-text">选择用户查看配置和流量</p>
+        </section>
+        <section class="panel hidden" id="userConfigPanel">
+          <div class="toolbar"><h2 id="userConfigTitle">用户配置</h2><div class="actions"><button class="secondary" id="resetUserConfig">重置</button><button id="saveUserConfig">保存</button></div></div>
+          <div class="subscription-box">
+            <div class="subscription-head">
+              <h3>用户订阅</h3>
+              <span class="chip off" id="userSubscriptionState">跟随全局</span>
+            </div>
+            <label class="subscription-field"><span>模式</span><select id="userMode"><option value="follow">跟随全局</option><option value="custom">单独配置</option><option value="disabled">停用</option></select></label>
+            <label class="subscription-field"><span>订阅链接</span><input id="userSubscription" placeholder="https://..." autocomplete="off" spellcheck="false" /></label>
+            <div class="field-error" id="userSubscriptionError"></div>
+          </div>
+          <details class="advanced">
+            <summary>高级</summary>
+            <div class="control-grid">
+            <label>状态<select id="userEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+            <label>规则<select id="userRuleProfile"><option value="">不覆盖</option><option value="subscription">机场配置</option><option value="smart">智能规则</option><option value="global">全局代理</option></select></label>
+            <label>策略<select id="userStrategy"><option value="">不覆盖</option><option value="auto">自动</option><option value="fallback">故障</option><option value="load-balance">均衡</option><option value="direct">直连</option></select></label>
+            <label>启动选择<select id="userNode"></select></label>
+          </div>
+            <div class="rules">
+            <div class="rule-card"><h3>直连规则</h3><div class="check-list" id="userDirect"></div><div class="preserved-rules" id="userDirectCustom"></div></div>
+            <div class="rule-card"><h3>代理规则</h3><div class="check-list" id="userProxy"></div><div class="preserved-rules" id="userProxyCustom"></div></div>
+            </div>
+          </details>
+        </section>
+        <section class="panel hidden" id="detailPanel"><div class="toolbar"><h2 id="detailTitle">流量明细</h2><button class="secondary" id="closeDetail">收起</button></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>设备</th><th class="num">上传</th><th class="num">下载</th></tr></thead><tbody id="details"></tbody></table></div></section>
+        <details class="panel anomaly-panel hidden" id="anomalyPanel"><summary><span><strong>异常</strong><span class="muted" id="anomalyCount">0 条</span></span><span class="summary-action"></span></summary><div class="table-wrap"><table><thead><tr><th>用户</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>时间</th></tr></thead><tbody id="anomalies"></tbody></table></div></details>
+      </aside>
+    </div>
   </main>
   <script>
     const tokenInput = document.getElementById('token');
@@ -476,6 +509,7 @@ function adminPageV3(): Response {
     const detailsBody = document.getElementById('details');
     const anomaliesBody = document.getElementById('anomalies');
     const statusEl = document.getElementById('status');
+    const authPanel = document.getElementById('authPanel');
     const userCountEl = document.getElementById('userCount');
     const anomalyCountEl = document.getElementById('anomalyCount');
     const globalSubscriptionState = document.getElementById('globalSubscriptionState');
@@ -485,6 +519,8 @@ function adminPageV3(): Response {
     const detailTitle = document.getElementById('detailTitle');
     const userConfigPanel = document.getElementById('userConfigPanel');
     const userConfigTitle = document.getElementById('userConfigTitle');
+    const sidePlaceholder = document.getElementById('sidePlaceholder');
+    const anomalyPanel = document.getElementById('anomalyPanel');
     const nodeChoices = [
       { value: '', label: '不指定，沿用客户端' },
       { value: '__default__', label: '默认优选节点' },
@@ -506,7 +542,7 @@ function adminPageV3(): Response {
       ]
     };
     const customRules = { global: { direct: [], proxy: [] }, user: { direct: [], proxy: [] } };
-    const userSort = { key: 'lastSeenAt', direction: 'desc' };
+    const userSort = { key: 'totalBytes', direction: 'desc' };
     let loadedUsers = [];
     let activeUserId = '';
     let activeUserName = '';
@@ -519,7 +555,8 @@ function adminPageV3(): Response {
       loadAll();
     };
     document.getElementById('refresh').onclick = loadAll;
-    document.getElementById('closeDetail').onclick = () => detailPanel.classList.add('hidden');
+    document.getElementById('changeToken').onclick = () => { authPanel.classList.toggle('hidden'); tokenInput.focus(); };
+    document.getElementById('closeDetail').onclick = () => { detailPanel.classList.add('hidden'); updateSidePlaceholder(); };
     document.getElementById('saveGlobal').onclick = saveGlobalConfig;
     document.getElementById('syncGlobalUsers').onclick = syncGlobalUsers;
     document.getElementById('saveUserConfig').onclick = saveUserConfig;
@@ -548,8 +585,8 @@ function adminPageV3(): Response {
     }
     async function loadAll() {
       statusEl.textContent = '加载中';
-      try { await Promise.all([loadGlobalConfig(), loadUsers(), loadAnomalies()]); statusEl.textContent = '已更新'; }
-      catch (error) { statusEl.textContent = formatAdminError(error); }
+      try { await Promise.all([loadGlobalConfig(), loadUsers(), loadAnomalies()]); authPanel.classList.add('hidden'); statusEl.textContent = '已更新'; }
+      catch (error) { authPanel.classList.remove('hidden'); statusEl.textContent = formatAdminError(error); }
     }
     async function loadGlobalConfig() {
       const data = await api('/api/admin/config');
@@ -587,11 +624,27 @@ function adminPageV3(): Response {
       updateSortHeaders();
       for (const user of sortUsers(loadedUsers)) {
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td>' + escapeHtml(user.name || '') + '</td><td>' + subscriptionBadge(user.subscriptionState) + '</td><td class="num">' + (user.devices || 0) + '</td><td>' + formatTime(user.lastSeenAt) + '</td><td class="actions-cell"><div class="actions"><button class="secondary" data-action="detail" data-id="' + user.id + '" data-name="' + escapeHtml(user.name || '') + '">流量</button><button data-action="config" data-id="' + user.id + '" data-name="' + escapeHtml(user.name || '') + '">设置</button></div></td>';
+        const displayName = user.name || user.id || '未命名';
+        const anomalyText = user.anomalies ? '<span class="danger">' + user.anomalies + '</span>' : '0';
+        const uploadBytes = user.uploadBytes || 0;
+        const downloadBytes = user.downloadBytes || 0;
+        tr.dataset.userId = user.id || '';
+        if (user.id === activeUserId) tr.classList.add('is-active');
+        tr.innerHTML = '<td>' + escapeHtml(displayName) + '</td><td>' + subscriptionBadge(user.subscriptionState) + '</td><td class="num">' + (user.devices || 0) + '</td><td class="num">' + formatBytes(uploadBytes) + '</td><td class="num">' + formatBytes(downloadBytes) + '</td><td class="num">' + formatBytes(uploadBytes + downloadBytes) + '</td><td class="num">' + anomalyText + '</td><td>' + formatTime(user.lastSeenAt) + '</td><td class="actions-cell"><div class="actions"><button data-action="manage" data-id="' + escapeHtml(user.id || '') + '" data-name="' + escapeHtml(displayName) + '">管理</button></div></td>';
+        tr.onclick = (event) => { if (!event.target.closest('button')) loadUserOverview(user.id, displayName); };
         usersBody.appendChild(tr);
       }
-      usersBody.querySelectorAll('button[data-action="detail"]').forEach((button) => { button.onclick = () => loadDetails(button.dataset.id, button.dataset.name); });
-      usersBody.querySelectorAll('button[data-action="config"]').forEach((button) => { button.onclick = () => loadUserConfig(button.dataset.id, button.dataset.name); });
+      usersBody.querySelectorAll('button[data-action="manage"]').forEach((button) => { button.onclick = () => loadUserOverview(button.dataset.id, button.dataset.name); });
+    }
+    function revealSideForUser(userId) {
+      sidePlaceholder.classList.add('hidden');
+      usersBody.querySelectorAll('tr').forEach((row) => {
+        row.classList.toggle('is-active', row.dataset.userId === userId);
+      });
+    }
+    function updateSidePlaceholder() {
+      const hasVisiblePanel = !userConfigPanel.classList.contains('hidden') || !detailPanel.classList.contains('hidden');
+      sidePlaceholder.classList.toggle('hidden', hasVisiblePanel);
     }
     function updateSortHeaders() {
       document.querySelectorAll('th.sortable').forEach((th) => {
@@ -611,19 +664,40 @@ function adminPageV3(): Response {
       if (key === 'name') return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
       if (key === 'subscriptionState') return String(a.subscriptionState || '').localeCompare(String(b.subscriptionState || ''), 'zh-CN');
       if (key === 'lastSeenAt') return dateValue(a.lastSeenAt) - dateValue(b.lastSeenAt);
+      if (key === 'totalBytes') return numberValue(a.uploadBytes) + numberValue(a.downloadBytes) - numberValue(b.uploadBytes) - numberValue(b.downloadBytes);
       return numberValue(a[key]) - numberValue(b[key]);
     }
     function numberValue(value) { return typeof value === 'number' && Number.isFinite(value) ? value : 0; }
     function dateValue(value) { const time = value ? new Date(value).getTime() : 0; return Number.isFinite(time) ? time : 0; }
+    async function loadUserOverview(userId, name) {
+      activeUserId = userId; activeUserName = name;
+      revealSideForUser(userId);
+      statusEl.textContent = name + ' 加载中';
+      const [configData, trafficData] = await Promise.all([
+        api('/api/admin/users/' + encodeURIComponent(userId) + '/config'),
+        api('/api/admin/users/' + encodeURIComponent(userId) + '/traffic')
+      ]);
+      renderUserConfig(name, configData);
+      renderUserTraffic(name, trafficData.rows || []);
+      userConfigPanel.classList.remove('hidden');
+      detailPanel.classList.remove('hidden');
+      updateSidePlaceholder();
+      statusEl.textContent = name + ' 已加载';
+    }
     async function loadUserConfig(userId, name) {
       activeUserId = userId; activeUserName = name;
+      revealSideForUser(userId);
       const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/config');
+      renderUserConfig(name, data);
+      userConfigPanel.classList.remove('hidden');
+      updateSidePlaceholder();
+    }
+    function renderUserConfig(name, data) {
       const hasOverride = Boolean(data.override);
       setConfigFields('user', hasOverride ? data.override : data.effective || {});
       setUserMode(getUserModeFromConfig(data.override || null));
       setUserSubscriptionState(data.effective || {}, data.override || null);
       userConfigTitle.textContent = name + ' 配置';
-      userConfigPanel.classList.remove('hidden');
     }
     async function saveUserConfig() {
       if (!activeUserId) return;
@@ -661,14 +735,21 @@ function adminPageV3(): Response {
       statusEl.textContent = activeUserName + ' 已重置为跟随全局';
     }
     async function loadDetails(userId, name) {
+      activeUserId = userId; activeUserName = name;
+      revealSideForUser(userId);
       const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/traffic');
-      detailTitle.textContent = name + ' 明细'; detailsBody.innerHTML = '';
-      for (const row of data.rows || []) {
+      renderUserTraffic(name, data.rows || []);
+      detailPanel.classList.remove('hidden');
+      updateSidePlaceholder();
+    }
+    function renderUserTraffic(name, rows) {
+      detailTitle.textContent = name + ' 流量';
+      detailsBody.innerHTML = '';
+      for (const row of rows || []) {
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td>' + escapeHtml(row.date || '') + '</td><td>' + escapeHtml(row.deviceName || row.deviceId || '') + '</td><td class="num">' + formatBytes(row.uploadBytes || 0) + '</td><td class="num">' + formatBytes(row.downloadBytes || 0) + '</td><td>' + formatTime(row.updatedAt) + '</td>';
+        tr.innerHTML = '<td>' + escapeHtml(row.date || '') + '</td><td>' + escapeHtml(row.deviceName || row.deviceId || '') + '</td><td class="num">' + formatBytes(row.uploadBytes || 0) + '</td><td class="num">' + formatBytes(row.downloadBytes || 0) + '</td>';
         detailsBody.appendChild(tr);
       }
-      detailPanel.classList.remove('hidden');
     }
     async function loadAnomalies() {
       const data = await api('/api/admin/anomalies');
@@ -680,7 +761,8 @@ function adminPageV3(): Response {
         anomaliesBody.appendChild(tr);
       }
       anomalyCountEl.textContent = anomalies.length + ' 条';
-      anomaliesBody.closest('section')?.classList.toggle('hidden', anomalies.length === 0);
+      anomalyPanel.classList.toggle('hidden', anomalies.length === 0);
+      if (anomalies.length === 0) anomalyPanel.open = false;
     }
     function setConfigFields(prefix, config) {
       document.getElementById(prefix + 'Enabled').value = config.enabled === false ? 'false' : 'true';
