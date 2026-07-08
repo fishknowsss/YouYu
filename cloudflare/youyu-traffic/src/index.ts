@@ -329,38 +329,38 @@ function adminPageV3(): Response {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>YouYu 后台</title>
   <style>
-    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f6f8; color: #1f2328; }
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #1f2328; }
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 24px; }
-    main { width: 100%; max-width: 1420px; min-width: 0; margin: 0 auto; display: grid; gap: 14px; }
+    body { margin: 0; padding: 18px; }
+    main { width: 100%; max-width: 1500px; min-width: 0; margin: 0 auto; display: grid; gap: 12px; }
     main > *, .panel, .auth, .subscription-box, .table-wrap { min-width: 0; }
     .topbar, .panel-head, .toolbar, .actions, .subscription-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     h1, h2, h3, p { margin: 0; letter-spacing: 0; }
     h1 { font-size: 28px; line-height: 1.1; }
     h2 { font-size: 18px; line-height: 1.2; }
     .status-text, .muted { color: #667085; }
-    .panel, .auth { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 2px rgb(16 24 40 / 6%); }
+    .panel, .auth { background: #fff; border: 1px solid #e4e7ec; border-radius: 8px; padding: 14px; box-shadow: none; }
     .auth { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 10px; }
-    .config-panel { display: grid; gap: 16px; }
-    .subscription-box { display: grid; gap: 10px; padding: 14px; border: 1px solid #e4e7ec; border-radius: 8px; background: #fbfcfd; }
-    .subscription-field { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; }
+    .config-panel { display: grid; gap: 12px; }
+    .subscription-box { display: grid; gap: 10px; padding: 12px; border: 1px solid #e7eaee; border-radius: 8px; background: #fbfcfd; }
+    .subscription-field { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 10px; }
     .subscription-field span { color: #344054; font-size: 13px; font-weight: 800; }
     .field-error { min-height: 18px; color: #b42318; font-size: 13px; font-weight: 800; }
     .advanced { display: grid; gap: 12px; border: 0; padding: 0; }
     .advanced summary { width: fit-content; height: 34px; display: inline-flex; align-items: center; border-radius: 8px; padding: 0 12px; background: #eef1f4; color: #1f2328; font-size: 13px; font-weight: 900; cursor: pointer; }
     .advanced[open] summary { margin-bottom: 12px; }
     .danger-zone { display: flex; justify-content: flex-end; padding-top: 2px; }
-    .control-grid { display: grid; grid-template-columns: 120px 150px 150px 130px; gap: 10px; }
+    .control-grid { display: grid; grid-template-columns: 112px 142px 142px 124px; gap: 10px; }
     .node-line { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; }
     .rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-    .admin-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 430px); align-items: start; gap: 14px; }
-    .side-stack { min-width: 0; display: grid; gap: 14px; position: sticky; top: 18px; }
+    .admin-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 380px); align-items: start; gap: 12px; }
+    .side-stack { min-width: 0; max-height: calc(100dvh - 36px); display: grid; gap: 12px; position: sticky; top: 18px; overflow: auto; scrollbar-gutter: stable; }
     .side-placeholder { display: grid; gap: 8px; min-height: 104px; align-content: center; }
     .side-stack .control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .side-stack .rules { grid-template-columns: 1fr; }
-    .side-stack #detailPanel table { min-width: 360px; }
+    .side-stack #detailPanel table { min-width: 320px; }
     .users-panel { min-width: 0; }
-    .users-panel .table-wrap { max-height: 560px; overflow: auto; }
+    .users-panel .table-wrap { max-height: calc(100dvh - 312px); overflow: auto; }
     label { min-width: 0; display: grid; gap: 6px; color: #344054; font-size: 13px; font-weight: 800; }
     .node-line > span { color: #344054; font-size: 13px; font-weight: 800; }
     input, select, button { border-radius: 8px; font: inherit; }
@@ -388,10 +388,10 @@ function adminPageV3(): Response {
     td.actions-cell, th.actions-cell { text-align: right; }
     td.actions-cell .actions { justify-content: flex-end; gap: 8px; }
     table { width: 100%; min-width: 620px; border-collapse: collapse; }
-    .users-table { min-width: 800px; }
-    .users-table th, .users-table td { padding-left: 6px; padding-right: 6px; }
+    .users-table { min-width: 880px; }
+    .users-table th, .users-table td { padding-left: 7px; padding-right: 7px; }
     .users-table tbody tr { cursor: pointer; }
-    th, td { padding: 11px 8px; border-bottom: 1px solid #edf0f2; text-align: left; white-space: nowrap; vertical-align: middle; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid #edf0f2; text-align: left; white-space: nowrap; vertical-align: middle; }
     th { color: #667085; font-size: 13px; }
     th.sortable { padding: 0; }
     th.sortable button { width: 100%; height: auto; min-height: 42px; padding: 11px 8px; border-radius: 0; background: transparent; color: #667085; text-align: inherit; font-size: 13px; font-weight: 900; }
@@ -401,7 +401,9 @@ function adminPageV3(): Response {
     th.sortable[data-active="true"][data-direction="asc"] button::after { content: '  ↑'; color: #1f2328; }
     th.sortable[data-active="true"][data-direction="desc"] button::after { content: '  ↓'; color: #1f2328; }
     td.num, th.num { text-align: right; }
-    tr.is-active td { background: #f7faf9; }
+    tbody tr:hover td { background: #fafbfc; }
+    tr.is-active td { background: #f3f6fb; }
+    .user-name-cell { max-width: 150px; overflow: hidden; text-overflow: ellipsis; font-weight: 900; }
     .anomaly-panel { padding: 0; overflow: hidden; }
     .anomaly-panel summary { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px; cursor: pointer; list-style: none; }
     .anomaly-panel summary::-webkit-details-marker { display: none; }
@@ -412,7 +414,7 @@ function adminPageV3(): Response {
     .anomaly-panel[open] .summary-action::before { content: '收起'; }
     .danger { color: #b42318; font-weight: 900; }
     .hidden { display: none; }
-    @media (max-width: 1180px) {
+    @media (max-width: 900px) {
       .admin-grid { grid-template-columns: 1fr; }
       .side-stack { position: static; }
     }
@@ -630,7 +632,7 @@ function adminPageV3(): Response {
         const downloadBytes = user.downloadBytes || 0;
         tr.dataset.userId = user.id || '';
         if (user.id === activeUserId) tr.classList.add('is-active');
-        tr.innerHTML = '<td>' + escapeHtml(displayName) + '</td><td>' + subscriptionBadge(user.subscriptionState) + '</td><td class="num">' + (user.devices || 0) + '</td><td class="num">' + formatBytes(uploadBytes) + '</td><td class="num">' + formatBytes(downloadBytes) + '</td><td class="num">' + formatBytes(uploadBytes + downloadBytes) + '</td><td class="num">' + anomalyText + '</td><td>' + formatTime(user.lastSeenAt) + '</td><td class="actions-cell"><div class="actions"><button data-action="manage" data-id="' + escapeHtml(user.id || '') + '" data-name="' + escapeHtml(displayName) + '">管理</button></div></td>';
+        tr.innerHTML = '<td class="user-name-cell" title="' + escapeHtml(displayName) + '">' + escapeHtml(displayName) + '</td><td>' + subscriptionBadge(user.subscriptionState) + '</td><td class="num">' + (user.devices || 0) + '</td><td class="num">' + formatBytes(uploadBytes) + '</td><td class="num">' + formatBytes(downloadBytes) + '</td><td class="num">' + formatBytes(uploadBytes + downloadBytes) + '</td><td class="num">' + anomalyText + '</td><td>' + formatTime(user.lastSeenAt) + '</td><td class="actions-cell"><div class="actions"><button data-action="manage" data-id="' + escapeHtml(user.id || '') + '" data-name="' + escapeHtml(displayName) + '">查看</button></div></td>';
         tr.onclick = (event) => { if (!event.target.closest('button')) loadUserOverview(user.id, displayName); };
         usersBody.appendChild(tr);
       }
@@ -745,7 +747,12 @@ function adminPageV3(): Response {
     function renderUserTraffic(name, rows) {
       detailTitle.textContent = name + ' 流量';
       detailsBody.innerHTML = '';
-      for (const row of rows || []) {
+      const visibleRows = (rows || []).slice(0, 14);
+      if (!visibleRows.length) {
+        detailsBody.innerHTML = '<tr><td colspan="4" class="muted">暂无流量</td></tr>';
+        return;
+      }
+      for (const row of visibleRows) {
         const tr = document.createElement('tr');
         tr.innerHTML = '<td>' + escapeHtml(row.date || '') + '</td><td>' + escapeHtml(row.deviceName || row.deviceId || '') + '</td><td class="num">' + formatBytes(row.uploadBytes || 0) + '</td><td class="num">' + formatBytes(row.downloadBytes || 0) + '</td>';
         detailsBody.appendChild(tr);
@@ -755,12 +762,12 @@ function adminPageV3(): Response {
       const data = await api('/api/admin/anomalies');
       const anomalies = data.anomalies || [];
       anomaliesBody.innerHTML = '';
-      for (const row of anomalies) {
+      for (const row of anomalies.slice(0, 20)) {
         const tr = document.createElement('tr');
         tr.innerHTML = '<td>' + escapeHtml(row.userName || row.userId || '') + '</td><td>' + escapeHtml(row.deviceName || row.deviceId || '') + '</td><td class="num danger">' + formatBytes(row.uploadBytes || 0) + '</td><td class="num danger">' + formatBytes(row.downloadBytes || 0) + '</td><td>' + formatTime(row.createdAt) + '</td>';
         anomaliesBody.appendChild(tr);
       }
-      anomalyCountEl.textContent = anomalies.length + ' 条';
+      anomalyCountEl.textContent = anomalies.length > 20 ? anomalies.length + ' 条，显示 20 条' : anomalies.length + ' 条';
       anomalyPanel.classList.toggle('hidden', anomalies.length === 0);
       if (anomalies.length === 0) anomalyPanel.open = false;
     }

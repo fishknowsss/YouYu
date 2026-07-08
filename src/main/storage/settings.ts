@@ -121,7 +121,7 @@ export class SettingsStore {
       systemProxyEnabled:
         typeof value.systemProxyEnabled === 'boolean' ? value.systemProxyEnabled : true,
       dnsEnhanced: normalizeDnsEnhanced(value),
-      snifferEnabled: typeof value.snifferEnabled === 'boolean' ? value.snifferEnabled : true,
+      snifferEnabled: true,
       tunEnabled: typeof value.tunEnabled === 'boolean' ? value.tunEnabled : false,
       strictRouteEnabled:
         typeof value.strictRouteEnabled === 'boolean' ? value.strictRouteEnabled : true,
@@ -139,6 +139,7 @@ export class SettingsStore {
         normalized.localSubscriptionUrl ||
       normalizeSubscriptionUrl(parsed.remoteSubscriptionUrl) !== normalized.remoteSubscriptionUrl ||
       parsed.strategy !== normalized.strategy ||
+      parsed.snifferEnabled !== normalized.snifferEnabled ||
       (typeof parsed.selectedNode === 'string' ? parsed.selectedNode.trim() : '') !== normalized.selectedNode
     );
   }

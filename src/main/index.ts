@@ -133,8 +133,7 @@ const nodeHealthRepairDelayMs = 3000;
 const nodeHealthRetryDelayMs = 8000;
 const nodeHealthFailureThreshold = 2;
 const remoteConfigSyncIntervalMs = 3 * 60 * 1000;
-const updateInitialDelayMs = 8 * 1000;
-const updateDailyIntervalMs = 24 * 60 * 60 * 1000;
+const updatePeriodicIntervalMs = 30 * 60 * 1000;
 const runtimeRecoveryInitialDelayMs = 1500;
 const runtimeRecoveryMaxDelayMs = 60000;
 
@@ -424,7 +423,9 @@ function setupAutoUpdates() {
     setUpdateFailure(error);
   });
 
-  scheduleUpdateCheck(updateInitialDelayMs);
+  void checkForUpdatesNow(false).catch((error) => {
+    appendLog(`检查更新失败: ${formatError(error)}`);
+  });
 }
 
 function setUpdateSnapshot(next: Partial<AppUpdateSnapshot>) {
@@ -453,7 +454,7 @@ function setUpdateSnapshot(next: Partial<AppUpdateSnapshot>) {
   void broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
 }
 
-function scheduleUpdateCheck(delayMs = updateDailyIntervalMs) {
+function scheduleUpdateCheck(delayMs = updatePeriodicIntervalMs) {
   if (updateCheckTimer) {
     clearTimeout(updateCheckTimer);
     updateCheckTimer = undefined;
@@ -489,7 +490,7 @@ async function checkForUpdatesNow(userInitiated = true): Promise<AppSnapshot> {
     setUpdateFailure(error);
   } finally {
     updateCheckRunning = false;
-    scheduleUpdateCheck(updateDailyIntervalMs);
+    scheduleUpdateCheck(updatePeriodicIntervalMs);
   }
 
   return createSnapshot();

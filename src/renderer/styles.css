@@ -457,17 +457,17 @@ select:focus-visible {
 }
 
 .easy-update-notice {
-  position: absolute;
-  right: 0;
-  bottom: 0;
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
   z-index: 4;
-  width: min(300px, calc(100vw - 32px));
-  min-height: 54px;
+  width: min(300px, calc(100vw - 36px));
+  min-height: 56px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 68px;
+  grid-template-columns: minmax(0, 1fr) 70px;
   align-items: center;
   gap: 9px;
-  border: 1px solid rgb(214 219 225);
+  border: 1px solid rgb(216 209 225);
   border-radius: 8px;
   padding: 9px 10px;
   background: rgb(255 255 255 / 96%);
@@ -476,11 +476,11 @@ select:focus-visible {
 }
 
 .easy-update-notice.is-downloading {
-  border-color: rgb(154 167 183);
+  border-color: rgb(207 198 219);
 }
 
 .easy-update-notice.is-ready {
-  border-color: rgb(82 154 124 / 42%);
+  border-color: rgb(201 190 216);
 }
 
 .easy-update-copy {
@@ -508,15 +508,23 @@ select:focus-visible {
 }
 
 .easy-update-notice button {
-  width: 68px;
+  width: 70px;
   height: 34px;
   padding: 0 10px;
 }
 
-.easy-update-notice .secondary-button:disabled {
-  color: #667085;
-  background: #eef1f4;
-  opacity: 1;
+.easy-update-state {
+  width: 70px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: #f0e8f7;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .easy-update-progress {
@@ -532,7 +540,7 @@ select:focus-visible {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: rgb(69 119 91);
+  background: linear-gradient(90deg, rgb(143 88 215 / 42%), rgb(143 88 215 / 86%));
   transition: width 180ms ease;
 }
 
@@ -2044,11 +2052,30 @@ select:focus-visible {
   gap: 12px;
 }
 
-.form-grid {
+.settings-config-grid {
+  min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.8fr) 160px 144px;
+  grid-template-columns: minmax(0, 1fr) 250px;
   align-items: start;
-  gap: 12px;
+  gap: 10px;
+}
+
+.form-grid {
+  grid-column: 1;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(144px, 0.52fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.field-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-subscription-field {
+  grid-column: 1 / -1;
+  grid-row: 1;
 }
 
 .busy-overlay {
@@ -2139,21 +2166,16 @@ select:focus-visible {
 
 .toggle-grid {
   display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: start;
+  gap: 8px;
+}
+
+.settings-config-grid .settings-actions {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: end;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: start;
-  gap: 8px;
-}
-
-.settings-control-grid {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 150px;
-  gap: 8px;
-  align-items: start;
-}
-
-.settings-control-grid .settings-actions {
-  grid-template-columns: 1fr;
 }
 
 .toggle-row {
@@ -2448,7 +2470,7 @@ select:focus-visible {
 }
 
 .test-service-name {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 950;
 }
 
@@ -2632,11 +2654,18 @@ select:focus-visible {
     gap: 7px;
   }
 
-  .settings-control-grid {
+  .settings-config-grid {
     grid-template-columns: 1fr;
   }
 
-  .settings-control-grid .settings-actions {
+  .form-grid,
+  .settings-subscription-field,
+  .settings-config-grid .settings-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .settings-config-grid .settings-actions {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 

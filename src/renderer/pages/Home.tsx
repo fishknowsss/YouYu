@@ -119,7 +119,7 @@ function EasyUpdateNotice({
         : '发现更新';
   const progress = typeof update.percent === 'number' ? update.percent : 0;
   const noticeClass = downloaded ? 'is-ready' : downloading ? 'is-downloading' : 'is-available';
-  const buttonLabel = downloaded ? '安装' : downloading ? '下载中' : '准备中';
+  const stateLabel = downloading ? '下载中' : '准备中';
 
   return (
     <aside className={`easy-update-notice ${noticeClass}`} aria-live="polite">
@@ -132,13 +132,13 @@ function EasyUpdateNotice({
           <span style={{ width: `${Math.max(8, progress)}%` }} />
         </div>
       )}
-      <button
-        className={downloaded ? 'wide-button' : 'secondary-button'}
-        disabled={busy || !downloaded}
-        onClick={downloaded ? onInstallUpdate : onCheckUpdate}
-      >
-        {buttonLabel}
-      </button>
+      {downloaded ? (
+        <button className="wide-button" disabled={busy} onClick={onInstallUpdate}>
+          安装
+        </button>
+      ) : (
+        <span className="easy-update-state">{stateLabel}</span>
+      )}
     </aside>
   );
 }

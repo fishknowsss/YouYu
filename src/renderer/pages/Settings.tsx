@@ -28,7 +28,6 @@ export function Settings({
   const [ruleProfile, setRuleProfile] = useState<RuleProfile>(snapshot.ruleProfile);
   const [systemProxyEnabled, setSystemProxyEnabled] = useState(snapshot.features.systemProxyEnabled);
   const [dnsEnhanced, setDnsEnhanced] = useState(snapshot.features.dnsEnhanced);
-  const [snifferEnabled, setSnifferEnabled] = useState(snapshot.features.snifferEnabled);
   const [tunEnabled, setTunEnabled] = useState(snapshot.features.tunEnabled);
   const [strictRouteEnabled, setStrictRouteEnabled] = useState(snapshot.features.strictRouteEnabled);
   const [subscriptionRefreshIntervalHours, setSubscriptionRefreshIntervalHours] = useState(
@@ -48,7 +47,6 @@ export function Settings({
     setRuleProfile(snapshot.ruleProfile);
     setSystemProxyEnabled(snapshot.features.systemProxyEnabled);
     setDnsEnhanced(snapshot.features.dnsEnhanced);
-    setSnifferEnabled(snapshot.features.snifferEnabled);
     setTunEnabled(snapshot.features.tunEnabled);
     setStrictRouteEnabled(snapshot.features.strictRouteEnabled);
     setSubscriptionRefreshIntervalHours(snapshot.features.subscriptionRefreshIntervalHours);
@@ -61,7 +59,7 @@ export function Settings({
       ruleProfile,
       systemProxyEnabled,
       dnsEnhanced,
-      snifferEnabled,
+      snifferEnabled: true,
       tunEnabled,
       strictRouteEnabled,
       subscriptionRefreshIntervalHours
@@ -89,8 +87,8 @@ export function Settings({
       </div>
       <section className="panel settings-panel">
         <div className="settings-main">
-          <div className="form-grid">
-            <label className="field field-wide">
+          <div className="settings-config-grid">
+            <label className="field settings-subscription-field">
               <span>订阅</span>
               <input
                 value={subscriptionUrl}
@@ -102,99 +100,37 @@ export function Settings({
                 placeholder="https://..."
               />
             </label>
-            <label className="field">
-              <span>规则来源</span>
-              <select
-                value={ruleProfile}
-                disabled={busy}
-                onChange={(event) => {
-                  setSettingsDirty(true);
-                  setRuleProfile(event.target.value as RuleProfile);
-                }}
-              >
-                <option value="smart">智能分流</option>
-                <option value="global">全部代理</option>
-                <option value="subscription">机场配置</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>后台刷新</span>
-              <select
-                value={subscriptionRefreshIntervalHours}
-                disabled={busy}
-                onChange={(event) => {
-                  setSettingsDirty(true);
-                  setSubscriptionRefreshIntervalHours(Number(event.target.value));
-                }}
-              >
-                <option value={0}>关闭</option>
-                <option value={6}>6 小时</option>
-                <option value={12}>12 小时</option>
-                <option value={24}>24 小时</option>
-              </select>
-            </label>
-          </div>
-          <div className="settings-control-grid">
-            <div className="toggle-grid">
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={systemProxyEnabled}
+            <div className="form-grid">
+              <label className="field">
+                <span>规则来源</span>
+                <select
+                  value={ruleProfile}
                   disabled={busy}
                   onChange={(event) => {
                     setSettingsDirty(true);
-                    setSystemProxyEnabled(event.target.checked);
+                    setRuleProfile(event.target.value as RuleProfile);
                   }}
-                />
-                <span>系统代理</span>
+                >
+                  <option value="smart">智能分流</option>
+                  <option value="global">全部代理</option>
+                  <option value="subscription">机场配置</option>
+                </select>
               </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={dnsEnhanced}
+              <label className="field">
+                <span>后台刷新</span>
+                <select
+                  value={subscriptionRefreshIntervalHours}
                   disabled={busy}
                   onChange={(event) => {
                     setSettingsDirty(true);
-                    setDnsEnhanced(event.target.checked);
+                    setSubscriptionRefreshIntervalHours(Number(event.target.value));
                   }}
-                />
-                <span>DNS 增强</span>
-              </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={snifferEnabled}
-                  disabled={busy}
-                  onChange={(event) => {
-                    setSettingsDirty(true);
-                    setSnifferEnabled(event.target.checked);
-                  }}
-                />
-                <span>流量嗅探</span>
-              </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={tunEnabled}
-                  disabled={busy}
-                  onChange={(event) => {
-                    setSettingsDirty(true);
-                    setTunEnabled(event.target.checked);
-                  }}
-                />
-                <span>TUN</span>
-              </label>
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={strictRouteEnabled}
-                  disabled={busy}
-                  onChange={(event) => {
-                    setSettingsDirty(true);
-                    setStrictRouteEnabled(event.target.checked);
-                  }}
-                />
-                <span>严格路由</span>
+                >
+                  <option value={0}>关闭</option>
+                  <option value={6}>6 小时</option>
+                  <option value={12}>12 小时</option>
+                  <option value={24}>24 小时</option>
+                </select>
               </label>
             </div>
             <div className="settings-actions">
@@ -208,6 +144,56 @@ export function Settings({
                 修复
               </button>
             </div>
+          </div>
+          <div className="toggle-grid">
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={systemProxyEnabled}
+                disabled={busy}
+                onChange={(event) => {
+                  setSettingsDirty(true);
+                  setSystemProxyEnabled(event.target.checked);
+                }}
+              />
+              <span>系统代理</span>
+            </label>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={dnsEnhanced}
+                disabled={busy}
+                onChange={(event) => {
+                  setSettingsDirty(true);
+                  setDnsEnhanced(event.target.checked);
+                }}
+              />
+              <span>DNS 增强</span>
+            </label>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={tunEnabled}
+                disabled={busy}
+                onChange={(event) => {
+                  setSettingsDirty(true);
+                  setTunEnabled(event.target.checked);
+                }}
+              />
+              <span>TUN</span>
+            </label>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={strictRouteEnabled}
+                disabled={busy}
+                onChange={(event) => {
+                  setSettingsDirty(true);
+                  setStrictRouteEnabled(event.target.checked);
+                }}
+              />
+              <span>严格路由</span>
+            </label>
           </div>
         </div>
         <p className="inline-message">{message || ' '}</p>
@@ -301,7 +287,7 @@ function getSnapshotSettingsKey(snapshot: AppSnapshot): string {
     ruleProfile: snapshot.ruleProfile,
     systemProxyEnabled: snapshot.features.systemProxyEnabled,
     dnsEnhanced: snapshot.features.dnsEnhanced,
-    snifferEnabled: snapshot.features.snifferEnabled,
+    snifferEnabled: true,
     tunEnabled: snapshot.features.tunEnabled,
     strictRouteEnabled: snapshot.features.strictRouteEnabled,
     subscriptionRefreshIntervalHours: snapshot.features.subscriptionRefreshIntervalHours
@@ -314,7 +300,7 @@ function getInputSettingsKey(settings: AppSettingsInput): string {
     ruleProfile: settings.ruleProfile ?? 'subscription',
     systemProxyEnabled: settings.systemProxyEnabled ?? true,
     dnsEnhanced: settings.dnsEnhanced ?? true,
-    snifferEnabled: settings.snifferEnabled ?? true,
+    snifferEnabled: true,
     tunEnabled: settings.tunEnabled ?? false,
     strictRouteEnabled: settings.strictRouteEnabled ?? true,
     subscriptionRefreshIntervalHours: settings.subscriptionRefreshIntervalHours ?? 12
