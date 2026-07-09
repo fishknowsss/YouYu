@@ -135,9 +135,10 @@ export function createDevYouYuApi(): YouYuApi {
 
   function playDevDropSequence() {
     clearPetSequenceTimers();
-    publishPet('bottomDizzy');
-    publishPetLater('bottomAngry', 1200);
-    publishPetLater(getRuntimePetState, 3100);
+    publishPet('fallRecover');
+    publishPetLater('bottomDizzy', 900);
+    publishPetLater('bottomAngry', 2200);
+    publishPetLater(getRuntimePetState, 4200);
   }
 
   function requireSubscription() {
@@ -179,7 +180,7 @@ export function createDevYouYuApi(): YouYuApi {
     async stopPetDrag(moved = false) {
       if (moved) {
         playDevDropSequence();
-        return 'bottomDizzy';
+        return 'fallRecover';
       }
       clearPetSequenceTimers();
       const next = getRuntimePetState();

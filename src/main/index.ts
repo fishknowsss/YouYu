@@ -186,7 +186,11 @@ const trafficReporter = new TrafficReporter({
   appVersion,
   intervalMs: 2 * 60 * 1000,
   getProxyUrl: getRuntimeTrafficProxyUrl,
-  onError: (error) => appendLog(`流量上报失败: ${formatError(error)}`)
+  onError: (error) => {
+    if (!isRecoverableSyncError(error)) {
+      appendLog(`流量上报失败: ${formatError(error)}`);
+    }
+  }
 });
 const trafficTracker = new TrafficTracker({
   store: trafficStore,
@@ -363,7 +367,7 @@ function scheduleTrafficSnapshotBroadcast() {
 }
 
 async function syncRemoteConfig(
-  options: { proxyUrl?: string; restartIfRunning?: boolean; throwOnError?: boolean } = {}
+  options: { proxyUrl?: string; restartIfRunning?: boolean; throwOnError?: boolean; quiet?: boolean } = {}
 ): Promise<boolean> {
   try {
     const result = await remoteConfigClient.sync({ proxyUrl: options.proxyUrl });
@@ -376,7 +380,10 @@ async function syncRemoteConfig(
     }
     return true;
   } catch (error) {
-    appendLog(`remote config sync failed: ${formatError(error)}`);
+    const recoverable = isRecoverableSyncError(error);
+    if (!recoverable || (!options.quiet && options.throwOnError)) {
+      appendLog(`remote config sync failed: ${formatError(error)}`);
+    }
     if (options.throwOnError) throw error;
     return false;
   }
@@ -402,7 +409,8 @@ async function syncRemoteConfigInBackground(): Promise<void> {
   try {
     await syncRemoteConfig({
       proxyUrl: getRuntimeTrafficProxyUrl(),
-      restartIfRunning: true
+      restartIfRunning: true,
+      quiet: true
     });
   } finally {
     remoteConfigSyncRunning = false;
@@ -436,6 +444,22 @@ function shouldRetryRegistrationViaProxy(error: unknown): boolean {
     'Failed to fetch',
     'traffic request timed out',
     'traffic proxy connect timed out',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'ENOTFOUND',
+    'EAI_AGAIN'
+  ].some((needle) => message.includes(needle));
+}
+
+function isRecoverableSyncError(error: unknown): boolean {
+  const message = formatError(error);
+  return [
+    'fetch failed',
+    'Failed to fetch',
+    'request timed out',
+    'proxy connect timed out',
+    'aborted',
     'ECONNRESET',
     'ECONNREFUSED',
     'ETIMEDOUT',
@@ -1187,7 +1211,9 @@ async function refreshTrafficTotalsFromServer(): Promise<void> {
     sendSnapshotToWindows(snapshot);
     refreshTrayMenu();
   } catch (error) {
-    appendLog(`流量同步失败: ${formatError(error)}`);
+    if (!isRecoverableSyncError(error)) {
+      appendLog(`流量同步失败: ${formatError(error)}`);
+    }
   } finally {
     trafficTotalsRefreshRunning = false;
   }
@@ -2308,14 +2334,14 @@ function stopPetDrag(options: { settle?: boolean } = {}): DesktopPetState | unde
     if (settled.dockState === 'bottomSleep') {
       setPetState('fallRecover');
       playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'bottomSleep']);
-      return 'bottomDizzy';
+      return 'fallRecover';
     }
     if (settled.dockState) {
       setPetState(settled.dockState);
     } else {
       setPetState('fallRecover');
       playPetBottomSequence(['bottomDizzy', 'bottomAngry'], syncPetStateToRuntime);
-      return 'bottomDizzy';
+      return 'fallRecover';
     }
     return nextState;
   }

@@ -272,8 +272,9 @@ export function PetApp() {
       void window.youyu?.stopPetDrag(false);
       if (currentDrag?.visual === 'liftHold') {
         lockSequence([
-          { state: 'bottomDizzy', holdMs: 760 },
-          { state: 'bottomAngry', holdMs: 1120 }
+          { state: 'fallRecover', holdMs: 180 },
+          { state: 'bottomDizzy', holdMs: 700 },
+          { state: 'bottomAngry', holdMs: 1040 }
         ]);
         return;
       }
@@ -297,8 +298,9 @@ export function PetApp() {
     }
     if (!settleState || settleState === 'fallRecover' || isBottomReactionState(settleState)) {
       lockSequence([
-        { state: 'bottomDizzy', holdMs: 860 },
-        { state: 'bottomAngry', holdMs: 1380 }
+        { state: 'fallRecover', holdMs: 180 },
+        { state: 'bottomDizzy', holdMs: 780 },
+        { state: 'bottomAngry', holdMs: 1260 }
       ]);
       return;
     }
@@ -361,7 +363,6 @@ function getAmbientSteps(baseState: DesktopPetState): AmbientStep[] {
   if (baseState === 'comfortSad') {
     return [
       { state: 'comfortSad', durationMs: 3600 },
-      { state: 'sleepWake', durationMs: 2200 },
       { state: 'focusWait', durationMs: 2200 },
       { state: 'rewardObserve', durationMs: 2200 }
     ];
@@ -380,7 +381,6 @@ function getAmbientSteps(baseState: DesktopPetState): AmbientStep[] {
     { state: 'happy', durationMs: 2600 },
     { state: 'rewardObserve', durationMs: 2400 },
     { state: 'focusWait', durationMs: 2500 },
-    { state: 'sleepWake', durationMs: 2300 },
     { state: 'wave', durationMs: 1800 }
   ];
 }
