@@ -14,7 +14,6 @@ const stateLabels: Record<DesktopPetState, string> = {
   sleepWake: '困醒',
   focusWait: '等待',
   happy: '开心',
-  edgePeek: '探边',
   edgeLeft: '左贴',
   edgeRight: '右贴',
   edgeLeftBlink: '左眨',
@@ -42,7 +41,6 @@ const stateDescriptions: Record<DesktopPetState, string> = {
   sleepWake: '困了又醒。',
   focusWait: '安静等待。',
   happy: '开心晃动。',
-  edgePeek: '贴边探头。',
   edgeLeft: '贴在左侧。',
   edgeRight: '贴在右侧。',
   edgeLeftBlink: '左侧眨眼。',
@@ -84,13 +82,12 @@ export function PetPreviewPage() {
                 key={state}
                 type="button"
                 className={`pet-preview-card ${selectedState === state ? 'active' : ''}`}
+                aria-label={stateLabels[state]}
                 onClick={() => setSelectedState(state)}
               >
                 <span className="pet-preview-stage">
-                  <PetSprite state={state} scale={0.38} />
+                  <PetSprite state={state} scale={0.4} animated={false} />
                 </span>
-                <span className="pet-preview-name">{stateLabels[state]}</span>
-                <span className="pet-preview-meta">{stateDescriptions[state]}</span>
               </button>
             );
           })}

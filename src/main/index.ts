@@ -2389,8 +2389,8 @@ async function createWindow() {
 
 function getDefaultMainWindowSize(): { width: number; height: number } {
   const workArea = screen.getPrimaryDisplay().workAreaSize;
-  const preferredWidth = 1080;
-  const preferredHeight = 720;
+  const preferredWidth = 900;
+  const preferredHeight = 600;
   const minWidth = 900;
   const minHeight = 600;
   const horizontalMargin = workArea.width >= 1400 ? 96 : 56;

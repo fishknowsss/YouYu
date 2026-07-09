@@ -80,56 +80,69 @@ export function Settings({
         </button>
       </div>
       <section className="panel settings-panel">
-        <div className="settings-main">
-          <div className="settings-stack">
-            <label className="field settings-subscription-field">
-              <span>订阅</span>
-              <input
-                value={subscriptionUrl}
-                disabled={busy || remoteManaged}
+        <div className="settings-form-grid">
+          <label className="field settings-subscription-field">
+            <span>订阅</span>
+            <input
+              value={subscriptionUrl}
+              disabled={busy || remoteManaged}
+              onChange={(event) => {
+                setSettingsDirty(true);
+                setSubscriptionUrl(event.target.value);
+              }}
+              placeholder="https://..."
+            />
+          </label>
+          <button className="wide-button settings-save-button" disabled={busy} onClick={save}>
+            保存
+          </button>
+
+          <div className="settings-controls-row">
+            <label className="field">
+              <span>规则来源</span>
+              <select
+                value={ruleProfile}
+                disabled={busy}
                 onChange={(event) => {
                   setSettingsDirty(true);
-                  setSubscriptionUrl(event.target.value);
+                  setRuleProfile(event.target.value as RuleProfile);
                 }}
-                placeholder="https://..."
-              />
+              >
+                <option value="ruleset">智能规则</option>
+                <option value="subscription">兼容机场</option>
+                <option value="smart">本地规则</option>
+                <option value="global">全局代理</option>
+              </select>
             </label>
-            <div className="settings-meta-grid">
-              <label className="field">
-                <span>规则来源</span>
-                <select
-                  value={ruleProfile}
-                  disabled={busy}
-                  onChange={(event) => {
-                    setSettingsDirty(true);
-                    setRuleProfile(event.target.value as RuleProfile);
-                  }}
-                >
-                  <option value="ruleset">智能规则</option>
-                  <option value="subscription">兼容机场</option>
-                  <option value="smart">本地规则</option>
-                  <option value="global">全局代理</option>
-                </select>
-              </label>
-              <label className="field">
-                <span>后台刷新</span>
-                <select
-                  value={subscriptionRefreshIntervalHours}
-                  disabled={busy}
-                  onChange={(event) => {
-                    setSettingsDirty(true);
-                    setSubscriptionRefreshIntervalHours(Number(event.target.value));
-                  }}
-                >
-                  <option value={0}>关闭</option>
-                  <option value={6}>6 小时</option>
-                  <option value={12}>12 小时</option>
-                  <option value={24}>24 小时</option>
-                </select>
-              </label>
-            </div>
-            <div className="network-section">
-              <label className="network-tun-toggle">
+            <label className="field">
+              <span>后台刷新</span>
+              <select
+                value={subscriptionRefreshIntervalHours}
+                disabled={busy}
+                onChange={(event) => {
+                  setSettingsDirty(true);
+                  setSubscriptionRefreshIntervalHours(Number(event.target.value));
+                }}
+              >
+                <option value={0}>关闭</option>
+                <option value={6}>6 小时</option>
+                <option value={12}>12 小时</option>
+                <option value={24}>24 小时</option>
+              </select>
+            </label>
+          </div>
+          <div className="settings-secondary-actions">
+            <button className="secondary-button" disabled={busy} onClick={onSyncRemoteConfig}>
+              同步
+            </button>
+            <button className="secondary-button" disabled={busy} onClick={onRepair}>
+              修复
+            </button>
+          </div>
+
+          <div className="network-section">
+            <label className="network-route-toggle">
+              <span className="network-route-main">
                 <input
                   type="checkbox"
                   checked={tunEnabled}
@@ -139,29 +152,18 @@ export function Settings({
                     setTunEnabled(event.target.checked);
                   }}
                 />
-                <span>TUN</span>
-              </label>
-              <div className="network-status-grid">
-                <NetworkStatus label="系统代理" value="开启" />
-                <NetworkStatus label="DNS 增强" value="开启" />
-                <NetworkStatus label="流量嗅探" value="开启" />
-                <NetworkStatus label="严格路由" value={tunEnabled ? '开启' : '待用'} />
-              </div>
+                <strong>TUN</strong>
+              </span>
+              <span className="network-route-note">严格路由 {tunEnabled ? '开启' : '待用'}</span>
+            </label>
+            <div className="network-status-grid">
+              <NetworkStatus label="系统代理" value="开启" />
+              <NetworkStatus label="DNS 增强" value="开启" />
+              <NetworkStatus label="流量嗅探" value="开启" />
             </div>
-            <UpdatePanel snapshot={snapshot} busy={busy} onCheckUpdate={onCheckUpdate} onInstallUpdate={onInstallUpdate} />
-            <p className="inline-message">{message || ' '}</p>
           </div>
-          <div className="settings-actions">
-            <button className="wide-button" disabled={busy} onClick={save}>
-              保存
-            </button>
-            <button className="secondary-button" disabled={busy} onClick={onSyncRemoteConfig}>
-              同步
-            </button>
-            <button className="secondary-button" disabled={busy} onClick={onRepair}>
-              修复
-            </button>
-          </div>
+          <UpdatePanel snapshot={snapshot} busy={busy} onCheckUpdate={onCheckUpdate} onInstallUpdate={onInstallUpdate} />
+          <p className="inline-message settings-message">{message || ' '}</p>
         </div>
       </section>
     </div>

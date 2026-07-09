@@ -30,7 +30,6 @@ export type DesktopPetState =
   | 'sleepWake'
   | 'focusWait'
   | 'happy'
-  | 'edgePeek'
   | 'edgeLeft'
   | 'edgeRight'
   | 'edgeLeftBlink'

@@ -347,8 +347,7 @@ select:focus-visible {
 }
 
 .settings-workspace {
-  grid-template-rows: 56px auto;
-  align-content: start;
+  grid-template-rows: 56px minmax(0, 1fr);
 }
 
 .advanced-workspace {
@@ -732,6 +731,7 @@ select:focus-visible {
 }
 
 .pet-sprite {
+  position: relative;
   width: var(--pet-width);
   height: var(--pet-height);
   display: block;
@@ -743,6 +743,15 @@ select:focus-visible {
   transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
   will-change: background-position, transform;
   pointer-events: none;
+}
+
+.pet-sprite-static {
+  animation: none !important;
+}
+
+.pet-sprite-static::before,
+.pet-sprite-static::after {
+  animation: none !important;
 }
 
 .startup-ring {
@@ -844,8 +853,7 @@ select:focus-visible {
 
 .pet-hit-target-edgeLeft,
 .pet-hit-target-edgeLeftBlink,
-.pet-hit-target-edgeLeftSleep,
-.pet-hit-target-edgePeek {
+.pet-hit-target-edgeLeftSleep {
   width: 78px;
   height: 122px;
   left: 0;
@@ -913,10 +921,6 @@ select:focus-visible {
   animation: pet-soft-land 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.pet-sprite-edgePeek {
-  animation: pet-edge-peek 820ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
 .pet-sprite-edgeLeft {
   transform: translateX(-18px);
 }
@@ -926,11 +930,11 @@ select:focus-visible {
 }
 
 .pet-sprite-edgeLeftBlink {
-  animation: pet-side-blink-left 620ms ease-in-out both;
+  transform: translateX(-18px);
 }
 
 .pet-sprite-edgeRightBlink {
-  animation: pet-side-blink-right 620ms ease-in-out both;
+  transform: translateX(18px) scaleX(-1);
 }
 
 .pet-sprite-edgeLeftSleep {
@@ -1005,6 +1009,28 @@ select:focus-visible {
   top: 62px;
 }
 
+.pet-sprite-edgeLeftBlink::after,
+.pet-sprite-edgeRightBlink::after,
+.pet-sprite-edgeLeftSleep::after,
+.pet-sprite-edgeRightSleep::after {
+  content: '';
+  position: absolute;
+  left: calc(var(--pet-width) * 0.06);
+  top: calc(var(--pet-height) * 0.44);
+  z-index: 2;
+  width: calc(var(--pet-width) * 0.11);
+  height: calc(var(--pet-height) * 0.027);
+  border-radius: 999px;
+  background: #532d93;
+  box-shadow: calc(var(--pet-width) * 0.14) 0 0 #532d93;
+  pointer-events: none;
+}
+
+.pet-sprite-edgeLeftBlink::after,
+.pet-sprite-edgeRightBlink::after {
+  animation: pet-side-eye-blink 620ms ease-in-out both;
+}
+
 
 .pet-preview-page {
   width: min(100%, 1100px);
@@ -1037,7 +1063,7 @@ select:focus-visible {
 .pet-preview-layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 240px;
+  grid-template-columns: minmax(0, 1fr) 214px;
   gap: 12px;
 }
 
@@ -1054,11 +1080,10 @@ select:focus-visible {
 
 .pet-preview-card {
   min-width: 0;
-  height: 132px;
+  height: 108px;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 18px 16px;
-  gap: 2px;
-  padding: 8px 7px;
+  grid-template-rows: minmax(0, 1fr);
+  padding: 6px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: #fff;
@@ -1084,7 +1109,7 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
-  place-items: end center;
+  place-items: center;
   overflow: hidden;
 }
 
@@ -1198,33 +1223,11 @@ select:focus-visible {
   transform: translateY(24px) scale(1.12);
 }
 
-.pet-preview-name {
-  min-width: 0;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 900;
-  line-height: 18px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pet-preview-meta {
-  min-width: 0;
-  color: var(--ink-soft);
-  font-size: 11px;
-  font-weight: 850;
-  line-height: 16px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .pet-preview-inspector {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 210px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 190px) minmax(0, 1fr);
   gap: 10px;
 }
 
@@ -1320,39 +1323,15 @@ select:focus-visible {
   }
 }
 
-@keyframes pet-edge-peek {
-  0% {
-    transform: translate(0, -7px) scale(1.02);
-  }
-
-  48% {
-    transform: translate(8px, 0) rotate(2deg);
-  }
-
-  100% {
-    transform: translate(0, 0) rotate(0deg);
-  }
-}
-
-@keyframes pet-side-blink-left {
+@keyframes pet-side-eye-blink {
   0%,
   100% {
-    transform: translateX(-18px);
+    opacity: 0;
   }
 
-  50% {
-    transform: translate(-18px, 2px) scaleY(0.93);
-  }
-}
-
-@keyframes pet-side-blink-right {
-  0%,
-  100% {
-    transform: translateX(18px) scaleX(-1);
-  }
-
-  50% {
-    transform: translate(18px, 2px) scaleX(-1) scaleY(0.93);
+  42%,
+  66% {
+    opacity: 1;
   }
 }
 
@@ -1525,12 +1504,6 @@ select:focus-visible {
 .action-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.settings-actions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -2101,30 +2074,27 @@ select:focus-visible {
 }
 
 .settings-panel {
-  align-self: start;
+  align-self: stretch;
   display: grid;
-  gap: 10px;
   min-height: 0;
+  height: 100%;
 }
 
-.settings-main {
+.settings-form-grid {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 148px;
+  grid-template-columns: minmax(0, 1fr) 136px;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   align-items: start;
-  gap: 12px;
+  gap: 10px;
 }
 
-.settings-stack {
+.settings-controls-row {
   min-width: 0;
   display: grid;
-  gap: 11px;
-}
-
-.settings-meta-grid {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(190px, 260px) minmax(150px, 180px);
+  grid-template-columns: minmax(176px, 240px) minmax(132px, 168px);
   justify-content: start;
   align-items: start;
   gap: 10px;
@@ -2136,6 +2106,11 @@ select:focus-visible {
 
 .settings-subscription-field {
   min-width: 0;
+}
+
+.settings-save-button {
+  align-self: end;
+  height: 42px;
 }
 
 .busy-overlay {
@@ -2224,27 +2199,29 @@ select:focus-visible {
   font-size: 12px;
 }
 
-.settings-actions {
+.settings-secondary-actions {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: 40px;
+  grid-auto-rows: 42px;
   gap: 8px;
+  align-self: end;
 }
 
-.settings-actions button {
+.settings-secondary-actions button {
   width: 100%;
 }
 
 .network-section {
+  grid-column: 1 / -1;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(164px, 0.32fr) minmax(0, 1fr);
+  grid-template-columns: minmax(178px, 0.34fr) minmax(0, 1fr);
   align-items: stretch;
   gap: 8px;
 }
 
-.network-tun-toggle,
+.network-route-toggle,
 .network-status-item {
   min-width: 0;
   height: 46px;
@@ -2256,20 +2233,36 @@ select:focus-visible {
   background: var(--accent-tint);
 }
 
-.network-tun-toggle {
-  gap: 8px;
-  font-weight: 800;
+.network-route-toggle {
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.network-tun-toggle input {
+.network-route-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.network-route-main input {
   width: 16px;
   height: 16px;
   flex: none;
   accent-color: var(--accent);
 }
 
-.network-tun-toggle span {
+.network-route-main strong {
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.network-route-note {
   min-width: 0;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 900;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2278,7 +2271,7 @@ select:focus-visible {
 .network-status-grid {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -2308,6 +2301,8 @@ select:focus-visible {
 }
 
 .update-row {
+  grid-column: 1 / -1;
+  align-self: end;
   min-width: 0;
   min-height: 44px;
   display: grid;
@@ -2320,7 +2315,7 @@ select:focus-visible {
 }
 
 .update-row.is-downloading {
-  grid-template-columns: minmax(0, 1fr) minmax(92px, 116px) 84px;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 116px) 84px;
 }
 
 .update-copy {
@@ -2384,6 +2379,10 @@ select:focus-visible {
 
 .update-row.is-downloading button {
   grid-column: 3;
+}
+
+.settings-message {
+  grid-column: 1 / -1;
 }
 
 .usage-registration {
@@ -2721,10 +2720,6 @@ select:focus-visible {
 }
 
 @media (max-width: 920px) {
-  body {
-    min-width: 720px;
-  }
-
   .app-shell.easy-shell {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2746,27 +2741,6 @@ select:focus-visible {
   .connection-actions {
     grid-template-columns: 146px 108px minmax(0, 128px);
     gap: 7px;
-  }
-
-  .settings-main {
-    grid-template-columns: minmax(0, 1fr) 136px;
-    gap: 10px;
-  }
-
-  .settings-meta-grid {
-    grid-template-columns: minmax(180px, 240px) minmax(142px, 170px);
-  }
-
-  .network-section {
-    grid-template-columns: minmax(150px, 0.28fr) minmax(0, 1fr);
-  }
-
-  .network-status-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .pet-preview-layout {
-    grid-template-columns: minmax(0, 1fr) 220px;
   }
 
   .node-mode-toggle {

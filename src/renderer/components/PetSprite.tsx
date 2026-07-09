@@ -6,9 +6,11 @@ import { getPetAnimation } from '../pet/atlas';
 type PetSpriteProps = {
   state: DesktopPetState;
   scale?: number;
+  animated?: boolean;
+  className?: string;
 };
 
-export function PetSprite({ state, scale = 0.78 }: PetSpriteProps) {
+export function PetSprite({ state, scale = 0.78, animated = true, className = '' }: PetSpriteProps) {
   const animation = getPetAnimation(state);
   const [frame, setFrame] = useState(0);
 
@@ -17,7 +19,7 @@ export function PetSprite({ state, scale = 0.78 }: PetSpriteProps) {
     let currentFrame = 0;
     setFrame(0);
 
-    if (animation.frames <= 1) return undefined;
+    if (!animated || animation.frames <= 1) return undefined;
 
     const step = () => {
       currentFrame += 1;
@@ -34,7 +36,7 @@ export function PetSprite({ state, scale = 0.78 }: PetSpriteProps) {
     return () => {
       if (timer) window.clearTimeout(timer);
     };
-  }, [state, animation.frames, animation.fps, animation.loop]);
+  }, [state, animated, animation.frames, animation.fps, animation.loop]);
 
   const frameIndex = animation.frameIndexes[Math.min(frame, animation.frameIndexes.length - 1)] ?? 0;
   const style = {
@@ -47,5 +49,9 @@ export function PetSprite({ state, scale = 0.78 }: PetSpriteProps) {
     backgroundImage: `url(${animation.imageUrl})`
   } as CSSProperties & Record<string, string | number>;
 
-  return <span className={`pet-sprite pet-sprite-${state}`} style={style} aria-hidden="true" />;
+  const classNames = ['pet-sprite', `pet-sprite-${state}`, animated ? '' : 'pet-sprite-static', className]
+    .filter(Boolean)
+    .join(' ');
+
+  return <span className={classNames} style={style} aria-hidden="true" />;
 }

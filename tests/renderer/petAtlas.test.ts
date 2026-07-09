@@ -3,7 +3,8 @@ import { getPetAnimation, petStates } from '../../src/renderer/pet/atlas';
 
 describe('pet atlas', () => {
   it('maps every desktop pet state to a real manifest row', () => {
-    expect(petStates).toHaveLength(25);
+    expect(petStates).toHaveLength(24);
+    expect(petStates).not.toContain('edgePeek');
 
     for (const state of petStates) {
       const animation = getPetAnimation(state);
@@ -52,6 +53,7 @@ describe('pet atlas', () => {
     expect(bottomSleep.row).toBe(getPetAnimation('sleepWake').row);
     expect(topSleep.loop).toBe(true);
     expect(bottomSleep.loop).toBe(true);
+    expect(bottomSleep.frameIndexes).toEqual([3]);
     expect(dizzy.row).toBe(getPetAnimation('fallRecover').row);
     expect(angry.row).toBe(getPetAnimation('annoyed').row);
     expect(dizzy.frameIndexes).toEqual([3, 4, 3, 4]);

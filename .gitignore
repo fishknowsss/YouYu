@@ -12,3 +12,6 @@ coverage/
 **/.wrangler/
 resources/default-subscription.in.txt
 resources/generated/
+open-pet-preview.cmd
+scripts/open-pet-preview.mjs
+打开桌宠预览.cmd
