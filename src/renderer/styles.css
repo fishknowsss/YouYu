@@ -947,8 +947,8 @@ select:focus-visible {
 
 .pet-sprite-topSleep {
   transform-origin: center center;
-  transform: translateY(-20px) rotate(180deg) scale(1.18);
-  animation: pet-top-hang-sleep 2600ms ease-in-out infinite;
+  transform: translateY(-4px) rotate(180deg) scaleX(1.18) scaleY(0.94);
+  animation: pet-top-prone-sleep 2400ms ease-in-out infinite;
 }
 
 .pet-sprite-bottomSleep {
@@ -985,8 +985,8 @@ select:focus-visible {
 }
 
 .pet-sprite-topSleep::before {
-  left: 38px;
-  bottom: 42px;
+  right: 36px;
+  bottom: 56px;
   transform: rotate(180deg);
 }
 
@@ -1103,7 +1103,7 @@ select:focus-visible {
 
 .pet-preview-card.active .pet-preview-stage .pet-sprite-topSleep {
   transform-origin: center center;
-  transform: translateY(-20px) rotate(180deg) scale(1.2);
+  transform: translateY(-2px) rotate(180deg) scale(0.98);
 }
 
 .pet-preview-card.active .pet-preview-stage .pet-sprite-bottomSleep,
@@ -1154,7 +1154,7 @@ select:focus-visible {
 
 .pet-preview-stage .pet-sprite-topSleep {
   transform-origin: center center;
-  transform: translateY(-20px) rotate(180deg) scale(1.18);
+  transform: translateY(-2px) rotate(180deg) scale(0.94);
 }
 
 .pet-preview-stage .pet-sprite-bottomSleep,
@@ -1198,6 +1198,10 @@ select:focus-visible {
 .pet-preview-large .pet-sprite-edgeRightBlink,
 .pet-preview-large .pet-sprite-edgeRightSleep {
   transform: translateX(12px) scaleX(-1);
+}
+
+.pet-preview-large .pet-sprite-topSleep {
+  transform: translateY(-4px) rotate(180deg) scale(0.98);
 }
 
 .pet-preview-large .pet-sprite-bottomSleep,
@@ -1286,14 +1290,14 @@ select:focus-visible {
   }
 }
 
-@keyframes pet-top-hang-sleep {
+@keyframes pet-top-prone-sleep {
   0%,
   100% {
-    transform: translateY(-20px) rotate(180deg) scale(1.18);
+    transform: translateY(-4px) rotate(180deg) scaleX(1.18) scaleY(0.94);
   }
 
   50% {
-    transform: translateY(-17px) rotate(178.5deg) scaleX(1.2) scaleY(1.14);
+    transform: translateY(-7px) rotate(180deg) scaleX(1.2) scaleY(0.91);
   }
 }
 
@@ -1848,22 +1852,22 @@ select:focus-visible {
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: minmax(64px, auto);
+  grid-auto-rows: minmax(66px, 1fr);
   gap: 10px;
 }
 
 .runtime-metric {
   min-width: 0;
-  min-height: 64px;
+  min-height: 66px;
   display: grid;
-  grid-template-rows: 14px minmax(19px, auto) 13px;
+  grid-template-rows: auto auto auto;
   align-content: center;
-  justify-items: center;
-  gap: 6px;
+  justify-items: start;
+  gap: 5px;
   border-radius: 8px;
-  padding: 9px 10px;
+  padding: 11px 14px;
   background: var(--accent-tint);
-  text-align: center;
+  text-align: left;
 }
 
 .runtime-metric strong,
@@ -1877,7 +1881,7 @@ select:focus-visible {
 
 .runtime-metric strong {
   color: var(--ink);
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 950;
   line-height: 1.1;
 }

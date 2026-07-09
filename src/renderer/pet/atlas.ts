@@ -58,7 +58,7 @@ const stateConfig: Record<DesktopPetState, StateConfig> = {
   edgeRightBlink: { atlas: 'extra', rowKey: 'edgeBlink', frameIndexes: [0, 1, 2], fps: 8, loop: false },
   edgeLeftSleep: { atlas: 'extra', rowKey: 'edgeSleep', frameIndexes: [0], fps: 1, loop: true },
   edgeRightSleep: { atlas: 'extra', rowKey: 'edgeSleep', frameIndexes: [0], fps: 1, loop: true },
-  topSleep: { atlas: 'main', rowKey: 'sleepWake', frameIndexes: [1, 2, 3, 2], fps: 2, loop: true },
+  topSleep: { atlas: 'main', rowKey: 'sleepWake', frameIndexes: [3], fps: 1, loop: true },
   bottomSleep: { atlas: 'main', rowKey: 'sleepWake', frameIndexes: [3], fps: 1, loop: true },
   bottomDizzy: { atlas: 'extra', rowKey: 'fallRecover', frameIndexes: [3, 4, 3, 4], fps: 5, loop: true },
   bottomAngry: { atlas: 'extra', rowKey: 'annoyed', frameIndexes: [3, 4, 3, 4], fps: 5, loop: true },

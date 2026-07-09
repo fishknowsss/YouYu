@@ -52,10 +52,11 @@ describe('pet atlas', () => {
     const dizzy = getPetAnimation('bottomDizzy');
     const angry = getPetAnimation('bottomAngry');
 
-    expect(topSleep.row).toBe(getPetAnimation('sleepWake').row);
+    expect(topSleep.row).toBe(bottomSleep.row);
     expect(bottomSleep.row).toBe(getPetAnimation('sleepWake').row);
     expect(topSleep.loop).toBe(true);
     expect(bottomSleep.loop).toBe(true);
+    expect(topSleep.frameIndexes).toEqual([3]);
     expect(bottomSleep.frameIndexes).toEqual([3]);
     expect(dizzy.row).toBe(getPetAnimation('fallRecover').row);
     expect(angry.row).toBe(getPetAnimation('annoyed').row);

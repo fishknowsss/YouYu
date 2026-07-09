@@ -50,6 +50,7 @@ const devConnectivity: Array<{
 export function createDevYouYuApi(): YouYuApi {
   let petState: DesktopPetState = 'idle';
   const petListeners = new Set<(state: DesktopPetState) => void>();
+  const petSequenceTimers = new Set<number>();
   let snapshot: AppSnapshot = {
     status: 'stopped',
     currentNode: '自动选择',
@@ -115,6 +116,30 @@ export function createDevYouYuApi(): YouYuApi {
     petListeners.forEach((listener) => listener(petState));
   }
 
+  function clearPetSequenceTimers() {
+    petSequenceTimers.forEach((timer) => window.clearTimeout(timer));
+    petSequenceTimers.clear();
+  }
+
+  function getRuntimePetState(): DesktopPetState {
+    return snapshot.status === 'running' ? 'happy' : 'idle';
+  }
+
+  function publishPetLater(next: DesktopPetState | (() => DesktopPetState), delayMs: number) {
+    const timer = window.setTimeout(() => {
+      petSequenceTimers.delete(timer);
+      publishPet(typeof next === 'function' ? next() : next);
+    }, delayMs);
+    petSequenceTimers.add(timer);
+  }
+
+  function playDevDropSequence() {
+    clearPetSequenceTimers();
+    publishPet('bottomDizzy');
+    publishPetLater('bottomAngry', 1200);
+    publishPetLater(getRuntimePetState, 3100);
+  }
+
   function requireSubscription() {
     if (!snapshot.subscriptionUrl.trim()) {
       throw new Error('missing subscription url');
@@ -142,15 +167,22 @@ export function createDevYouYuApi(): YouYuApi {
       };
     },
     async wavePet() {
+      clearPetSequenceTimers();
       publishPet('wave');
       return undefined;
     },
     async startPetDrag() {
+      clearPetSequenceTimers();
       publishPet('drag');
       return undefined;
     },
     async stopPetDrag(moved = false) {
-      const next = moved ? 'fallRecover' : snapshot.status === 'running' ? 'happy' : 'idle';
+      if (moved) {
+        playDevDropSequence();
+        return 'bottomDizzy';
+      }
+      clearPetSequenceTimers();
+      const next = getRuntimePetState();
       publishPet(next);
       return next;
     },
@@ -163,6 +195,7 @@ export function createDevYouYuApi(): YouYuApi {
     async start() {
       requireTrafficIdentity();
       requireSubscription();
+      clearPetSequenceTimers();
       publishPet('happy');
       return publish({
         status: 'running',
@@ -176,6 +209,7 @@ export function createDevYouYuApi(): YouYuApi {
       });
     },
     async stop() {
+      clearPetSequenceTimers();
       publishPet('idle');
       return publish({
         status: 'stopped',
@@ -189,6 +223,7 @@ export function createDevYouYuApi(): YouYuApi {
       });
     },
     async repair() {
+      clearPetSequenceTimers();
       publishPet('focusWait');
       return publish({
         status: 'stopped',
@@ -279,6 +314,7 @@ export function createDevYouYuApi(): YouYuApi {
     async updateSubscription() {
       requireTrafficIdentity();
       requireSubscription();
+      clearPetSequenceTimers();
       publishPet('happy');
       return publish({
         status: 'running',

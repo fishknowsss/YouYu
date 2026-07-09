@@ -17,9 +17,15 @@ type AmbientStep = {
   durationMs: number;
 };
 
+type ActionStep = {
+  state: DesktopPetState;
+  holdMs: number;
+};
+
 const dragThreshold = 7;
 const liftHoldMs = 180;
 const dragDirectionThreshold = 6;
+const postDropIdleHoldMs = 6000;
 
 export function PetApp() {
   const [state, setState] = useState<DesktopPetState>('idle');
@@ -42,8 +48,13 @@ export function PetApp() {
 
   useEffect(() => {
     const dispose = window.youyu?.onPetStateUpdated((next) => {
+      const previous = baseState.current;
       baseState.current = next;
       if (!actionLocked.current && !drag.current) {
+        if (previous === 'bottomAngry' && next === 'idle') {
+          lockState('idle', postDropIdleHoldMs);
+          return;
+        }
         setVisual(next);
         scheduleAmbient(next);
       }
@@ -107,6 +118,34 @@ export function PetApp() {
       setVisual(baseState.current);
       scheduleAmbient(baseState.current);
     }, getPetAnimationDurationMs(next) + holdMs);
+  }
+
+  function lockSequence(steps: ActionStep[]) {
+    clearActionTimer();
+    clearAmbientTimer();
+    clearLiftTimer();
+    actionLocked.current = true;
+
+    let index = 0;
+    const playNext = () => {
+      const step = steps[index];
+      if (!step) {
+        actionTimer.current = undefined;
+        actionLocked.current = false;
+        setVisual(baseState.current);
+        scheduleAmbient(baseState.current);
+        return;
+      }
+
+      setVisual(step.state);
+      actionTimer.current = setTimeout(() => {
+        actionTimer.current = undefined;
+        index += 1;
+        playNext();
+      }, getPetAnimationDurationMs(step.state) + step.holdMs);
+    };
+
+    playNext();
   }
 
   function scheduleAmbient(base = baseState.current) {
@@ -232,7 +271,10 @@ export function PetApp() {
     if (!moved) {
       void window.youyu?.stopPetDrag(false);
       if (currentDrag?.visual === 'liftHold') {
-        lockState('fallRecover', 120);
+        lockSequence([
+          { state: 'bottomDizzy', holdMs: 760 },
+          { state: 'bottomAngry', holdMs: 1120 }
+        ]);
         return;
       }
       if (playTapAction) {
@@ -245,12 +287,19 @@ export function PetApp() {
     }
 
     const settleState = await window.youyu?.stopPetDrag(true);
-    if (settleState && isDockHoldState(settleState)) {
+    if (settleState && isDockHoldState(settleState) && !isBottomReactionState(settleState)) {
       baseState.current = settleState;
       clearActionTimer();
       clearAmbientTimer();
       setVisual(settleState);
       scheduleAmbient(settleState);
+      return;
+    }
+    if (!settleState || settleState === 'fallRecover' || isBottomReactionState(settleState)) {
+      lockSequence([
+        { state: 'bottomDizzy', holdMs: 860 },
+        { state: 'bottomAngry', holdMs: 1380 }
+      ]);
       return;
     }
     lockState(settleState ?? 'fallRecover', 320);
@@ -353,4 +402,8 @@ function isDockHoldState(state: DesktopPetState): boolean {
 
 function isDragVisual(state: DesktopPetState): boolean {
   return state === 'drag' || state === 'walkLeft' || state === 'walkRight';
+}
+
+function isBottomReactionState(state: DesktopPetState): boolean {
+  return state === 'bottomSleep' || state === 'bottomDizzy' || state === 'bottomAngry';
 }

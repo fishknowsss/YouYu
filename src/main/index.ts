@@ -2201,7 +2201,7 @@ function dropPetToBottom(source: 'side' | 'top') {
       playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'bottomSleep']);
       return;
     }
-    playPetBottomSequence(['bottomSleep']);
+    playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'idle', 'bottomSleep']);
   });
 }
 
@@ -2235,19 +2235,29 @@ function animatePetBounds(target: Rectangle, durationMs: number, onDone: () => v
   }, petDragFrameMs);
 }
 
-function playPetBottomSequence(states: DesktopPetState[]) {
+function playPetBottomSequence(states: DesktopPetState[], onDone?: () => void) {
   const [state, ...rest] = states;
-  if (!state) return;
+  if (!state) {
+    onDone?.();
+    return;
+  }
 
   setPetState(state);
-  if (rest.length === 0) return;
+  if (rest.length === 0 && !onDone) return;
 
-  const holdMs = state === 'bottomDizzy' ? 1200 : 950;
+  const holdMs = getPetBottomSequenceHoldMs(state);
   clearPetSequenceTimer();
   petSequenceTimer = setTimeout(() => {
     petSequenceTimer = undefined;
-    playPetBottomSequence(rest);
+    playPetBottomSequence(rest, onDone);
   }, holdMs);
+}
+
+function getPetBottomSequenceHoldMs(state: DesktopPetState): number {
+  if (state === 'bottomDizzy') return 1200;
+  if (state === 'bottomAngry') return 1700;
+  if (state === 'idle') return 7000;
+  return 950;
 }
 
 function startPetDrag() {
@@ -2295,10 +2305,17 @@ function stopPetDrag(options: { settle?: boolean } = {}): DesktopPetState | unde
     petWindow.setBounds(settled.bounds, false);
     savePetBounds(settled.bounds);
     const nextState: DesktopPetState = settled.dockState ?? 'fallRecover';
+    if (settled.dockState === 'bottomSleep') {
+      setPetState('fallRecover');
+      playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'bottomSleep']);
+      return 'bottomDizzy';
+    }
     if (settled.dockState) {
       setPetState(settled.dockState);
     } else {
-      syncPetStateToRuntime();
+      setPetState('fallRecover');
+      playPetBottomSequence(['bottomDizzy', 'bottomAngry'], syncPetStateToRuntime);
+      return 'bottomDizzy';
     }
     return nextState;
   }
