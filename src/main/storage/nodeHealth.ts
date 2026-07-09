@@ -89,7 +89,7 @@ export function createAvailabilityRecord(
     availableCount,
     totalCount,
     percent: totalCount > 0 ? Math.round((availableCount / totalCount) * 100) : 0,
-    tone: getAvailabilityTone(availableCount)
+    tone: getAvailabilityTone(availableCount, totalCount)
   };
 }
 
@@ -104,9 +104,11 @@ export function availabilitySnapshotFromRecord(record: StoredNodeAvailability): 
   };
 }
 
-export function getAvailabilityTone(availableCount: number): NodeAvailabilityTone {
-  if (availableCount <= 5) return 'danger';
-  if (availableCount <= 8) return 'warning';
+export function getAvailabilityTone(availableCount: number, totalCount = 10): NodeAvailabilityTone {
+  const normalizedTotal = Math.max(1, Math.floor(totalCount));
+  const percent = Math.round((Math.max(0, Math.floor(availableCount)) / normalizedTotal) * 100);
+  if (percent < 60) return 'danger';
+  if (percent < 85) return 'warning';
   return 'success';
 }
 
@@ -147,9 +149,7 @@ function normalizeAvailabilityRecord(value: unknown): StoredNodeAvailability | u
         : totalCount > 0
         ? Math.round((availableCount / totalCount) * 100)
         : 0,
-    tone: record.tone === 'danger' || record.tone === 'warning' || record.tone === 'success'
-      ? record.tone
-      : getAvailabilityTone(availableCount)
+    tone: getAvailabilityTone(availableCount, totalCount)
   };
 }
 

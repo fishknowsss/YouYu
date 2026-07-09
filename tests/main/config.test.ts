@@ -2,6 +2,31 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { buildMihomoConfig } from '../../src/main/mihomo/config';
 
+const expectedMicrosoftStoreDirectDomains = [
+  'apps.microsoft.com',
+  'mp.microsoft.com',
+  'delivery.mp.microsoft.com',
+  'storeedgefd.dsx.mp.microsoft.com',
+  'displaycatalog.mp.microsoft.com',
+  'purchase.mp.microsoft.com',
+  'licensing.mp.microsoft.com',
+  'dl.delivery.mp.microsoft.com',
+  'tlu.dl.delivery.mp.microsoft.com',
+  'fe3.delivery.mp.microsoft.com',
+  'store-images.s-microsoft.com',
+  'store-images.microsoft.com',
+  'storecatalogrevocation.storequality.microsoft.com',
+  'sls.update.microsoft.com',
+  'login.live.com',
+  'login.microsoftonline.com',
+  'windowsupdate.com',
+  'update.microsoft.com',
+  'xboxlive.com',
+  'xboxservices.com',
+  'assets1.xboxlive.com',
+  'assets2.xboxlive.com'
+];
+
 describe('buildMihomoConfig', () => {
   it('builds a ruleset mihomo config with service groups and local direct safeguards', () => {
     const yamlText = buildMihomoConfig({
@@ -57,7 +82,14 @@ describe('buildMihomoConfig', () => {
         `DOMAIN-SUFFIX,steamcommunity.com,${selector}`,
         `DOMAIN-SUFFIX,steamcdn-a.akamaihd.net,${selector}`,
         `DOMAIN-SUFFIX,steamcloud-ugc.storage.googleapis.com,${selector}`,
+        'PROCESS-NAME,WinStore.App.exe,DIRECT',
+        'PROCESS-NAME,StorePurchaseApp.exe,DIRECT',
+        'PROCESS-NAME,AppInstaller.exe,DIRECT',
         'DOMAIN-SUFFIX,apps.microsoft.com,DIRECT',
+        'DOMAIN-SUFFIX,mp.microsoft.com,DIRECT',
+        'DOMAIN-SUFFIX,delivery.mp.microsoft.com,DIRECT',
+        'DOMAIN-SUFFIX,store-images.s-microsoft.com,DIRECT',
+        'DOMAIN-SUFFIX,xboxlive.com,DIRECT',
         'PROCESS-NAME,WeChat.exe,DIRECT',
         'PROCESS-NAME,DingTalk.exe,DIRECT',
         'RULE-SET,OpenAI,AI',
@@ -121,6 +153,10 @@ describe('buildMihomoConfig', () => {
         'stun.*.*'
       ])
     );
+    for (const domain of expectedMicrosoftStoreDirectDomains) {
+      expect(config.dns['fake-ip-filter']).toContain(domain);
+      expect(config.dns['fake-ip-filter']).toContain(`*.${domain}`);
+    }
     expect(config.dns.nameserver).toEqual(['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query']);
     expect(config.dns['proxy-server-nameserver']).toEqual([
       'https://dns.alidns.com/dns-query',

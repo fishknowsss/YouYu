@@ -104,14 +104,39 @@ const aiFlowDomains = [
 ];
 const microsoftStoreDirectDomains = [
   'apps.microsoft.com',
+  'mp.microsoft.com',
+  'delivery.mp.microsoft.com',
   'storeedgefd.dsx.mp.microsoft.com',
   'displaycatalog.mp.microsoft.com',
   'purchase.mp.microsoft.com',
+  'licensing.mp.microsoft.com',
   'dl.delivery.mp.microsoft.com',
   'tlu.dl.delivery.mp.microsoft.com',
+  'fe3.delivery.mp.microsoft.com',
+  'store-images.s-microsoft.com',
+  'store-images.microsoft.com',
+  'storecatalogrevocation.storequality.microsoft.com',
+  'sls.update.microsoft.com',
   'login.live.com',
+  'login.microsoftonline.com',
   'windowsupdate.com',
-  'update.microsoft.com'
+  'update.microsoft.com',
+  'xboxlive.com',
+  'xboxservices.com',
+  'assets1.xboxlive.com',
+  'assets2.xboxlive.com'
+];
+const microsoftStoreDirectProcessNames = [
+  'WinStore.App.exe',
+  'StoreExperienceHost.exe',
+  'StorePurchaseApp.exe',
+  'AppInstaller.exe',
+  'XboxPcApp.exe',
+  'GameBar.exe',
+  'GamingServices.exe'
+];
+const microsoftStoreFakeIpFilterDomains = [
+  ...new Set(microsoftStoreDirectDomains.flatMap((domain) => [domain, `*.${domain}`]))
 ];
 const steamAccelerationDomains = [
   'steampowered.com',
@@ -601,8 +626,7 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
         'www.msftconnecttest.com',
         '*.msftconnecttest.com',
         '*.msftncsi.com',
-        '*.xboxlive.com',
-        '*.xboxservices.com',
+        ...microsoftStoreFakeIpFilterDomains,
         ...gamingFakeIpFilterDomains
       ],
       'default-nameserver': ['223.5.5.5', '119.29.29.29'],
@@ -859,7 +883,10 @@ function buildDomesticAppDirectRules(): string[] {
 }
 
 function buildMicrosoftStoreDirectRules(): string[] {
-  return microsoftStoreDirectDomains.map((domain) => `DOMAIN-SUFFIX,${domain},DIRECT`);
+  return [
+    ...microsoftStoreDirectProcessNames.map((name) => `PROCESS-NAME,${name},DIRECT`),
+    ...microsoftStoreDirectDomains.map((domain) => `DOMAIN-SUFFIX,${domain},DIRECT`)
+  ];
 }
 
 function buildChinaDirectRules(): string[] {

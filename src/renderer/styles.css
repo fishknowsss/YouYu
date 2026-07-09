@@ -86,6 +86,42 @@ button:disabled {
   opacity: 0.58;
 }
 
+.node-list,
+.pet-preview-grid,
+.diagnostics-log {
+  scrollbar-width: thin;
+  scrollbar-color: #c9b7df transparent;
+}
+
+.node-list::-webkit-scrollbar,
+.pet-preview-grid::-webkit-scrollbar,
+.diagnostics-log::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.node-list::-webkit-scrollbar-track,
+.pet-preview-grid::-webkit-scrollbar-track,
+.diagnostics-log::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.node-list::-webkit-scrollbar-thumb,
+.pet-preview-grid::-webkit-scrollbar-thumb,
+.diagnostics-log::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #c9b7df;
+  background-clip: padding-box;
+}
+
+.node-list::-webkit-scrollbar-thumb:hover,
+.pet-preview-grid::-webkit-scrollbar-thumb:hover,
+.diagnostics-log::-webkit-scrollbar-thumb:hover {
+  background: #ae93d0;
+  background-clip: padding-box;
+}
+
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
@@ -544,6 +580,26 @@ select:focus-visible {
   transition: width 180ms ease;
 }
 
+.easy-update-progress.is-verifying span,
+.update-progress.is-verifying span {
+  width: 100% !important;
+  background:
+    linear-gradient(90deg, rgb(143 88 215 / 42%), rgb(143 88 215 / 86%)),
+    linear-gradient(110deg, transparent 0 34%, rgb(255 255 255 / 46%) 48%, transparent 62% 100%);
+  background-size: 100% 100%, 180% 100%;
+  animation: update-progress-verify 1200ms ease-in-out infinite;
+}
+
+@keyframes update-progress-verify {
+  from {
+    background-position: 0 0, 140% 0;
+  }
+
+  to {
+    background-position: 0 0, -40% 0;
+  }
+}
+
 @keyframes easy-update-in {
   from {
     opacity: 0;
@@ -981,28 +1037,28 @@ select:focus-visible {
 .pet-preview-layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 276px;
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 12px;
 }
 
 .pet-preview-grid {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-content: start;
-  gap: 10px;
+  gap: 8px;
   overflow: auto;
-  padding-right: 4px;
+  padding-right: 6px;
 }
 
 .pet-preview-card {
   min-width: 0;
-  height: 154px;
+  height: 132px;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 20px 16px;
+  grid-template-rows: minmax(0, 1fr) 18px 16px;
   gap: 2px;
-  padding: 10px 8px;
+  padding: 8px 7px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: #fff;
@@ -1145,24 +1201,30 @@ select:focus-visible {
 .pet-preview-name {
   min-width: 0;
   color: var(--ink);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 900;
-  line-height: 20px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pet-preview-meta {
   min-width: 0;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 850;
   line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pet-preview-inspector {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 244px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 210px) minmax(0, 1fr);
   gap: 10px;
 }
 
@@ -1182,21 +1244,21 @@ select:focus-visible {
 .pet-preview-detail {
   display: grid;
   align-content: start;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 14px;
 }
 
 .pet-preview-detail h2 {
   margin: 0;
   color: var(--ink);
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1.15;
 }
 
 .pet-preview-detail p {
   margin: 0;
   color: var(--ink);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 850;
   line-height: 1.45;
 }
@@ -1753,9 +1815,9 @@ select:focus-visible {
   grid-column: 1 / -1;
   grid-row: 2;
   display: grid;
-  grid-template-rows: 18px 38px;
+  grid-template-rows: 40px;
   align-content: center;
-  gap: 10px;
+  padding: 12px 14px;
 }
 
 .runtime-panel {
@@ -1805,9 +1867,9 @@ select:focus-visible {
   min-height: 0;
   display: grid;
   align-content: start;
-  gap: 4px;
-  overflow: hidden;
-  padding: 2px 0;
+  gap: 6px;
+  overflow: auto;
+  padding: 2px 4px 2px 0;
 }
 
 .diagnostics-log span {
@@ -1817,10 +1879,9 @@ select:focus-visible {
   font-size: 11px;
   font-weight: 700;
   line-height: 1.45;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-all;
 }
 
@@ -2042,13 +2103,15 @@ select:focus-visible {
 .settings-panel {
   align-self: start;
   display: grid;
-  gap: 12px;
+  gap: 10px;
   min-height: 0;
 }
 
 .settings-main {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr) 148px;
+  align-items: start;
   gap: 12px;
 }
 
@@ -2061,7 +2124,8 @@ select:focus-visible {
 .settings-meta-grid {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(168px, 0.55fr);
+  grid-template-columns: minmax(190px, 260px) minmax(150px, 180px);
+  justify-content: start;
   align-items: start;
   gap: 10px;
 }
@@ -2163,8 +2227,13 @@ select:focus-visible {
 .settings-actions {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: 40px;
   gap: 8px;
+}
+
+.settings-actions button {
+  width: 100%;
 }
 
 .network-section {
@@ -2242,16 +2311,16 @@ select:focus-visible {
   min-width: 0;
   min-height: 44px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 88px;
+  grid-template-columns: minmax(0, 1fr) 84px;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   border-radius: 8px;
   padding: 0 10px;
   background: var(--accent-tint);
 }
 
 .update-row.is-downloading {
-  grid-template-columns: minmax(0, 1fr) 130px 88px;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, 116px) 84px;
 }
 
 .update-copy {
@@ -2679,8 +2748,13 @@ select:focus-visible {
     gap: 7px;
   }
 
+  .settings-main {
+    grid-template-columns: minmax(0, 1fr) 136px;
+    gap: 10px;
+  }
+
   .settings-meta-grid {
-    grid-template-columns: minmax(0, 1.3fr) minmax(156px, 0.7fr);
+    grid-template-columns: minmax(180px, 240px) minmax(142px, 170px);
   }
 
   .network-section {
@@ -2689,6 +2763,10 @@ select:focus-visible {
 
   .network-status-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .pet-preview-layout {
+    grid-template-columns: minmax(0, 1fr) 220px;
   }
 
   .node-mode-toggle {

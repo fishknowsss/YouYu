@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -17,11 +17,11 @@ afterEach(async () => {
 });
 
 describe('node availability health', () => {
-  it('calculates availability percent and threshold colors from 10 probes', () => {
-    expect(getAvailabilityTone(5)).toBe('danger');
-    expect(getAvailabilityTone(6)).toBe('warning');
-    expect(getAvailabilityTone(8)).toBe('warning');
-    expect(getAvailabilityTone(9)).toBe('success');
+  it('calculates availability percent and threshold colors by probe ratio', () => {
+    expect(getAvailabilityTone(8, 16)).toBe('danger');
+    expect(getAvailabilityTone(10, 16)).toBe('warning');
+    expect(getAvailabilityTone(13, 16)).toBe('warning');
+    expect(getAvailabilityTone(14, 16)).toBe('success');
 
     const record = createAvailabilityRecord(
       'JP Tokyo',
@@ -61,6 +61,36 @@ describe('node availability health', () => {
 
     await expect(store.getTodayAvailability('JP Tokyo', new Date(2026, 6, 3, 23))).resolves.toEqual(record);
     await expect(store.getTodayAvailability('JP Tokyo', new Date(2026, 6, 4, 0))).resolves.toBeUndefined();
+  });
+
+  it('recalculates cached availability tone after probe thresholds change', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-node-health-'));
+    tempDirs.push(dir);
+    await writeFile(
+      join(dir, 'node-health.json'),
+      `${JSON.stringify({
+        version: 1,
+        availabilityByNode: {
+          'JP Tokyo': {
+            nodeName: 'JP Tokyo',
+            date: '2026-07-03',
+            checkedAt: new Date(2026, 6, 3, 12).toISOString(),
+            availableCount: 9,
+            totalCount: 16,
+            percent: 56,
+            tone: 'success'
+          }
+        }
+      })}\n`,
+      'utf8'
+    );
+
+    const store = new NodeHealthStore(dir);
+    await expect(store.getTodayAvailability('JP Tokyo', new Date(2026, 6, 3, 23))).resolves.toMatchObject({
+      availableCount: 9,
+      totalCount: 16,
+      tone: 'danger'
+    });
   });
 });
 

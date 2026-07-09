@@ -2329,9 +2329,10 @@ function createTray() {
 }
 
 async function createWindow() {
+  const mainWindowSize = getDefaultMainWindowSize();
   const win = new BrowserWindow({
-    width: 940,
-    height: 620,
+    width: mainWindowSize.width,
+    height: mainWindowSize.height,
     minWidth: 900,
     minHeight: 600,
     useContentSize: true,
@@ -2384,6 +2385,31 @@ async function createWindow() {
   } else {
     await win.loadFile(join(__dirname, '../renderer/index.html'));
   }
+}
+
+function getDefaultMainWindowSize(): { width: number; height: number } {
+  const workArea = screen.getPrimaryDisplay().workAreaSize;
+  const preferredWidth = 1080;
+  const preferredHeight = 720;
+  const minWidth = 900;
+  const minHeight = 600;
+  const horizontalMargin = workArea.width >= 1400 ? 96 : 56;
+  const verticalMargin = workArea.height >= 900 ? 96 : 64;
+  const maxWidth = Math.max(minWidth, workArea.width - horizontalMargin);
+  const maxHeight = Math.max(minHeight, workArea.height - verticalMargin);
+
+  let width = Math.min(preferredWidth, maxWidth);
+  let height = Math.round(width / 1.5);
+
+  if (height > maxHeight) {
+    height = Math.min(preferredHeight, maxHeight);
+    width = Math.round(height * 1.5);
+  }
+
+  return {
+    width: Math.max(minWidth, Math.round(width)),
+    height: Math.max(minHeight, Math.round(height))
+  };
 }
 
 async function createPetWindow() {

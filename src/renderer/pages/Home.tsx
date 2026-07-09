@@ -108,18 +108,21 @@ function EasyUpdateNotice({
   const downloaded = update.status === 'downloaded';
   const downloading = update.status === 'downloading';
   const version = update.downloadedVersion || update.availableVersion;
+  const verifying = update.status === 'downloading' && typeof update.percent === 'number' && update.percent >= 99;
   const text = downloaded
     ? `已下载 ${version ?? '新版本'}`
     : downloading
-      ? version
+      ? verifying
+        ? '校验中'
+        : version
         ? `下载中 ${version}`
         : '下载中'
       : version
         ? `发现 ${version}`
         : '发现更新';
-  const progress = typeof update.percent === 'number' ? update.percent : 0;
+  const progress = getDisplayUpdateProgress(update);
   const noticeClass = downloaded ? 'is-ready' : downloading ? 'is-downloading' : 'is-available';
-  const stateLabel = downloading ? '下载中' : '准备中';
+  const stateLabel = verifying ? '校验中' : downloading ? '下载中' : '准备中';
 
   return (
     <aside className={`easy-update-notice ${noticeClass}`} aria-live="polite">
@@ -128,8 +131,8 @@ function EasyUpdateNotice({
         <strong>{text}</strong>
       </div>
       {downloading && (
-        <div className="easy-update-progress" aria-hidden="true">
-          <span style={{ width: `${Math.max(8, progress)}%` }} />
+        <div className={`easy-update-progress ${verifying ? 'is-verifying' : ''}`} aria-hidden="true">
+          <span style={{ width: `${progress}%` }} />
         </div>
       )}
       {downloaded ? (
@@ -147,7 +150,7 @@ function AdvancedHome(props: HomeProps) {
   const running = props.snapshot.status === 'running';
   const failed = props.snapshot.status === 'failed';
   const statusLabel = getStatusLabel(props.snapshot.status);
-  const totalTraffic = formatBytes(props.snapshot.runtime.uploadTotal + props.snapshot.runtime.downloadTotal);
+  const todayTraffic = formatBytes(props.snapshot.traffic.todayUpload + props.snapshot.traffic.todayDownload);
   const persistedTraffic = formatBytes(props.snapshot.traffic.totalUpload + props.snapshot.traffic.totalDownload);
   const logLines = props.snapshot.diagnostics.logs.slice(-7);
 
@@ -202,7 +205,6 @@ function AdvancedHome(props: HomeProps) {
         </div>
 
         <section className="panel mode-panel">
-          <h2>代理模式</h2>
           <div className="mode-strip" aria-label="代理模式">
             {modeOptions.map((mode) => (
               <button
@@ -229,11 +231,11 @@ function AdvancedHome(props: HomeProps) {
               <strong>{props.snapshot.runtime.activeConnections}</strong>
             </div>
             <div className="metric-row">
-              <span className="label">流量</span>
-              <strong>{totalTraffic}</strong>
+              <span className="label">今日流量</span>
+              <strong>{todayTraffic}</strong>
             </div>
             <div className="metric-row">
-              <span className="label">累计</span>
+              <span className="label">累计使用</span>
               <strong>{persistedTraffic}</strong>
             </div>
           </div>
@@ -334,12 +336,15 @@ function formatDelay(health: AppSnapshot['nodeHealth']): string {
 function formatAvailability(availability: AppSnapshot['nodeHealth']['availability']): string {
   if (availability.status === 'testing') return '测试中';
   if (availability.status === 'failed') return '失败';
-  if (typeof availability.availableCount === 'number') {
-    if (availability.availableCount <= 5) return '不良';
-    if (availability.availableCount <= 8) return '一般';
-    return '优秀';
-  }
+  if (availability.tone === 'danger') return '不良';
+  if (availability.tone === 'warning') return '一般';
+  if (availability.tone === 'success') return '优秀';
   return '未测';
+}
+
+function getDisplayUpdateProgress(update: AppSnapshot['update']): number {
+  if (typeof update.percent !== 'number') return 0;
+  return Math.max(0, Math.min(100, Math.round(update.percent)));
 }
 
 function getDelayToneClass(delay: number | undefined, status: AppSnapshot['nodeHealth']['delayStatus']): string {

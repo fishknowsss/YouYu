@@ -87,7 +87,7 @@ export function PetPreviewPage() {
                 onClick={() => setSelectedState(state)}
               >
                 <span className="pet-preview-stage">
-                  <PetSprite state={state} scale={0.46} />
+                  <PetSprite state={state} scale={0.38} />
                 </span>
                 <span className="pet-preview-name">{stateLabels[state]}</span>
                 <span className="pet-preview-meta">{stateDescriptions[state]}</span>

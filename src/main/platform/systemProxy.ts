@@ -65,6 +65,24 @@ const proxyOverride = [
   '<local>'
 ].join(';');
 
+const microsoftStoreLoopbackPackageNames = [
+  'Microsoft.WindowsStore',
+  'Microsoft.StorePurchaseApp',
+  'Microsoft.Services.Store.Engagement',
+  'Microsoft.DesktopAppInstaller',
+  'Microsoft.GamingApp',
+  'Microsoft.XboxApp',
+  'Microsoft.XboxGamingOverlay',
+  'Microsoft.XboxIdentityProvider'
+];
+const microsoftStoreLoopbackQueryScript = `
+$names = @(${microsoftStoreLoopbackPackageNames.map((name) => `'${name}'`).join(',')});
+foreach ($name in $names) {
+  Get-AppxPackage -Name $name -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty PackageFamilyName -Unique
+}
+`;
+
 async function defaultRunCommand(command: Command): Promise<string> {
   const { stdout } = await execFileAsync(command.file, command.args, {
     windowsHide: true
@@ -167,6 +185,53 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
     await runCommand({ file: 'ipconfig.exe', args: ['/flushdns'] });
   }
 
+  async function queryMicrosoftStorePackageFamilies(): Promise<string[]> {
+    const output = await runCommand({
+      file: 'powershell.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', microsoftStoreLoopbackQueryScript]
+    });
+    return [...new Set(output.split(/\r?\n/).map((line) => line.trim()).filter(isPackageFamilyName))];
+  }
+
+  async function ensureMicrosoftStoreLoopbackExemptions(options: { strict?: boolean } = {}) {
+    const failures: string[] = [];
+    let installedPackageFamilies: string[];
+    try {
+      installedPackageFamilies = await queryMicrosoftStorePackageFamilies();
+    } catch (error) {
+      if (options.strict) throw error;
+      return;
+    }
+    if (installedPackageFamilies.length === 0) return;
+
+    let existing = '';
+    try {
+      existing = await runCommand({ file: 'CheckNetIsolation.exe', args: ['LoopbackExempt', '-s'] });
+    } catch (error) {
+      if (options.strict) throw error;
+    }
+
+    const normalizedExisting = existing.toLowerCase();
+    for (const packageFamilyName of installedPackageFamilies) {
+      if (normalizedExisting.includes(packageFamilyName.toLowerCase())) {
+        continue;
+      }
+
+      await runCommand({
+        file: 'CheckNetIsolation.exe',
+        args: ['LoopbackExempt', '-a', `-n="${packageFamilyName}"`]
+      }).catch((error) => {
+        if (options.strict) {
+          failures.push(`${packageFamilyName}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
+    }
+
+    if (failures.length > 0) {
+      throw new Error(`Store loopback exemption failed: ${failures.join('; ')}`);
+    }
+  }
+
   async function restorePrevious() {
     if (!previous) {
       await setProxy(false, '', '');
@@ -190,6 +255,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
       enabledByApp = true;
       try {
         await setProxy(true, getProxyServer(), proxyOverride);
+        await ensureMicrosoftStoreLoopbackExemptions();
       } catch (error) {
         await restorePrevious().catch(() => undefined);
         previous = null;
@@ -206,7 +272,12 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
     },
     async repair() {
       if (platform !== 'win32') return;
-      const results = await Promise.allSettled([setProxy(false, '', ''), resetWinHttpProxy(), flushDnsCache()]);
+      const results = await Promise.allSettled([
+        setProxy(false, '', ''),
+        resetWinHttpProxy(),
+        flushDnsCache(),
+        ensureMicrosoftStoreLoopbackExemptions({ strict: true })
+      ]);
       previous = null;
       enabledByApp = false;
 
@@ -216,4 +287,8 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
       }
     }
   };
+}
+
+function isPackageFamilyName(value: string): boolean {
+  return /^[A-Za-z0-9.]+_[A-Za-z0-9]+$/.test(value);
 }

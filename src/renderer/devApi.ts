@@ -370,8 +370,9 @@ function getDevUpdateChannel(): string {
 
 function createDevNodeHealth(nodeName: string, delay?: number): AppSnapshot['nodeHealth'] {
   const checkedAt = new Date().toISOString();
-  const availableCount = Math.min(9, devConnectivity.length);
   const totalCount = devConnectivity.length;
+  const availableCount = Math.min(totalCount, Math.max(0, Math.ceil(totalCount * 0.88)));
+  const percent = totalCount > 0 ? Math.round((availableCount / totalCount) * 100) : 0;
   return {
     nodeName,
     delayStatus: typeof delay === 'number' ? 'measured' : 'untested',
@@ -383,8 +384,8 @@ function createDevNodeHealth(nodeName: string, delay?: number): AppSnapshot['nod
             status: 'measured',
             totalCount,
             availableCount,
-            percent: Math.round((availableCount / totalCount) * 100),
-            tone: 'success',
+            percent,
+            tone: getDevAvailabilityTone(percent),
             checkedAt
           }
         : {
@@ -392,6 +393,12 @@ function createDevNodeHealth(nodeName: string, delay?: number): AppSnapshot['nod
             totalCount
           }
   };
+}
+
+function getDevAvailabilityTone(percent: number): AppSnapshot['nodeHealth']['availability']['tone'] {
+  if (percent < 60) return 'danger';
+  if (percent < 85) return 'warning';
+  return 'success';
 }
 
 function createDevConnectivityResult(key: ConnectivityServiceKey): ConnectivityResult {
