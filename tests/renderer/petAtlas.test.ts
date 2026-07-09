@@ -60,8 +60,10 @@ describe('pet atlas', () => {
     expect(bottomSleep.frameIndexes).toEqual([3]);
     expect(dizzy.row).toBe(getPetAnimation('fallRecover').row);
     expect(angry.row).toBe(getPetAnimation('annoyed').row);
-    expect(dizzy.frameIndexes).toEqual([3, 4, 3, 4]);
-    expect(angry.frameIndexes).toEqual([3, 4, 3, 4]);
+    expect(dizzy.loop).toBe(false);
+    expect(angry.loop).toBe(false);
+    expect(dizzy.frameIndexes).toEqual([3, 4]);
+    expect(angry.frameIndexes).toEqual([3, 4]);
   });
 
   it('keeps lift hold as a stable single frame', () => {

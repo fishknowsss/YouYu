@@ -136,9 +136,10 @@ export function createDevYouYuApi(): YouYuApi {
   function playDevDropSequence() {
     clearPetSequenceTimers();
     publishPet('fallRecover');
-    publishPetLater('bottomDizzy', 900);
-    publishPetLater('bottomAngry', 2200);
-    publishPetLater(getRuntimePetState, 4200);
+    publishPetLater('bottomDizzy', 820);
+    publishPetLater('bottomAngry', 1450);
+    publishPetLater('idle', 2400);
+    publishPetLater(getRuntimePetState, 6600);
   }
 
   function requireSubscription() {

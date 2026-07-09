@@ -230,11 +230,13 @@ function AdvancedHome(props: HomeProps) {
               label="常用节点"
               value={mostUsedNode?.name ?? '暂无'}
               detail={mostUsedNode ? formatBytes(mostUsedNode.upload + mostUsedNode.download) : undefined}
+              variant="node"
             />
             <RuntimeMetric
               label="最长使用"
               value={longestUsedNode?.name ?? '暂无'}
               detail={longestUsedNode ? formatDuration(longestUsedNode.durationMs) : undefined}
+              variant="node"
             />
           </div>
         </section>
@@ -261,9 +263,19 @@ function AdvancedHome(props: HomeProps) {
   );
 }
 
-function RuntimeMetric({ label, value, detail }: { label: string; value: string; detail?: string }) {
+function RuntimeMetric({
+  label,
+  value,
+  detail,
+  variant = 'metric'
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+  variant?: 'metric' | 'node';
+}) {
   return (
-    <div className="runtime-metric">
+    <div className={`runtime-metric${variant === 'node' ? ' runtime-metric-node' : ''}`}>
       <span className="label">{label}</span>
       <strong title={value}>{value}</strong>
       {detail && <small>{detail}</small>}

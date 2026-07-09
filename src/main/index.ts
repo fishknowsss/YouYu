@@ -2210,7 +2210,7 @@ async function dockPetToBottomRight() {
   setPetState('edgeRight');
 }
 
-function dropPetToBottom(source: 'side' | 'top') {
+function dropPetToBottom(_source: 'side' | 'top') {
   if (!petWindow || petWindow.isDestroyed()) return;
   const current = petWindow.getBounds();
   const area = screen.getDisplayMatching(current).workArea;
@@ -2223,10 +2223,6 @@ function dropPetToBottom(source: 'side' | 'top') {
     if (!petWindow || petWindow.isDestroyed()) return;
     petWindow.setBounds(bounds, false);
     savePetBounds(bounds);
-    if (source === 'top') {
-      playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'bottomSleep']);
-      return;
-    }
     playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'idle', 'bottomSleep']);
   });
 }
@@ -2280,9 +2276,9 @@ function playPetBottomSequence(states: DesktopPetState[], onDone?: () => void) {
 }
 
 function getPetBottomSequenceHoldMs(state: DesktopPetState): number {
-  if (state === 'bottomDizzy') return 1200;
-  if (state === 'bottomAngry') return 1700;
-  if (state === 'idle') return 7000;
+  if (state === 'bottomDizzy') return 650;
+  if (state === 'bottomAngry') return 850;
+  if (state === 'idle') return 4200;
   return 950;
 }
 
@@ -2340,7 +2336,7 @@ function stopPetDrag(options: { settle?: boolean } = {}): DesktopPetState | unde
       setPetState(settled.dockState);
     } else {
       setPetState('fallRecover');
-      playPetBottomSequence(['bottomDizzy', 'bottomAngry'], syncPetStateToRuntime);
+      playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'idle'], syncPetStateToRuntime);
       return 'fallRecover';
     }
     return nextState;

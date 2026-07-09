@@ -1731,7 +1731,7 @@ select:focus-visible {
   grid-row: 3;
   display: grid;
   grid-template-rows: 18px minmax(0, 1fr);
-  gap: 9px;
+  gap: 7px;
   padding: 12px 14px;
 }
 
@@ -1854,8 +1854,8 @@ select:focus-visible {
   height: 100%;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(3, minmax(0, 1fr));
-  gap: 8px 10px;
+  grid-template-rows: repeat(2, minmax(52px, 1fr)) 44px 44px;
+  gap: 7px 10px;
   overflow: hidden;
 }
 
@@ -1895,6 +1895,36 @@ select:focus-visible {
   font-size: 11px;
   font-weight: 850;
   line-height: 1;
+}
+
+.runtime-metric-node {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-content: center;
+  gap: 2px 12px;
+  padding: 5px 12px 6px;
+}
+
+.runtime-metric-node .label {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.runtime-metric-node strong {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.runtime-metric-node small {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  align-self: center;
 }
 
 .list-panel {

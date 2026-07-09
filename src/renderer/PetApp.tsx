@@ -22,10 +22,21 @@ type ActionStep = {
   holdMs: number;
 };
 
+type SequenceOptions = {
+  restoreState?: DesktopPetState;
+  restoreHoldMs?: number;
+  ambientBase?: DesktopPetState;
+};
+
 const dragThreshold = 7;
 const liftHoldMs = 180;
 const dragDirectionThreshold = 6;
-const postDropIdleHoldMs = 6000;
+const postDropIdleHoldMs = 4200;
+const dropRecoveryOptions: SequenceOptions = {
+  restoreState: 'idle',
+  restoreHoldMs: 3200,
+  ambientBase: 'idle'
+};
 
 export function PetApp() {
   const [state, setState] = useState<DesktopPetState>('idle');
@@ -120,7 +131,7 @@ export function PetApp() {
     }, getPetAnimationDurationMs(next) + holdMs);
   }
 
-  function lockSequence(steps: ActionStep[]) {
+  function lockSequence(steps: ActionStep[], options: SequenceOptions = {}) {
     clearActionTimer();
     clearAmbientTimer();
     clearLiftTimer();
@@ -130,6 +141,16 @@ export function PetApp() {
     const playNext = () => {
       const step = steps[index];
       if (!step) {
+        const restoreState = options.restoreState;
+        if (restoreState) {
+          setVisual(restoreState);
+          actionTimer.current = setTimeout(() => {
+            actionTimer.current = undefined;
+            actionLocked.current = false;
+            scheduleAmbient(options.ambientBase ?? restoreState);
+          }, options.restoreHoldMs ?? 0);
+          return;
+        }
         actionTimer.current = undefined;
         actionLocked.current = false;
         setVisual(baseState.current);
@@ -272,10 +293,10 @@ export function PetApp() {
       void window.youyu?.stopPetDrag(false);
       if (currentDrag?.visual === 'liftHold') {
         lockSequence([
-          { state: 'fallRecover', holdMs: 180 },
-          { state: 'bottomDizzy', holdMs: 700 },
-          { state: 'bottomAngry', holdMs: 1040 }
-        ]);
+          { state: 'fallRecover', holdMs: 80 },
+          { state: 'bottomDizzy', holdMs: 160 },
+          { state: 'bottomAngry', holdMs: 260 }
+        ], dropRecoveryOptions);
         return;
       }
       if (playTapAction) {
@@ -298,10 +319,10 @@ export function PetApp() {
     }
     if (!settleState || settleState === 'fallRecover' || isBottomReactionState(settleState)) {
       lockSequence([
-        { state: 'fallRecover', holdMs: 180 },
-        { state: 'bottomDizzy', holdMs: 780 },
-        { state: 'bottomAngry', holdMs: 1260 }
-      ]);
+        { state: 'fallRecover', holdMs: 100 },
+        { state: 'bottomDizzy', holdMs: 180 },
+        { state: 'bottomAngry', holdMs: 320 }
+      ], dropRecoveryOptions);
       return;
     }
     lockState(settleState ?? 'fallRecover', 320);
