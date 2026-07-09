@@ -22,6 +22,7 @@
 - Before coding, propose layout and component tree for UI work.
 - After coding, self-check against all forbidden UI/copy patterns.
 - For app code or app resource changes that are being delivered locally, read `docs/release-packaging.md`, bump the patch version, and produce the documented Windows installers unless the user explicitly says not to package.
+- For release-delivered app changes, finish the full checklist in `docs/release-packaging.md`: validation, packaging, local archive maintenance, commit, explicit tag push, GitHub Release asset upload, and remote `latest*.yml` verification.
 - Pure documentation, project-rule, or archive housekeeping changes do not require a version bump or installer rebuild.
 
 ## Packaging Rules
@@ -35,3 +36,4 @@
 - `dist:win`, `dist:win:in`, and `dist:win:no` run `clean:release`, so each command deletes the previous `release/` output. If multiple installers are needed locally, copy each `.exe` and `.blockmap` pair aside before running the next build.
 - `release-archive/` is a local backup folder. Keep only the current build version and the previous two build versions there, including each kept installer and its matching `.blockmap` when present.
 - If `release-archive/` does not yet satisfy the current-plus-previous-two policy, it can be left empty or partially populated until the next eligible packaging run.
+- When publishing a release, push the exact version tag explicitly. Do not rely on `git push --follow-tags` unless all local tags have been audited.

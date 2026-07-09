@@ -183,6 +183,124 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
 本机 `release/` 里可以保留三通道安装包；上传或发布时要确认 `-in`、`-no` 来自 `dist:win:release`，而不是本地内置订阅包。
 
+## 完整公开发布闭环
+
+面向用户交付并需要客户端自动更新时，不要停在“已打包”。完成下面整套流程后再结束。
+
+1. 确认版本和改动范围。
+
+   ```powershell
+   git status --short
+   node -p "require('./package.json').version"
+   ```
+
+   只提交本次源码、文档、版本号和测试改动。不要提交 `release/`、`release-archive/`、`out/`、`resources/generated/` 或本机私有订阅文件。
+
+2. 运行本地验证。
+
+   ```powershell
+   npm run typecheck
+   npm test
+   npm run build
+   ```
+
+   如果改动包含 UI，必须额外做关键尺寸或关键页面验证。优先覆盖最小窗口、断点附近窗口和本次改动页面；可以使用截图、DOM 快照或等价的可重复检查，并在最终说明中写明验证过的尺寸和页面。
+
+3. 生成公开更新资产。
+
+   ```powershell
+   npm run dist:win:release
+   ```
+
+   该命令必须成功，并生成三通道公开更新资产：
+
+   ```text
+   release/YouYu-<version>-x64.exe
+   release/YouYu-<version>-x64.exe.blockmap
+   release/YouYu-<version>-x64-in.exe
+   release/YouYu-<version>-x64-in.exe.blockmap
+   release/YouYu-<version>-x64-no.exe
+   release/YouYu-<version>-x64-no.exe.blockmap
+   release/latest.yml
+   release/latest-in.yml
+   release/latest-no.yml
+   ```
+
+   `dist:win:release` 内部会运行对应校验和 `smoke`。如果它失败，先修复失败原因，不要上传部分产物。
+
+4. 维护本地归档。
+
+   `release-archive/` 只保留当前版本和前两个构建版本。归档当前版本时至少保留三个安装包和对应 `.blockmap`；可以同时保留 `<version>-latest.yml` 方便本机追溯。删除旧版本前先确认目标路径在 `release-archive/` 内。
+
+5. 提交源码改动。
+
+   ```powershell
+   git add <本次应提交的源码、文档、测试、版本文件>
+   git status --short
+   git commit -m "Release YouYu <version>"
+   ```
+
+   纯文档或项目规则修改不需要版本号、安装包或 release，提交信息应直接描述文档改动。
+
+6. 创建并推送版本标签。
+
+   ```powershell
+   git tag v<version>
+   git push origin main
+   git push origin v<version>
+   ```
+
+   推送版本标签时使用精确标签名。不要使用 `git push --follow-tags`，除非已经确认本地没有无关未推送标签。若误推了无关标签，立即确认它不是本次发布需要的标签，并删除远端误推标签。
+
+7. 创建 GitHub Release 并上传资产。
+
+   ```powershell
+   $version = node -p "require('./package.json').version"
+   gh release create "v$version" `
+     "release/YouYu-$version-x64.exe" `
+     "release/YouYu-$version-x64.exe.blockmap" `
+     "release/YouYu-$version-x64-in.exe" `
+     "release/YouYu-$version-x64-in.exe.blockmap" `
+     "release/YouYu-$version-x64-no.exe" `
+     "release/YouYu-$version-x64-no.exe.blockmap" `
+     "release/latest.yml" `
+     "release/latest-in.yml" `
+     "release/latest-no.yml" `
+     --title "YouYu $version" `
+     --notes "<本次用户可读更新说明>"
+   ```
+
+   如果 Release 已存在，先检查已有资产是否来自同一次构建。确需覆盖时才使用 `gh release upload "v$version" ... --clobber`。
+
+8. 校验远端发布结果。
+
+   ```powershell
+   $version = node -p "require('./package.json').version"
+   gh release view "v$version" --json tagName,url,name,isDraft,isPrerelease,assets
+   git ls-remote --heads origin main
+   git ls-remote --tags origin "refs/tags/v$version"
+   ```
+
+   再从 GitHub 下载入口读取三个更新描述文件，确认它们都指向当前版本和正确安装包：
+
+   ```powershell
+   $version = node -p "require('./package.json').version"
+   foreach ($name in @('latest.yml', 'latest-in.yml', 'latest-no.yml')) {
+     $bytes = (Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/fishknowsss/YouYu/releases/download/v$version/$name" -TimeoutSec 30).Content
+     if ($bytes -is [byte[]]) { [Text.Encoding]::UTF8.GetString($bytes) } else { $bytes }
+   }
+   ```
+
+   每个文件都必须显示 `version: <version>`，并分别指向 `YouYu-<version>-x64.exe`、`YouYu-<version>-x64-in.exe`、`YouYu-<version>-x64-no.exe`。
+
+9. 最终收尾。
+
+   ```powershell
+   git status --short
+   ```
+
+   工作区应保持干净；如果只有被 `.gitignore` 命中的本地产物、缓存或归档目录，不需要提交。
+
 ## 快速检查
 
 三包本地交付：
