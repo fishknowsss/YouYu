@@ -25,7 +25,6 @@ type ActionStep = {
 type SequenceOptions = {
   restoreState?: DesktopPetState;
   restoreHoldMs?: number;
-  ambientBase?: DesktopPetState;
 };
 
 const dragThreshold = 7;
@@ -34,8 +33,7 @@ const dragDirectionThreshold = 6;
 const postDropIdleHoldMs = 4200;
 const dropRecoveryOptions: SequenceOptions = {
   restoreState: 'idle',
-  restoreHoldMs: 3200,
-  ambientBase: 'idle'
+  restoreHoldMs: 3200
 };
 
 export function PetApp() {
@@ -147,7 +145,8 @@ export function PetApp() {
           actionTimer.current = setTimeout(() => {
             actionTimer.current = undefined;
             actionLocked.current = false;
-            scheduleAmbient(options.ambientBase ?? restoreState);
+            setVisual(baseState.current);
+            scheduleAmbient(baseState.current);
           }, options.restoreHoldMs ?? 0);
           return;
         }
