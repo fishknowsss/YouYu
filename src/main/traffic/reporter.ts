@@ -27,6 +27,13 @@ type ActivateResponse = {
   name?: string;
 };
 
+type TrafficReportResponse = {
+  traffic?: {
+    totalUpload?: number;
+    totalDownload?: number;
+  };
+};
+
 export class TrafficReporter {
   private timer: ReturnType<typeof setInterval> | undefined;
 
@@ -102,7 +109,7 @@ export class TrafficReporter {
       return;
     }
     if (identity?.verificationStatus === 'pending') return;
-    if (!identity || (stats.pendingUpload === 0 && stats.pendingDownload === 0)) return;
+    if (!identity) return;
 
     const upload = stats.pendingUpload;
     const download = stats.pendingDownload;
@@ -137,6 +144,7 @@ export class TrafficReporter {
     }
 
     await this.options.store.markReported(upload, download);
+    await this.options.store.markServerTotals((response.body as TrafficReportResponse).traffic ?? {});
   }
 }
 

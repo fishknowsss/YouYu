@@ -94,6 +94,71 @@ describe('TrafficStore', () => {
     expect(snapshot.stats.reportStatus).toBe('synced');
   });
 
+  it('uses backend-verified totals when available', async () => {
+    const store = new TrafficStore(dir);
+
+    await store.registerIdentity({
+      userId: 'u_1',
+      deviceId: 'd_1',
+      name: '张三',
+      deviceName: 'DESKTOP'
+    });
+    await store.addTraffic(100, 200, new Date('2026-05-10T08:00:00.000Z'));
+    await store.markReported(100, 200, new Date('2026-05-10T08:05:00.000Z'));
+    await store.markServerTotals({ totalUpload: 900, totalDownload: 1200 }, new Date('2026-05-10T08:10:00.000Z'));
+
+    const snapshot = await store.getSnapshot(new Date('2026-05-10T08:20:00.000Z'));
+    expect(snapshot.stats.totalUpload).toBe(900);
+    expect(snapshot.stats.totalDownload).toBe(1200);
+    expect(snapshot.stats.totalSource).toBe('server');
+    expect(snapshot.stats.serverSyncedAt).toBe('2026-05-10T08:10:00.000Z');
+    expect(snapshot.stats.todayUpload).toBe(100);
+    expect(snapshot.stats.todayDownload).toBe(200);
+  });
+
+  it('adds pending local bytes to the last backend-verified totals', async () => {
+    const store = new TrafficStore(dir);
+
+    await store.registerIdentity({
+      userId: 'u_1',
+      deviceId: 'd_1',
+      name: '张三',
+      deviceName: 'DESKTOP'
+    });
+    await store.markServerTotals({ totalUpload: 900, totalDownload: 1200 }, new Date('2026-05-10T08:10:00.000Z'));
+    await store.addTraffic(25, 35, new Date('2026-05-10T08:15:00.000Z'));
+
+    const snapshot = await store.getSnapshot(new Date('2026-05-10T08:20:00.000Z'));
+    expect(snapshot.stats.totalUpload).toBe(925);
+    expect(snapshot.stats.totalDownload).toBe(1235);
+    expect(snapshot.stats.totalSource).toBe('server');
+  });
+
+  it('does not reuse backend totals after the registered identity changes', async () => {
+    const store = new TrafficStore(dir);
+
+    await store.registerIdentity({
+      userId: 'u_1',
+      deviceId: 'd_1',
+      name: '张三',
+      deviceName: 'DESKTOP'
+    });
+    await store.markServerTotals({ totalUpload: 900, totalDownload: 1200 }, new Date('2026-05-10T08:10:00.000Z'));
+    await store.registerIdentity({
+      userId: 'u_2',
+      deviceId: 'd_2',
+      name: '李四',
+      deviceName: 'DESKTOP'
+    });
+
+    const snapshot = await store.getSnapshot(new Date('2026-05-10T08:20:00.000Z'));
+    expect(snapshot.identity?.userId).toBe('u_2');
+    expect(snapshot.stats.totalUpload).toBe(0);
+    expect(snapshot.stats.totalDownload).toBe(0);
+    expect(snapshot.stats.totalSource).toBe('local');
+    expect(snapshot.stats.serverSyncedAt).toBeUndefined();
+  });
+
   it('can keep a pending local registration until activation succeeds later', async () => {
     const store = new TrafficStore(dir);
 

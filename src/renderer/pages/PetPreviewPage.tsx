@@ -68,10 +68,6 @@ export function PetPreviewPage() {
           <h1>桌宠预览</h1>
           <p>共 {petStates.length} 个状态</p>
         </div>
-        <div className="pet-preview-summary">
-          <span>当前</span>
-          <strong>{stateLabels[selectedState]}</strong>
-        </div>
       </div>
 
       <section className="pet-preview-layout">

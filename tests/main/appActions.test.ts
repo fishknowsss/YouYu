@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { saveSubscriptionSettings, testAllMihomoNodes, updateSubscriptionNodes } from '../../src/main/appActions';
+import { saveSubscriptionSettings, testAllMihomoNodes, testMihomoNode, updateSubscriptionNodes } from '../../src/main/appActions';
 import type { AppSnapshot } from '../../src/shared/ipc';
 import type { AppSettings } from '../../src/main/storage/settings';
 
@@ -249,7 +249,66 @@ describe('app actions', () => {
       { signal, onProgress }
     );
 
-    expect(testAllNodes).toHaveBeenCalledWith({ signal, onNodeTested: onProgress });
+    expect(testAllNodes).toHaveBeenCalledWith({
+      signal,
+      onNodeTested: expect.any(Function)
+    });
     expect(createSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it('publishes the measured delay after a single node test', async () => {
+    const onDelayTested = vi.fn();
+    const testNodeDelay = vi.fn(async () => 86);
+
+    await testMihomoNode(
+      {
+        settingsStore: {
+          read: async () => makeSettings(),
+          update: vi.fn()
+        },
+        lifecycle: {
+          getStatus: () => 'running',
+          start: vi.fn(),
+          stop: vi.fn(),
+          restart: vi.fn(),
+          repair: vi.fn()
+        },
+        createMihomoApi: () => makeMihomoApi({ testNodeDelay }),
+        createSnapshot: async () => makeSnapshot()
+      },
+      '日本 01',
+      { onDelayTested }
+    );
+
+    expect(onDelayTested).toHaveBeenCalledWith('日本 01', 86);
+  });
+
+  it('passes every all-node progress result to the node health hook', async () => {
+    const testedNode = { name: '日本 01', delay: 88, active: true, testState: 'tested' as const };
+    const onNodeTested = vi.fn();
+    const testAllNodes = vi.fn(async (options: { onNodeTested?: (node: typeof testedNode) => void | Promise<void> }) => {
+      await options.onNodeTested?.(testedNode);
+    });
+
+    await testAllMihomoNodes(
+      {
+        settingsStore: {
+          read: async () => makeSettings(),
+          update: vi.fn()
+        },
+        lifecycle: {
+          getStatus: () => 'running',
+          start: vi.fn(),
+          stop: vi.fn(),
+          restart: vi.fn(),
+          repair: vi.fn()
+        },
+        createMihomoApi: () => makeMihomoApi({ testAllNodes }),
+        createSnapshot: async () => makeSnapshot()
+      },
+      { onNodeTested }
+    );
+
+    expect(onNodeTested).toHaveBeenCalledWith(testedNode);
   });
 });

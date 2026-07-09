@@ -23,6 +23,11 @@ type TrafficFile = {
   pendingRegistration?: TrafficRegistrationSecret;
   totalUpload: number;
   totalDownload: number;
+  serverTotalUpload?: number;
+  serverTotalDownload?: number;
+  serverUserId?: string;
+  serverDeviceId?: string;
+  serverSyncedAt?: string;
   pendingUpload: number;
   pendingDownload: number;
   daily: Record<string, TrafficDay>;
@@ -124,17 +129,19 @@ export class TrafficStore {
   async registerIdentity(identity: Omit<TrafficIdentity, 'registeredAt'>): Promise<TrafficIdentity> {
     return this.enqueue(async () => {
       const current = await this.read();
+      const sameIdentity = isSameTrafficIdentity(current.identity, identity);
       const registered: TrafficIdentity = {
         ...identity,
         name: identity.name.trim(),
         deviceName: identity.deviceName?.trim() || hostname(),
-        registeredAt: current.identity?.registeredAt ?? new Date().toISOString(),
-        lastReportedAt: current.identity?.lastReportedAt,
+        registeredAt: sameIdentity ? current.identity?.registeredAt ?? new Date().toISOString() : new Date().toISOString(),
+        lastReportedAt: sameIdentity ? current.identity?.lastReportedAt : undefined,
         verificationStatus: identity.verificationStatus ?? 'verified'
       };
       await this.write({
         ...current,
         identity: registered,
+        ...getServerTotalState(current, sameIdentity),
         pendingRegistration: registered.verificationStatus === 'pending' ? current.pendingRegistration : undefined,
         reportStatus: current.pendingUpload || current.pendingDownload ? 'pending' : 'idle',
         reportError: undefined
@@ -162,6 +169,7 @@ export class TrafficStore {
         ...current,
         deviceSeed,
         identity: registered,
+        ...getServerTotalState(current, false),
         pendingRegistration: {
           name,
           passphrase
@@ -191,6 +199,7 @@ export class TrafficStore {
         ...current,
         identity: undefined,
         pendingRegistration: undefined,
+        ...getServerTotalState(current, false),
         reportStatus: message ? 'failed' : 'idle',
         reportError: message
       });
@@ -221,6 +230,25 @@ export class TrafficStore {
         identity: current.identity ? { ...current.identity, lastReportedAt } : undefined,
         reportStatus: pendingUpload || pendingDownload ? 'pending' : 'synced',
         reportError: undefined
+      });
+    });
+  }
+
+  async markServerTotals(input: { totalUpload?: number; totalDownload?: number }, syncedAt = new Date()): Promise<void> {
+    const totalUpload = normalizeOptionalBytes(input.totalUpload);
+    const totalDownload = normalizeOptionalBytes(input.totalDownload);
+    if (typeof totalUpload !== 'number' || typeof totalDownload !== 'number') return;
+
+    await this.enqueue(async () => {
+      const current = await this.read();
+      if (!current.identity || current.identity.verificationStatus === 'pending') return;
+      await this.write({
+        ...current,
+        serverTotalUpload: totalUpload,
+        serverTotalDownload: totalDownload,
+        serverUserId: current.identity.userId,
+        serverDeviceId: current.identity.deviceId,
+        serverSyncedAt: syncedAt.toISOString()
       });
     });
   }
@@ -260,15 +288,25 @@ export class TrafficStore {
     await this.queue.catch(() => undefined);
     const current = await this.read();
     const today = current.daily[toDateKey(now)] ?? { upload: 0, download: 0 };
+    const serverTotalUpload = current.serverTotalUpload;
+    const serverTotalDownload = current.serverTotalDownload;
+    const hasServerTotals =
+      typeof serverTotalUpload === 'number' &&
+      typeof serverTotalDownload === 'number' &&
+      current.identity?.verificationStatus !== 'pending' &&
+      current.serverUserId === current.identity?.userId &&
+      current.serverDeviceId === current.identity?.deviceId;
     return {
       identity: current.identity,
       stats: {
-        totalUpload: current.totalUpload,
-        totalDownload: current.totalDownload,
+        totalUpload: hasServerTotals ? serverTotalUpload + current.pendingUpload : current.totalUpload,
+        totalDownload: hasServerTotals ? serverTotalDownload + current.pendingDownload : current.totalDownload,
         todayUpload: today.upload,
         todayDownload: today.download,
         pendingUpload: current.pendingUpload,
         pendingDownload: current.pendingDownload,
+        totalSource: hasServerTotals ? 'server' : 'local',
+        serverSyncedAt: hasServerTotals ? current.serverSyncedAt : undefined,
         nodeUsage: summarizeNodeUsage(current.nodeUsage),
         lastUpdatedAt: current.lastUpdatedAt,
         lastReportedAt: current.lastReportedAt,
@@ -297,6 +335,11 @@ export class TrafficStore {
       pendingRegistration: normalizePendingRegistration(value.pendingRegistration),
       totalUpload: normalizeBytes(value.totalUpload),
       totalDownload: normalizeBytes(value.totalDownload),
+      serverTotalUpload: normalizeOptionalBytes(value.serverTotalUpload),
+      serverTotalDownload: normalizeOptionalBytes(value.serverTotalDownload),
+      serverUserId: typeof value.serverUserId === 'string' ? value.serverUserId : undefined,
+      serverDeviceId: typeof value.serverDeviceId === 'string' ? value.serverDeviceId : undefined,
+      serverSyncedAt: typeof value.serverSyncedAt === 'string' ? value.serverSyncedAt : undefined,
       pendingUpload: normalizeBytes(value.pendingUpload),
       pendingDownload: normalizeBytes(value.pendingDownload),
       daily: normalizeDaily(value.daily),
@@ -334,6 +377,35 @@ function normalizeIdentity(value: unknown): TrafficIdentity | undefined {
     registeredAt: typeof identity.registeredAt === 'string' ? identity.registeredAt : new Date().toISOString(),
     lastReportedAt: typeof identity.lastReportedAt === 'string' ? identity.lastReportedAt : undefined,
     verificationStatus: identity.verificationStatus === 'pending' ? 'pending' : 'verified'
+  };
+}
+
+function isSameTrafficIdentity(
+  current: Pick<TrafficIdentity, 'userId' | 'deviceId'> | undefined,
+  next: Pick<TrafficIdentity, 'userId' | 'deviceId'>
+): boolean {
+  return current?.userId === next.userId && current.deviceId === next.deviceId;
+}
+
+function getServerTotalState(
+  current: TrafficFile,
+  keep: boolean
+): Pick<TrafficFile, 'serverTotalUpload' | 'serverTotalDownload' | 'serverUserId' | 'serverDeviceId' | 'serverSyncedAt'> {
+  if (keep) {
+    return {
+      serverTotalUpload: current.serverTotalUpload,
+      serverTotalDownload: current.serverTotalDownload,
+      serverUserId: current.serverUserId,
+      serverDeviceId: current.serverDeviceId,
+      serverSyncedAt: current.serverSyncedAt
+    };
+  }
+  return {
+    serverTotalUpload: undefined,
+    serverTotalDownload: undefined,
+    serverUserId: undefined,
+    serverDeviceId: undefined,
+    serverSyncedAt: undefined
   };
 }
 
@@ -432,6 +504,10 @@ function compareLastUsedAt(left: TrafficNodeUsage, right: TrafficNodeUsage) {
 
 function normalizeBytes(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function normalizeOptionalBytes(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
 }
 
 function normalizeDurationMs(value: unknown): number {

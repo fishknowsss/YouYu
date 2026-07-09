@@ -99,8 +99,8 @@ export function Settings({
             />
           </label>
 
-          <div className="settings-left-column">
-            <label className="field">
+          <div className="settings-controls-grid">
+            <label className="field settings-control-field">
               <span>规则来源</span>
               <select
                 value={ruleProfile}
@@ -116,7 +116,12 @@ export function Settings({
                 <option value="global">全局代理</option>
               </select>
             </label>
-            <label className="field">
+            <NetworkStatus label="系统代理" value={formatEnabled(snapshot.features.systemProxyEnabled)} />
+            <button className="wide-button settings-save-button" disabled={busy} onClick={save}>
+              {saving ? '保存中' : '保存'}
+            </button>
+
+            <label className="field settings-control-field">
               <span>后台刷新</span>
               <select
                 value={subscriptionRefreshIntervalHours}
@@ -132,7 +137,12 @@ export function Settings({
                 <option value={24}>24 小时</option>
               </select>
             </label>
-            <label className="network-route-toggle">
+            <NetworkStatus label="DNS 增强" value={formatEnabled(snapshot.features.dnsEnhanced)} />
+            <button className="secondary-button settings-control-button" disabled={busy} onClick={onSyncRemoteConfig}>
+              {syncing ? '同步中' : '同步'}
+            </button>
+
+            <label className="network-route-toggle settings-route-toggle">
               <span className="network-route-main">
                 <input
                   type="checkbox"
@@ -147,22 +157,8 @@ export function Settings({
               </span>
               <span className="network-route-note">严格路由 {tunEnabled ? '开启' : '待用'}</span>
             </label>
-          </div>
-
-          <div className="settings-middle-column">
-            <NetworkStatus label="系统代理" value={formatEnabled(snapshot.features.systemProxyEnabled)} />
-            <NetworkStatus label="DNS 增强" value={formatEnabled(snapshot.features.dnsEnhanced)} />
             <NetworkStatus label="流量识别" value={formatEnabled(snapshot.features.snifferEnabled)} />
-          </div>
-
-          <div className="settings-actions-column">
-            <button className="wide-button settings-save-button" disabled={busy} onClick={save}>
-              {saving ? '保存中' : '保存'}
-            </button>
-            <button className="secondary-button" disabled={busy} onClick={onSyncRemoteConfig}>
-              {syncing ? '同步中' : '同步'}
-            </button>
-            <button className="secondary-button" disabled={busy} onClick={onRepair}>
+            <button className="secondary-button settings-control-button" disabled={busy} onClick={onRepair}>
               {repairing ? '修复中' : '修复'}
             </button>
             {message && (

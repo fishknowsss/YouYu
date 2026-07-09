@@ -1,4 +1,4 @@
-import type { AppSettingsInput, AppSnapshot, MihomoMode, StrategyKey } from '../shared/ipc';
+import type { AppSettingsInput, AppSnapshot, MihomoMode, ProxyNode, StrategyKey } from '../shared/ipc';
 import type { LifecycleController } from './lifecycle';
 import type { MihomoApiClient } from './mihomo/api';
 import type { AppSettings } from './storage/settings';
@@ -16,6 +16,11 @@ type CreateMihomoApi = (options: { secret: string }) => Pick<
 type TestAllNodesOptions = {
   signal?: AbortSignal;
   onProgress?: () => void | Promise<void>;
+  onNodeTested?: (node: ProxyNode) => void | Promise<void>;
+};
+
+type TestNodeOptions = {
+  onDelayTested?: (name: string, delay: number | undefined) => void | Promise<void>;
 };
 
 type AppActionDeps = {
@@ -89,12 +94,14 @@ export async function testMihomoNode(
     createMihomoApi: (options: { secret: string }) => Pick<MihomoApiClient, 'testNodeDelay'>;
   },
   name: string,
+  options: TestNodeOptions = {},
 ): Promise<AppSnapshot> {
   const settings = await deps.settingsStore.read();
   if (deps.lifecycle.getStatus() !== 'running') {
     await startWithRepairRetry(deps.lifecycle);
   }
-  await deps.createMihomoApi({ secret: settings.controllerSecret }).testNodeDelay(name);
+  const delay = await deps.createMihomoApi({ secret: settings.controllerSecret }).testNodeDelay(name);
+  await options.onDelayTested?.(name, delay);
   return deps.createSnapshot();
 }
 
@@ -108,7 +115,10 @@ export async function testAllMihomoNodes(
   }
   await deps.createMihomoApi({ secret: settings.controllerSecret }).testAllNodes({
     signal: options.signal,
-    onNodeTested: options.onProgress
+    onNodeTested: async (node) => {
+      await options.onNodeTested?.(node);
+      await options.onProgress?.();
+    }
   });
   return deps.createSnapshot();
 }

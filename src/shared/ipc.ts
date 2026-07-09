@@ -134,6 +134,8 @@ export type PersistentTrafficStats = {
   todayDownload: number;
   pendingUpload: number;
   pendingDownload: number;
+  totalSource?: 'local' | 'server';
+  serverSyncedAt?: string;
   nodeUsage: TrafficNodeUsageStats;
   lastUpdatedAt?: string;
   lastReportedAt?: string;

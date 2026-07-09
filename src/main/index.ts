@@ -38,6 +38,7 @@ import {
   type AppSnapshot,
   type CurrentNodeHealth,
   type DesktopPetState,
+  type ProxyNode,
   type RemoteControlConfig,
   type StrategyGroup,
   type StrategyKey
@@ -130,8 +131,8 @@ const petSideBlinkDelayMs = 7000;
 const petSideSleepDelayMs = 28000;
 const petSideDropDelayMs = 65000;
 const petTopDropDelayMs = 52000;
-const nodeHealthInitialDelayMs = 15000;
-const currentNodeDelayRefreshMs = 15 * 60 * 1000;
+const nodeHealthInitialDelayMs = 3000;
+const currentNodeDelayRefreshMs = 5 * 60 * 1000;
 const nodeHealthIntervalMs = currentNodeDelayRefreshMs;
 const nodeHealthRepairDelayMs = 3000;
 const nodeHealthRetryDelayMs = 8000;
@@ -789,6 +790,32 @@ function updateCurrentNodeDelay(
   };
 }
 
+async function updateCurrentNodeDelayFromManualTest(
+  nodeName: string,
+  delay: number | undefined,
+  testState?: ProxyNode['testState']
+): Promise<void> {
+  if (!isProxyNodeName(nodeName) || lifecycle.getStatus() !== 'running') return;
+  const settings = await settingsStore.read();
+  const currentNode = await createRuntimeMihomoApi({ secret: settings.controllerSecret }).getCurrentNode().catch(() => '');
+  if (currentNode !== nodeName) return;
+
+  if (testState === 'testing') {
+    updateCurrentNodeDelay(nodeName, {
+      delayStatus: 'testing',
+      delay: undefined,
+      delayCheckedAt: undefined
+    });
+    return;
+  }
+
+  updateCurrentNodeDelay(nodeName, {
+    delayStatus: typeof delay === 'number' ? 'measured' : 'failed',
+    delay,
+    delayCheckedAt: new Date().toISOString()
+  });
+}
+
 function updateCurrentNodeAvailabilityStatus(
   nodeName: string,
   status: CurrentNodeHealth['availability']['status']
@@ -1148,6 +1175,22 @@ async function broadcastSnapshot(): Promise<AppSnapshot> {
   const snapshot = await createSnapshot();
   sendSnapshotToWindows(snapshot);
   return snapshot;
+}
+
+let trafficTotalsRefreshRunning = false;
+async function refreshTrafficTotalsFromServer(): Promise<void> {
+  if (trafficTotalsRefreshRunning) return;
+  trafficTotalsRefreshRunning = true;
+  try {
+    await trafficReporter.reportPending();
+    const snapshot = await createSnapshot();
+    sendSnapshotToWindows(snapshot);
+    refreshTrayMenu();
+  } catch (error) {
+    appendLog(`流量同步失败: ${formatError(error)}`);
+  } finally {
+    trafficTotalsRefreshRunning = false;
+  }
 }
 
 function createSnapshotProgressNotifier(intervalMs = 300, shouldSend: () => boolean = () => true) {
@@ -1537,7 +1580,12 @@ function registerIpc() {
         createMihomoApi: createRuntimeMihomoApi,
         createSnapshot
       },
-      name
+      name,
+      {
+        onDelayTested: async (nodeName, delay) => {
+          await updateCurrentNodeDelayFromManualTest(nodeName, delay);
+        }
+      }
     );
   });
   ipcMain.handle(ipcChannels.testAllNodes, async () => {
@@ -1558,6 +1606,9 @@ function registerIpc() {
         },
         {
           signal: controller.signal,
+          onNodeTested: async (node) => {
+            await updateCurrentNodeDelayFromManualTest(node.name, node.delay, node.testState);
+          },
           onProgress: () => {
             if (activeNodeTestController === controller && !controller.signal.aborted) {
               progressNotifier.notify();
@@ -2571,6 +2622,7 @@ if (!gotSingleInstanceLock) {
     void migrateLegacyLaunchAtLogin();
     void createWindow();
     startRemoteConfigPolling();
+    void refreshTrafficTotalsFromServer();
     if (petFeatureEnabled) {
       void createPetWindow();
     }

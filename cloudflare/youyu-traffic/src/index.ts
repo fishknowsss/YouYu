@@ -23,6 +23,16 @@ type TrafficReportInput = {
   appVersion?: string;
 };
 
+type TrafficSummary = {
+  totalUpload: number;
+  totalDownload: number;
+  deviceTotalUpload: number;
+  deviceTotalDownload: number;
+  todayUpload: number;
+  todayDownload: number;
+  updatedAt: string;
+};
+
 type RemoteConfigInput = {
   enabled?: boolean;
   subscriptionUrl?: string | null;
@@ -1407,7 +1417,14 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
   if (!reportId) throw new HttpError(400, 'missing report id');
 
   await verifyDeviceRequest(request, env, userId, deviceId, bodyText);
-  if (upload === 0 && download === 0) return json({ ok: true });
+  if (upload === 0 && download === 0) {
+    await env.DB.prepare('UPDATE devices SET last_seen_at = ?, app_version = COALESCE(?, app_version) WHERE id = ?').bind(
+      now,
+      cleanOptional(input.appVersion),
+      deviceId
+    ).run();
+    return json({ ok: true, traffic: await getTrafficSummary(env, userId, deviceId, date) });
+  }
 
   const config = await getEffectiveRemoteConfig(env, userId);
   const anomaly = upload >= config.anomalyThresholdBytes || download >= config.anomalyThresholdBytes;
@@ -1442,11 +1459,58 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
   try {
     await env.DB.batch(writes);
   } catch (error) {
-    if (isUniqueConstraintError(error)) return json({ ok: true, anomaly: false, duplicate: true });
+    if (isUniqueConstraintError(error)) {
+      return json({
+        ok: true,
+        anomaly: false,
+        duplicate: true,
+        traffic: await getTrafficSummary(env, userId, deviceId, date)
+      });
+    }
     throw error;
   }
 
-  return json({ ok: true, anomaly });
+  return json({ ok: true, anomaly, traffic: await getTrafficSummary(env, userId, deviceId, date) });
+}
+
+async function getTrafficSummary(env: Env, userId: string, deviceId: string, date: string): Promise<TrafficSummary> {
+  const totals = await env.DB.prepare(
+    `SELECT
+       COALESCE(SUM(upload_bytes), 0) AS totalUpload,
+       COALESCE(SUM(download_bytes), 0) AS totalDownload
+     FROM traffic_daily
+     WHERE user_id = ?`
+  )
+    .bind(userId)
+    .first<{ totalUpload: number; totalDownload: number }>();
+  const deviceTotals = await env.DB.prepare(
+    `SELECT
+       COALESCE(SUM(upload_bytes), 0) AS totalUpload,
+       COALESCE(SUM(download_bytes), 0) AS totalDownload
+     FROM traffic_daily
+     WHERE user_id = ? AND device_id = ?`
+  )
+    .bind(userId, deviceId)
+    .first<{ totalUpload: number; totalDownload: number }>();
+  const today = await env.DB.prepare(
+    `SELECT
+       COALESCE(SUM(upload_bytes), 0) AS upload,
+       COALESCE(SUM(download_bytes), 0) AS download
+     FROM traffic_daily
+     WHERE user_id = ? AND date = ?`
+  )
+    .bind(userId, date)
+    .first<{ upload: number; download: number }>();
+
+  return {
+    totalUpload: normalizeBytes(totals?.totalUpload),
+    totalDownload: normalizeBytes(totals?.totalDownload),
+    deviceTotalUpload: normalizeBytes(deviceTotals?.totalUpload),
+    deviceTotalDownload: normalizeBytes(deviceTotals?.totalDownload),
+    todayUpload: normalizeBytes(today?.upload),
+    todayDownload: normalizeBytes(today?.download),
+    updatedAt: new Date().toISOString()
+  };
 }
 
 async function listUsers(env: Env): Promise<Response> {

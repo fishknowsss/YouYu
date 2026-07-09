@@ -1000,29 +1000,6 @@ select:focus-visible {
   grid-template-rows: 56px minmax(0, 1fr);
 }
 
-.pet-preview-summary {
-  min-width: 132px;
-  height: 44px;
-  display: grid;
-  align-content: center;
-  gap: 3px;
-  padding: 0 14px;
-  border-radius: 8px;
-  background: #fff;
-  color: var(--ink);
-}
-
-.pet-preview-summary span {
-  color: var(--ink-soft);
-  font-size: 13px;
-  font-weight: 750;
-}
-
-.pet-preview-summary strong {
-  font-size: 16px;
-  font-weight: 900;
-}
-
 .pet-preview-layout {
   min-height: 0;
   display: grid;
@@ -1190,8 +1167,8 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 190px) minmax(0, 1fr);
-  gap: 10px;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .pet-preview-large,
@@ -1231,8 +1208,9 @@ select:focus-visible {
 
 .pet-preview-detail {
   display: grid;
-  align-content: start;
-  gap: 10px;
+  align-content: center;
+  justify-items: start;
+  gap: 9px;
   padding: 14px;
 }
 
@@ -1870,25 +1848,28 @@ select:focus-visible {
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: minmax(58px, auto);
+  grid-auto-rows: minmax(64px, auto);
   gap: 10px;
 }
 
 .runtime-metric {
   min-width: 0;
-  min-height: 58px;
+  min-height: 64px;
   display: grid;
-  grid-template-rows: 16px minmax(18px, auto) 14px;
+  grid-template-rows: 14px minmax(19px, auto) 13px;
   align-content: center;
-  gap: 5px;
+  justify-items: center;
+  gap: 6px;
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 9px 10px;
   background: var(--accent-tint);
+  text-align: center;
 }
 
 .runtime-metric strong,
 .runtime-metric small {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1896,7 +1877,7 @@ select:focus-visible {
 
 .runtime-metric strong {
   color: var(--ink);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 950;
   line-height: 1.1;
 }
@@ -1956,12 +1937,14 @@ select:focus-visible {
 
 .node.switching {
   border-color: #b99de0;
-  background: #f4edfb;
-  box-shadow: inset 3px 0 0 var(--accent);
+  background: #f5effc;
+  box-shadow: 0 8px 20px rgb(77 49 115 / 10%);
+  transform: translateY(-1px);
 }
 
 .node.active.switching {
   background: var(--accent-strong);
+  border-color: var(--accent-strong);
 }
 
 .node-main {
@@ -2079,40 +2062,22 @@ select:focus-visible {
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-columns: minmax(292px, 1fr) 204px 130px;
+  grid-template-columns: 1fr;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   align-items: start;
-  column-gap: 26px;
   row-gap: 18px;
 }
 
-.settings-left-column,
-.settings-middle-column,
-.settings-actions-column {
-  min-width: 0;
-  display: grid;
-  align-content: start;
-}
-
-.settings-left-column {
+.settings-controls-grid {
   grid-column: 1;
   grid-row: 2;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
-}
-
-.settings-middle-column {
-  grid-column: 2;
-  grid-row: 2;
-  gap: 26px;
-  padding-top: 26px;
-}
-
-.settings-actions-column {
-  grid-column: 3;
-  grid-row: 2;
-  gap: 22px;
-  padding-top: 26px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(292px, 1fr) 204px 130px;
+  grid-template-rows: repeat(3, 66px) auto;
+  align-items: end;
+  column-gap: 26px;
+  row-gap: 10px;
 }
 
 .field-wide {
@@ -2120,29 +2085,42 @@ select:focus-visible {
 }
 
 .settings-subscription-field {
-  grid-column: 1 / -1;
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
+}
+
+.settings-control-field {
+  height: 66px;
+  align-content: end;
 }
 
 .settings-panel .field input,
 .settings-panel .field select {
   height: 48px;
-  padding: 0 14px;
+  padding: 0 42px 0 14px;
   font-size: 18px;
   font-weight: 850;
+}
+
+.settings-panel .field input {
+  padding-right: 14px;
 }
 
 .settings-save-button {
   height: 48px;
 }
 
-.settings-actions-column button {
+.settings-control-button,
+.settings-save-button {
   width: 100%;
   height: 48px;
   font-size: 18px;
 }
 
 .settings-action-status {
+  grid-column: 3;
+  justify-self: stretch;
   min-width: 0;
   min-height: 20px;
   color: var(--accent-strong);
@@ -2243,6 +2221,14 @@ select:focus-visible {
   font-size: 12px;
 }
 
+.field select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1.5 1.75L6 6.25l4.5-4.5' fill='none' stroke='%234A4255' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 15px center;
+  background-size: 12px 8px;
+}
+
 .network-route-toggle,
 .network-status-item {
   min-width: 0;
@@ -2258,6 +2244,10 @@ select:focus-visible {
 .network-route-toggle {
   justify-content: space-between;
   gap: 10px;
+}
+
+.settings-route-toggle {
+  align-self: end;
 }
 
 .network-route-main {
@@ -2523,8 +2513,8 @@ select:focus-visible {
   display: grid;
   grid-template-columns:
     minmax(78px, 1fr)
-    44px
-    58px
+    54px
+    60px
     minmax(102px, 1fr)
     62px
     58px
@@ -2541,6 +2531,13 @@ select:focus-visible {
   border-bottom: 1px solid var(--line);
   font-size: 11px;
   font-weight: 900;
+}
+
+.route-test-head span:nth-child(2),
+.route-test-head span:nth-child(3),
+.test-category,
+.test-status {
+  justify-self: center;
 }
 
 .route-test-body {
@@ -2775,8 +2772,8 @@ select:focus-visible {
   .route-test-row {
     grid-template-columns:
       minmax(70px, 1fr)
-      42px
-      54px
+      50px
+      58px
       minmax(92px, 1fr)
       56px
       54px

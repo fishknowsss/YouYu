@@ -39,7 +39,16 @@ describe('TrafficReporter', () => {
   });
 
   it('registers directly without requiring a running proxy', async () => {
-    const endpoint = await startJsonServer(async (body) => {
+    const endpoint = await startJsonServer(async (body, request) => {
+      if (request.url === '/api/traffic/report') {
+        expect(body.uploadDelta).toBe(0);
+        expect(body.downloadDelta).toBe(0);
+        return {
+          status: 200,
+          body: { ok: true, traffic: { totalUpload: 0, totalDownload: 0 } }
+        };
+      }
+      expect(request.url).toBe('/api/activate');
       expect(body.name).toBe('Alice');
       expect(body.passphrase).toBe('secret');
       expect(body.deviceSeed).toEqual(expect.any(String));
@@ -153,7 +162,13 @@ describe('TrafficReporter', () => {
       expect(body.downloadDelta).toBe(200);
       return {
         status: 200,
-        body: { ok: true }
+        body: {
+          ok: true,
+          traffic: {
+            totalUpload: 600,
+            totalDownload: 900
+          }
+        }
       };
     });
     const store = new TrafficStore(dir);
@@ -178,7 +193,54 @@ describe('TrafficReporter', () => {
       stats: {
         pendingUpload: 0,
         pendingDownload: 0,
+        totalUpload: 600,
+        totalDownload: 900,
+        totalSource: 'server',
         reportStatus: 'synced'
+      }
+    });
+  });
+
+  it('refreshes backend totals even when no local traffic is pending', async () => {
+    let reportCount = 0;
+    const endpoint = await startJsonServer(async (body, request) => {
+      reportCount += 1;
+      expect(request.url).toBe('/api/traffic/report');
+      expect(body.uploadDelta).toBe(0);
+      expect(body.downloadDelta).toBe(0);
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          traffic: {
+            totalUpload: 4096,
+            totalDownload: 8192
+          }
+        }
+      };
+    });
+    const store = new TrafficStore(dir);
+    const reporter = new TrafficReporter({
+      store,
+      endpoint,
+      appVersion: '0.8.7'
+    });
+
+    await store.createDeviceSeed();
+    await store.registerIdentity({
+      userId: 'user_1',
+      deviceId: 'device_1',
+      name: 'Alice',
+      deviceName: 'DESKTOP'
+    });
+    await reporter.reportPending();
+
+    expect(reportCount).toBe(1);
+    await expect(store.getSnapshot()).resolves.toMatchObject({
+      stats: {
+        totalUpload: 4096,
+        totalDownload: 8192,
+        totalSource: 'server'
       }
     });
   });
