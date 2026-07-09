@@ -150,8 +150,8 @@ function AdvancedHome(props: HomeProps) {
   const running = props.snapshot.status === 'running';
   const failed = props.snapshot.status === 'failed';
   const statusLabel = getStatusLabel(props.snapshot.status);
-  const todayTraffic = formatBytes(props.snapshot.traffic.todayUpload + props.snapshot.traffic.todayDownload);
-  const persistedTraffic = formatBytes(props.snapshot.traffic.totalUpload + props.snapshot.traffic.totalDownload);
+  const mostUsedNode = props.snapshot.traffic.nodeUsage.mostUsed;
+  const longestUsedNode = props.snapshot.traffic.nodeUsage.longestUsed;
   const logLines = props.snapshot.diagnostics.logs.slice(-7);
 
   return (
@@ -159,7 +159,7 @@ function AdvancedHome(props: HomeProps) {
       <header className="workspace-header">
         <div>
           <h1>控制台</h1>
-          <p>代理状态与模式</p>
+          <p>代理状态与节点</p>
         </div>
         <div className="header-actions">
           <button className="secondary-button mode-return-button" onClick={() => props.onUsageModeChange('easy')}>
@@ -221,23 +221,21 @@ function AdvancedHome(props: HomeProps) {
 
         <section className="panel runtime-panel">
           <h2>运行数据</h2>
-          <div className="metric-grid">
-            <div className="metric-row">
-              <span className="label">模式</span>
-              <strong>{formatMode(props.snapshot.mode)}</strong>
-            </div>
-            <div className="metric-row">
-              <span className="label">连接</span>
-              <strong>{props.snapshot.runtime.activeConnections}</strong>
-            </div>
-            <div className="metric-row">
-              <span className="label">今日流量</span>
-              <strong>{todayTraffic}</strong>
-            </div>
-            <div className="metric-row">
-              <span className="label">累计使用</span>
-              <strong>{persistedTraffic}</strong>
-            </div>
+          <div className="runtime-metric-grid">
+            <RuntimeMetric label="今日上传" value={formatBytes(props.snapshot.traffic.todayUpload)} />
+            <RuntimeMetric label="今日下载" value={formatBytes(props.snapshot.traffic.todayDownload)} />
+            <RuntimeMetric label="累计上传" value={formatBytes(props.snapshot.traffic.totalUpload)} />
+            <RuntimeMetric label="累计下载" value={formatBytes(props.snapshot.traffic.totalDownload)} />
+            <RuntimeMetric
+              label="常用节点"
+              value={mostUsedNode?.name ?? '暂无'}
+              detail={mostUsedNode ? formatBytes(mostUsedNode.upload + mostUsedNode.download) : undefined}
+            />
+            <RuntimeMetric
+              label="最长使用"
+              value={longestUsedNode?.name ?? '暂无'}
+              detail={longestUsedNode ? formatDuration(longestUsedNode.durationMs) : undefined}
+            />
           </div>
         </section>
 
@@ -259,6 +257,16 @@ function AdvancedHome(props: HomeProps) {
         </section>
 
       </section>
+    </div>
+  );
+}
+
+function RuntimeMetric({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div className="runtime-metric">
+      <span className="label">{label}</span>
+      <strong title={value}>{value}</strong>
+      {detail && <small>{detail}</small>}
     </div>
   );
 }
@@ -315,15 +323,21 @@ const modeOptions: Array<{ key: MihomoMode; label: string }> = [
   { key: 'direct', label: '直连' }
 ];
 
-function formatMode(mode: MihomoMode): string {
-  return modeOptions.find((option) => option.key === mode)?.label ?? mode;
-}
-
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)}GB`;
+}
+
+function formatDuration(durationMs: number): string {
+  const totalMinutes = Math.max(0, Math.round(durationMs / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) return `${hours}小时${minutes}分`;
+  if (hours > 0) return `${hours}小时`;
+  if (minutes > 0) return `${minutes}分钟`;
+  return '不足1分钟';
 }
 
 function formatDelay(health: AppSnapshot['nodeHealth']): string {

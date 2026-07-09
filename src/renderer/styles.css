@@ -970,8 +970,6 @@ select:focus-visible {
   animation: pet-bottom-angry 560ms ease-in-out infinite;
 }
 
-.pet-sprite-edgeLeftSleep::before,
-.pet-sprite-edgeRightSleep::before,
 .pet-sprite-topSleep::before,
 .pet-sprite-bottomSleep::before {
   content: 'Z';
@@ -988,16 +986,6 @@ select:focus-visible {
   animation: pet-sleep-z 1800ms ease-in-out infinite;
 }
 
-.pet-sprite-edgeLeftSleep::before {
-  right: 18px;
-  top: 54px;
-}
-
-.pet-sprite-edgeRightSleep::before {
-  left: 18px;
-  top: 54px;
-}
-
 .pet-sprite-topSleep::before {
   left: 38px;
   bottom: 42px;
@@ -1008,29 +996,6 @@ select:focus-visible {
   right: 38px;
   top: 62px;
 }
-
-.pet-sprite-edgeLeftBlink::after,
-.pet-sprite-edgeRightBlink::after,
-.pet-sprite-edgeLeftSleep::after,
-.pet-sprite-edgeRightSleep::after {
-  content: '';
-  position: absolute;
-  left: calc(var(--pet-width) * 0.06);
-  top: calc(var(--pet-height) * 0.44);
-  z-index: 2;
-  width: calc(var(--pet-width) * 0.11);
-  height: calc(var(--pet-height) * 0.027);
-  border-radius: 999px;
-  background: #532d93;
-  box-shadow: calc(var(--pet-width) * 0.14) 0 0 #532d93;
-  pointer-events: none;
-}
-
-.pet-sprite-edgeLeftBlink::after,
-.pet-sprite-edgeRightBlink::after {
-  animation: pet-side-eye-blink 620ms ease-in-out both;
-}
-
 
 .pet-preview-page {
   width: min(100%, 1100px);
@@ -1169,7 +1134,7 @@ select:focus-visible {
 .pet-preview-card.active .pet-preview-stage .pet-sprite-bottomSleep,
 .pet-preview-card.active .pet-preview-stage .pet-sprite-bottomDizzy,
 .pet-preview-card.active .pet-preview-stage .pet-sprite-bottomAngry {
-  transform: translateY(24px) scale(1.16);
+  transform: translateY(6px) scale(0.98);
 }
 
 .pet-preview-stage .pet-sprite-walkRight {
@@ -1220,7 +1185,7 @@ select:focus-visible {
 .pet-preview-stage .pet-sprite-bottomSleep,
 .pet-preview-stage .pet-sprite-bottomDizzy,
 .pet-preview-stage .pet-sprite-bottomAngry {
-  transform: translateY(24px) scale(1.12);
+  transform: translateY(6px) scale(0.94);
 }
 
 .pet-preview-inspector {
@@ -1242,6 +1207,28 @@ select:focus-visible {
   display: grid;
   place-items: center;
   overflow: hidden;
+}
+
+.pet-preview-large .pet-sprite {
+  transform: none;
+}
+
+.pet-preview-large .pet-sprite-edgeLeft,
+.pet-preview-large .pet-sprite-edgeLeftBlink,
+.pet-preview-large .pet-sprite-edgeLeftSleep {
+  transform: translateX(-12px);
+}
+
+.pet-preview-large .pet-sprite-edgeRight,
+.pet-preview-large .pet-sprite-edgeRightBlink,
+.pet-preview-large .pet-sprite-edgeRightSleep {
+  transform: translateX(12px) scaleX(-1);
+}
+
+.pet-preview-large .pet-sprite-bottomSleep,
+.pet-preview-large .pet-sprite-bottomDizzy,
+.pet-preview-large .pet-sprite-bottomAngry {
+  transform: translateY(8px) scale(0.96);
 }
 
 .pet-preview-detail {
@@ -1320,18 +1307,6 @@ select:focus-visible {
 
   100% {
     transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes pet-side-eye-blink {
-  0%,
-  100% {
-    opacity: 0;
-  }
-
-  42%,
-  66% {
-    opacity: 1;
   }
 }
 
@@ -1915,6 +1890,48 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.runtime-metric-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(58px, auto);
+  gap: 10px;
+}
+
+.runtime-metric {
+  min-width: 0;
+  min-height: 58px;
+  display: grid;
+  grid-template-rows: 16px minmax(18px, auto) 14px;
+  align-content: center;
+  gap: 5px;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--accent-tint);
+}
+
+.runtime-metric strong,
+.runtime-metric small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-metric strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.1;
+}
+
+.runtime-metric small {
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1;
+}
+
 .list-panel {
   display: grid;
   min-height: 0;
@@ -2078,6 +2095,7 @@ select:focus-visible {
   display: grid;
   min-height: 0;
   height: 100%;
+  padding: 24px 14px 14px;
 }
 
 .settings-form-grid {
@@ -2085,19 +2103,40 @@ select:focus-visible {
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 136px;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.35fr) minmax(150px, 0.92fr) 128px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   align-items: start;
-  gap: 10px;
+  column-gap: 26px;
+  row-gap: 18px;
 }
 
-.settings-controls-row {
+.settings-left-column,
+.settings-middle-column,
+.settings-actions-column {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(176px, 240px) minmax(132px, 168px);
-  justify-content: start;
-  align-items: start;
-  gap: 10px;
+  align-content: start;
+}
+
+.settings-left-column {
+  grid-column: 1;
+  grid-row: 2;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.settings-middle-column {
+  grid-column: 2;
+  grid-row: 2;
+  gap: 26px;
+  padding-top: 28px;
+}
+
+.settings-actions-column {
+  grid-column: 3;
+  grid-row: 2;
+  gap: 22px;
+  padding-top: 28px;
 }
 
 .field-wide {
@@ -2105,12 +2144,41 @@ select:focus-visible {
 }
 
 .settings-subscription-field {
+  grid-column: 1 / -1;
   min-width: 0;
 }
 
+.settings-panel .field input,
+.settings-panel .field select {
+  height: 48px;
+  padding: 0 14px;
+  font-size: 18px;
+  font-weight: 850;
+}
+
 .settings-save-button {
-  align-self: end;
-  height: 42px;
+  height: 48px;
+}
+
+.settings-actions-column button {
+  width: 100%;
+  height: 48px;
+  font-size: 18px;
+}
+
+.settings-action-status {
+  min-width: 0;
+  min-height: 20px;
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.25;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.settings-action-status.is-error {
+  color: var(--danger);
 }
 
 .busy-overlay {
@@ -2199,36 +2267,14 @@ select:focus-visible {
   font-size: 12px;
 }
 
-.settings-secondary-actions {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: 42px;
-  gap: 8px;
-  align-self: end;
-}
-
-.settings-secondary-actions button {
-  width: 100%;
-}
-
-.network-section {
-  grid-column: 1 / -1;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(178px, 0.34fr) minmax(0, 1fr);
-  align-items: stretch;
-  gap: 8px;
-}
-
 .network-route-toggle,
 .network-status-item {
   min-width: 0;
-  height: 46px;
+  height: 48px;
   display: flex;
   align-items: center;
   border-radius: 8px;
-  padding: 0 10px;
+  padding: 0 14px;
   color: var(--ink);
   background: var(--accent-tint);
 }
@@ -2254,14 +2300,14 @@ select:focus-visible {
 }
 
 .network-route-main strong {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 950;
 }
 
 .network-route-note {
   min-width: 0;
   color: var(--accent-strong);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 900;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2290,21 +2336,22 @@ select:focus-visible {
 
 .network-status-item span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 850;
 }
 
 .network-status-item strong {
   color: var(--accent-strong);
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 950;
 }
 
 .update-row {
   grid-column: 1 / -1;
+  grid-row: 3;
   align-self: end;
   min-width: 0;
-  min-height: 44px;
+  min-height: 48px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 84px;
   align-items: center;
@@ -2379,10 +2426,6 @@ select:focus-visible {
 
 .update-row.is-downloading button {
   grid-column: 3;
-}
-
-.settings-message {
-  grid-column: 1 / -1;
 }
 
 .usage-registration {

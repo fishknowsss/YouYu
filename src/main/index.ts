@@ -82,6 +82,9 @@ let remoteConfigSyncRunning = false;
 let updateCheckTimer: ReturnType<typeof setTimeout> | undefined;
 let updateCheckRunning = false;
 let autoUpdatesConfigured = false;
+let trafficSnapshotBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
+let trafficSnapshotBroadcastRunning = false;
+let lastTrafficSnapshotBroadcastAt = 0;
 let updateSnapshot: AppUpdateSnapshot = {
   currentVersion: '0.0.0',
   buildChannel: 'standard',
@@ -135,6 +138,7 @@ const nodeHealthRetryDelayMs = 8000;
 const nodeHealthFailureThreshold = 2;
 const remoteConfigSyncIntervalMs = 3 * 60 * 1000;
 const updatePeriodicIntervalMs = 30 * 60 * 1000;
+const trafficSnapshotBroadcastIntervalMs = 10000;
 const runtimeRecoveryInitialDelayMs = 1500;
 const runtimeRecoveryMaxDelayMs = 60000;
 
@@ -179,11 +183,13 @@ const trafficReporter = new TrafficReporter({
   store: trafficStore,
   endpoint: readOptionalText(trafficApiUrlPath),
   appVersion,
+  intervalMs: 2 * 60 * 1000,
   getProxyUrl: getRuntimeTrafficProxyUrl,
   onError: (error) => appendLog(`流量上报失败: ${formatError(error)}`)
 });
 const trafficTracker = new TrafficTracker({
   store: trafficStore,
+  intervalMs: 5000,
   isRunning: () => lifecycle.getStatus() === 'running',
   readRuntimeStats: async () => {
     const settings = await settingsStore.read();
@@ -191,6 +197,11 @@ const trafficTracker = new TrafficTracker({
       includeConnections: true
     });
   },
+  readCurrentNode: async () => {
+    const settings = await settingsStore.read();
+    return createRuntimeMihomoApi({ secret: settings.controllerSecret }).getCurrentNode();
+  },
+  onSample: scheduleTrafficSnapshotBroadcast,
   onError: (error) => appendLog(`流量统计失败: ${formatError(error)}`)
 });
 const mihomoBinaryPath = isDev
@@ -326,6 +337,28 @@ function getUpdateChannelName(channel: AppUpdateSnapshot['buildChannel']): strin
 
 function getRuntimeTrafficProxyUrl(): string | undefined {
   return lifecycle?.getStatus() === 'running' ? `http://127.0.0.1:${runtimePorts.mixedPort}` : undefined;
+}
+
+function scheduleTrafficSnapshotBroadcast() {
+  if (trafficSnapshotBroadcastTimer) return;
+  const elapsedMs = Date.now() - lastTrafficSnapshotBroadcastAt;
+  const delayMs = Math.max(0, trafficSnapshotBroadcastIntervalMs - elapsedMs);
+  trafficSnapshotBroadcastTimer = setTimeout(() => {
+    trafficSnapshotBroadcastTimer = undefined;
+    if (trafficSnapshotBroadcastRunning) {
+      scheduleTrafficSnapshotBroadcast();
+      return;
+    }
+    trafficSnapshotBroadcastRunning = true;
+    void broadcastSnapshot()
+      .then(() => {
+        lastTrafficSnapshotBroadcastAt = Date.now();
+      })
+      .catch((error) => console.error('broadcast snapshot failed', error))
+      .finally(() => {
+        trafficSnapshotBroadcastRunning = false;
+      });
+  }, delayMs);
 }
 
 async function syncRemoteConfig(
@@ -1290,7 +1323,8 @@ async function stopProxy(): Promise<AppSnapshot> {
 }
 
 async function repairProxy(): Promise<AppSnapshot> {
-  if (lifecycle.getStatus() === 'running') {
+  const wasRunning = lifecycle.getStatus() === 'running';
+  if (wasRunning) {
     const settings = await settingsStore.read();
     await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
     await trafficReporter.reportPending().catch((error) => appendLog(`流量上报失败: ${formatError(error)}`));
@@ -1300,6 +1334,12 @@ async function repairProxy(): Promise<AppSnapshot> {
   await lifecycle.repair();
   clearSubscriptionRefreshTimer();
   clearLastError();
+  if (wasRunning) {
+    await startLifecycleWithRepairRetry();
+    trafficTracker.start();
+    trafficReporter.start();
+    scheduleNodeHealthCheck(0);
+  }
   return createSnapshot();
 }
 
@@ -2488,6 +2528,10 @@ async function createPetWindow() {
 async function cleanupBeforeExit() {
   if (cleanupStarted) return;
   cleanupStarted = true;
+  if (trafficSnapshotBroadcastTimer) {
+    clearTimeout(trafficSnapshotBroadcastTimer);
+    trafficSnapshotBroadcastTimer = undefined;
+  }
   stopRemoteConfigPolling();
   if (petFeatureEnabled) {
     stopPetDrag({ settle: false });

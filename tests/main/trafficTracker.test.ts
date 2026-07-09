@@ -68,4 +68,35 @@ describe('TrafficTracker', () => {
       { upload: 50, download: 400 }
     ]);
   });
+
+  it('attributes each sampling interval to the previous active node', async () => {
+    const added: Array<{ upload: number; download: number; nodeName?: string }> = [];
+    const samples: RuntimeStats[] = [
+      { activeConnections: 1, uploadTotal: 100, downloadTotal: 1000, connections: [] },
+      { activeConnections: 1, uploadTotal: 150, downloadTotal: 1400, connections: [] },
+      { activeConnections: 1, uploadTotal: 180, downloadTotal: 1600, connections: [] }
+    ];
+    const nodes = ['Node A', 'Node B', 'Node B'];
+
+    const tracker = new TrafficTracker({
+      store: {
+        addTraffic: async (upload: number, download: number, _now: Date, usage?: { nodeName?: string }) => {
+          added.push({ upload, download, nodeName: usage?.nodeName });
+        }
+      } as unknown as TrafficStore,
+      isRunning: () => true,
+      readRuntimeStats: async () => samples.shift() ?? samples[0],
+      readCurrentNode: async () => nodes.shift() ?? 'Node B'
+    });
+
+    await tracker.flush();
+    await tracker.flush();
+    await tracker.flush();
+
+    expect(added).toEqual([
+      { upload: 0, download: 0, nodeName: 'Node A' },
+      { upload: 50, download: 400, nodeName: 'Node A' },
+      { upload: 30, download: 200, nodeName: 'Node B' }
+    ]);
+  });
 });

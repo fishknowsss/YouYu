@@ -14,7 +14,7 @@
   "atlases": {
     "main": {
       "file": "main-spritesheet.png",
-      "webp": "main-spritesheet.webp",
+      "webp": "main-spritesheet.png",
       "rows": {
         "idle": {
           "row": 0,
@@ -23,8 +23,8 @@
             "a_no_mouth_r1c1",
             "a_no_mouth_r1c2",
             "a_no_mouth_r1c3",
-            "a_no_mouth_r1c4",
-            "a_no_mouth_r1c5",
+            "a_no_mouth_r1c1",
+            "a_no_mouth_r1c2",
             "a_no_mouth_r1c6"
           ],
           "profiles": [
@@ -200,7 +200,7 @@
     },
     "extra": {
       "file": "extra-spritesheet.png",
-      "webp": "extra-spritesheet.webp",
+      "webp": "extra-spritesheet.png",
       "rows": {
         "edgePeek": {
           "row": 0,
@@ -220,6 +220,32 @@
             "edge",
             "very_low",
             "normal"
+          ]
+        },
+        "edgeBlink": {
+          "row": 5,
+          "frames": 3,
+          "sourceKeys": [
+            "edgePeek_open",
+            "edgePeek_redrawn_blink",
+            "edgePeek_open"
+          ],
+          "profiles": [
+            "edge",
+            "edge",
+            "edge"
+          ]
+        },
+        "edgeSleep": {
+          "row": 6,
+          "frames": 2,
+          "sourceKeys": [
+            "edgePeek_redrawn_sleep",
+            "edgePeek_redrawn_sleep_low"
+          ],
+          "profiles": [
+            "edge",
+            "edge"
           ]
         },
         "fallRecover": {

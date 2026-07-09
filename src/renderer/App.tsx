@@ -49,6 +49,7 @@ const emptySnapshot: AppSnapshot = {
     todayDownload: 0,
     pendingUpload: 0,
     pendingDownload: 0,
+    nodeUsage: {},
     reportStatus: 'idle'
   },
   subscriptionUrl: '',
@@ -85,6 +86,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('');
   const [message, setMessage] = useState('');
+  const [settingsMessage, setSettingsMessage] = useState('');
   const [testingAllNodes, setTestingAllNodes] = useState(false);
   const testingAllNodesRef = useRef(false);
   const [switchingNode, setSwitchingNode] = useState('');
@@ -155,7 +157,8 @@ export function App() {
     action: (api: NonNullable<Window['youyu']>) => Promise<AppSnapshot>,
     doneMessage: string,
     workingMessage = '',
-    timeoutMs = actionTimeoutMs
+    timeoutMs = actionTimeoutMs,
+    messageSink?: (message: string) => void
   ) {
     const api = window.youyu;
     if (!api) {
@@ -167,16 +170,20 @@ export function App() {
     setBusy(true);
     setBusyLabel(workingMessage);
     setMessage('');
+    messageSink?.('');
     try {
       const next = await withTimeout(action(api), timeoutMs);
       setSnapshot(next);
       setSnapshotLoaded(true);
       setMessage(doneMessage);
+      messageSink?.(doneMessage);
     } catch (error) {
       const next = await api.getSnapshot().catch(() => snapshot);
       setSnapshot(next.status === 'running' ? next : { ...next, status: 'failed' });
       setSnapshotLoaded(true);
-      setMessage(getActionErrorMessage(error));
+      const errorMessage = getActionErrorMessage(error);
+      setMessage(errorMessage);
+      messageSink?.(errorMessage);
     } finally {
       setBusy(false);
       setBusyLabel('');
@@ -344,13 +351,18 @@ export function App() {
           <Settings
             snapshot={snapshot}
             busy={busy}
-            message={message}
+            busyLabel={busyLabel}
+            message={settingsMessage}
             onBack={() => setPage('home')}
-            onRepair={() => runAction((api) => api.repair(), '已修复', '修复中')}
-            onSave={(settings: AppSettingsInput) => runAction((api) => api.saveSettings(settings), '已保存')}
-            onSyncRemoteConfig={() => runAction((api) => api.syncRemoteConfig(), '已同步', '同步中')}
-            onCheckUpdate={() => runAction((api) => api.checkForUpdates(), '', '检查中')}
-            onInstallUpdate={() => runAction((api) => api.installUpdate(), '', '安装中')}
+            onRepair={() => runAction((api) => api.repair(), '已修复', '修复中', actionTimeoutMs, setSettingsMessage)}
+            onSave={(settings: AppSettingsInput) =>
+              runAction((api) => api.saveSettings(settings), '已保存', '保存中', actionTimeoutMs, setSettingsMessage)
+            }
+            onSyncRemoteConfig={() =>
+              runAction((api) => api.syncRemoteConfig(), '已同步', '同步中', actionTimeoutMs, setSettingsMessage)
+            }
+            onCheckUpdate={() => runAction((api) => api.checkForUpdates(), '', '检查中', actionTimeoutMs, setSettingsMessage)}
+            onInstallUpdate={() => runAction((api) => api.installUpdate(), '', '安装中', actionTimeoutMs, setSettingsMessage)}
           />
         )}
       </AppShell>

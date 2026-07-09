@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import manifest from '../../src/renderer/assets/pet/youyu/spritesheet-manifest.json';
 import { getPetAnimation, petStates } from '../../src/renderer/pet/atlas';
 
 describe('pet atlas', () => {
@@ -35,12 +36,14 @@ describe('pet atlas', () => {
     expect(getPetAnimation('edgeRight').loop).toBe(true);
     expect(getPetAnimation('edgeLeft').frameIndexes).toEqual([0]);
     expect(getPetAnimation('edgeRight').frameIndexes).toEqual([0]);
-    expect(getPetAnimation('edgeLeftBlink').frameIndexes).toEqual([0, 0, 0]);
-    expect(getPetAnimation('edgeRightBlink').frameIndexes).toEqual([0, 0, 0]);
+    expect(getPetAnimation('edgeLeftBlink').row).toBe(getPetAnimation('edgeRightBlink').row);
+    expect(getPetAnimation('edgeLeftBlink').frameIndexes).toEqual([0, 1, 2]);
+    expect(getPetAnimation('edgeRightBlink').frameIndexes).toEqual([0, 1, 2]);
     expect(getPetAnimation('edgeLeftSleep').loop).toBe(true);
     expect(getPetAnimation('edgeRightSleep').loop).toBe(true);
-    expect(getPetAnimation('edgeLeftSleep').frameIndexes).toEqual([0]);
-    expect(getPetAnimation('edgeRightSleep').frameIndexes).toEqual([0]);
+    expect(getPetAnimation('edgeLeftSleep').row).toBe(getPetAnimation('edgeRightSleep').row);
+    expect(getPetAnimation('edgeLeftSleep').frameIndexes).toEqual([0, 1]);
+    expect(getPetAnimation('edgeRightSleep').frameIndexes).toEqual([0, 1]);
   });
 
   it('adds long-idle docked sleep states without new artwork rows', () => {
@@ -72,10 +75,27 @@ describe('pet atlas', () => {
 
   it('uses multiple front-facing open-eye idle frames for normal ambient states', () => {
     const idle = getPetAnimation('idle');
+    const idleRow = manifest.atlases.main.rows.idle;
 
     expect(idle.atlas).toBe('main');
     expect(idle.row).toBe(0);
     expect(idle.frameIndexes).toEqual([0, 1, 5, 1]);
+    expect(idleRow.sourceKeys).not.toContain('a_no_mouth_r1c4');
+    expect(idleRow.sourceKeys).not.toContain('a_no_mouth_r1c5');
+    expect(idleRow.sourceKeys[3]).toBe('a_no_mouth_r1c1');
+    expect(idleRow.sourceKeys[4]).toBe('a_no_mouth_r1c2');
+  });
+
+  it('uses dedicated redrawn side-edge rows for blink and sleep states', () => {
+    const blinkRow = manifest.atlases.extra.rows.edgeBlink;
+    const sleepRow = manifest.atlases.extra.rows.edgeSleep;
+
+    expect(blinkRow.sourceKeys).toContain('edgePeek_redrawn_blink');
+    expect(sleepRow.sourceKeys).toContain('edgePeek_redrawn_sleep');
+    expect(getPetAnimation('edgeLeftBlink').row).toBe(blinkRow.row);
+    expect(getPetAnimation('edgeRightBlink').row).toBe(blinkRow.row);
+    expect(getPetAnimation('edgeLeftSleep').row).toBe(sleepRow.row);
+    expect(getPetAnimation('edgeRightSleep').row).toBe(sleepRow.row);
   });
 
   it('uses the star-holding reward frames in ambient states', () => {

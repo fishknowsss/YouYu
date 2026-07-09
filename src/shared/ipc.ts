@@ -114,6 +114,19 @@ export type TrafficIdentity = {
   verificationStatus?: 'verified' | 'pending';
 };
 
+export type TrafficNodeUsageSummary = {
+  name: string;
+  upload: number;
+  download: number;
+  durationMs: number;
+  lastUsedAt?: string;
+};
+
+export type TrafficNodeUsageStats = {
+  mostUsed?: TrafficNodeUsageSummary;
+  longestUsed?: TrafficNodeUsageSummary;
+};
+
 export type PersistentTrafficStats = {
   totalUpload: number;
   totalDownload: number;
@@ -121,6 +134,7 @@ export type PersistentTrafficStats = {
   todayDownload: number;
   pendingUpload: number;
   pendingDownload: number;
+  nodeUsage: TrafficNodeUsageStats;
   lastUpdatedAt?: string;
   lastReportedAt?: string;
   reportStatus: 'idle' | 'synced' | 'pending' | 'failed' | 'not-configured';

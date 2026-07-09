@@ -43,6 +43,38 @@ describe('TrafficStore', () => {
     expect(snapshot.stats.pendingDownload).toBe(140);
   });
 
+  it('uses the local calendar day for today totals', async () => {
+    const store = new TrafficStore(dir);
+    const localToday = new Date(2026, 4, 10, 0, 30, 0);
+    const localTomorrow = new Date(2026, 4, 11, 0, 5, 0);
+
+    await store.addTraffic(10, 20, localToday);
+
+    const todaySnapshot = await store.getSnapshot(localToday);
+    const tomorrowSnapshot = await store.getSnapshot(localTomorrow);
+    expect(todaySnapshot.stats.todayUpload).toBe(10);
+    expect(todaySnapshot.stats.todayDownload).toBe(20);
+    expect(tomorrowSnapshot.stats.todayUpload).toBe(0);
+    expect(tomorrowSnapshot.stats.todayDownload).toBe(0);
+  });
+
+  it('summarizes the most used and longest used nodes', async () => {
+    const store = new TrafficStore(dir);
+
+    await store.addTraffic(100, 300, new Date('2026-05-10T08:00:00.000Z'), {
+      nodeName: 'JP Tokyo',
+      durationMs: 5 * 60 * 1000
+    });
+    await store.addTraffic(10, 20, new Date('2026-05-10T08:10:00.000Z'), {
+      nodeName: 'US West',
+      durationMs: 12 * 60 * 1000
+    });
+
+    const snapshot = await store.getSnapshot(new Date('2026-05-10T08:20:00.000Z'));
+    expect(snapshot.stats.nodeUsage.mostUsed?.name).toBe('JP Tokyo');
+    expect(snapshot.stats.nodeUsage.longestUsed?.name).toBe('US West');
+  });
+
   it('keeps identity and clears reported pending bytes', async () => {
     const store = new TrafficStore(dir);
 

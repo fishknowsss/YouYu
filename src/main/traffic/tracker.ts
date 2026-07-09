@@ -5,8 +5,10 @@ import type { TrafficStore } from './store';
 type TrafficTrackerOptions = {
   store: TrafficStore;
   readRuntimeStats: () => Promise<RuntimeStats>;
+  readCurrentNode?: () => Promise<string>;
   isRunning: () => boolean;
   intervalMs?: number;
+  onSample?: () => void;
   onError?: (error: unknown) => void;
 };
 
@@ -14,6 +16,8 @@ export class TrafficTracker {
   private timer: ReturnType<typeof setInterval> | undefined;
   private lastUpload = 0;
   private lastDownload = 0;
+  private lastSampleAt = 0;
+  private lastNode: string | undefined;
   private excludedConnections = new Map<string, { upload: number; download: number }>();
 
   constructor(private readonly options: TrafficTrackerOptions) {}
@@ -33,6 +37,8 @@ export class TrafficTracker {
     }
     this.lastUpload = 0;
     this.lastDownload = 0;
+    this.lastSampleAt = 0;
+    this.lastNode = undefined;
     this.excludedConnections.clear();
   }
 
@@ -44,25 +50,38 @@ export class TrafficTracker {
     if (!this.options.isRunning()) {
       this.lastUpload = 0;
       this.lastDownload = 0;
+      this.lastSampleAt = 0;
+      this.lastNode = undefined;
       this.excludedConnections.clear();
       return;
     }
 
-    const stats = await this.options.readRuntimeStats();
+    const sampledAt = Date.now();
+    const [stats, currentNode] = await Promise.all([
+      this.options.readRuntimeStats(),
+      this.options.readCurrentNode?.().catch(() => undefined)
+    ]);
     const uploadDelta = this.lastUpload > 0 && stats.uploadTotal >= this.lastUpload
       ? stats.uploadTotal - this.lastUpload
       : 0;
     const downloadDelta = this.lastDownload > 0 && stats.downloadTotal >= this.lastDownload
       ? stats.downloadTotal - this.lastDownload
       : 0;
+    const durationMs = this.lastSampleAt > 0 ? Math.max(0, sampledAt - this.lastSampleAt) : 0;
+    const sampledNode = this.lastNode ?? currentNode;
     const excludedDelta = this.collectExcludedDelta(stats.connections ?? []);
 
     this.lastUpload = stats.uploadTotal;
     this.lastDownload = stats.downloadTotal;
+    this.lastSampleAt = sampledAt;
+    this.lastNode = currentNode;
     await this.options.store.addTraffic(
       Math.max(0, uploadDelta - excludedDelta.upload),
-      Math.max(0, downloadDelta - excludedDelta.download)
+      Math.max(0, downloadDelta - excludedDelta.download),
+      new Date(sampledAt),
+      { nodeName: sampledNode, durationMs }
     );
+    this.options.onSample?.();
   }
 
   private collectExcludedDelta(connections: RuntimeConnectionStats[]) {

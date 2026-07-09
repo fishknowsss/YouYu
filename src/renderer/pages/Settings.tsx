@@ -4,6 +4,7 @@ import type { AppSettingsInput, AppSnapshot, RuleProfile } from '../../shared/ip
 type SettingsProps = {
   snapshot: AppSnapshot;
   busy: boolean;
+  busyLabel: string;
   message: string;
   onBack: () => void;
   onRepair: () => void;
@@ -16,6 +17,7 @@ type SettingsProps = {
 export function Settings({
   snapshot,
   busy,
+  busyLabel,
   message,
   onBack,
   onRepair,
@@ -33,6 +35,9 @@ export function Settings({
   const [settingsDirty, setSettingsDirty] = useState(false);
   const pendingSettingsKey = useRef<string | undefined>(undefined);
   const remoteManaged = Boolean(snapshot.remoteSubscriptionUrl);
+  const saving = busy && busyLabel === '保存中';
+  const syncing = busy && busyLabel === '同步中';
+  const repairing = busy && busyLabel === '修复中';
 
   useEffect(() => {
     const snapshotSettingsKey = getSnapshotSettingsKey(snapshot);
@@ -93,11 +98,8 @@ export function Settings({
               placeholder="https://..."
             />
           </label>
-          <button className="wide-button settings-save-button" disabled={busy} onClick={save}>
-            保存
-          </button>
 
-          <div className="settings-controls-row">
+          <div className="settings-left-column">
             <label className="field">
               <span>规则来源</span>
               <select
@@ -130,17 +132,6 @@ export function Settings({
                 <option value={24}>24 小时</option>
               </select>
             </label>
-          </div>
-          <div className="settings-secondary-actions">
-            <button className="secondary-button" disabled={busy} onClick={onSyncRemoteConfig}>
-              同步
-            </button>
-            <button className="secondary-button" disabled={busy} onClick={onRepair}>
-              修复
-            </button>
-          </div>
-
-          <div className="network-section">
             <label className="network-route-toggle">
               <span className="network-route-main">
                 <input
@@ -154,20 +145,52 @@ export function Settings({
                 />
                 <strong>TUN</strong>
               </span>
-              <span className="network-route-note">严格路由 {tunEnabled ? '开启' : '待用'}</span>
+              <span className="network-route-note">路由保护 {tunEnabled ? '开启' : '待用'}</span>
             </label>
-            <div className="network-status-grid">
-              <NetworkStatus label="系统代理" value="开启" />
-              <NetworkStatus label="DNS 增强" value="开启" />
-              <NetworkStatus label="流量嗅探" value="开启" />
-            </div>
           </div>
+
+          <div className="settings-middle-column">
+            <NetworkStatus label="系统代理" value={formatEnabled(snapshot.features.systemProxyEnabled)} />
+            <NetworkStatus label="DNS 增强" value={formatEnabled(snapshot.features.dnsEnhanced)} />
+            <NetworkStatus label="流量识别" value={formatEnabled(snapshot.features.snifferEnabled)} />
+          </div>
+
+          <div className="settings-actions-column">
+            <button className="wide-button settings-save-button" disabled={busy} onClick={save}>
+              {saving ? '保存中' : '保存'}
+            </button>
+            <button className="secondary-button" disabled={busy} onClick={onSyncRemoteConfig}>
+              {syncing ? '同步中' : '同步'}
+            </button>
+            <button className="secondary-button" disabled={busy} onClick={onRepair}>
+              {repairing ? '修复中' : '修复'}
+            </button>
+            {message && (
+              <div className={`settings-action-status ${isErrorMessage(message) ? 'is-error' : ''}`} aria-live="polite">
+                {message}
+              </div>
+            )}
+          </div>
+
           <UpdatePanel snapshot={snapshot} busy={busy} onCheckUpdate={onCheckUpdate} onInstallUpdate={onInstallUpdate} />
-          <p className="inline-message settings-message">{message || ' '}</p>
         </div>
       </section>
     </div>
   );
+}
+
+function isErrorMessage(message: string): boolean {
+  return (
+    message.includes('失败') ||
+    message.includes('超时') ||
+    message.includes('不可用') ||
+    message.includes('未加载') ||
+    message.includes('先')
+  );
+}
+
+function formatEnabled(enabled: boolean): string {
+  return enabled ? '开启' : '关闭';
 }
 
 function NetworkStatus({ label, value }: { label: string; value: string }) {

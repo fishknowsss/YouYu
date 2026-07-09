@@ -9,6 +9,13 @@ type TrafficDay = {
   download: number;
 };
 
+type TrafficNodeUsage = {
+  upload: number;
+  download: number;
+  durationMs: number;
+  lastUsedAt?: string;
+};
+
 type TrafficFile = {
   version: number;
   deviceSeed: string;
@@ -19,6 +26,7 @@ type TrafficFile = {
   pendingUpload: number;
   pendingDownload: number;
   daily: Record<string, TrafficDay>;
+  nodeUsage: Record<string, TrafficNodeUsage>;
   lastUpdatedAt?: string;
   lastReportedAt?: string;
   reportStatus?: PersistentTrafficStats['reportStatus'];
@@ -62,15 +70,32 @@ export class TrafficStore {
     }
   }
 
-  async addTraffic(uploadDelta: number, downloadDelta: number, now = new Date()): Promise<void> {
+  async addTraffic(
+    uploadDelta: number,
+    downloadDelta: number,
+    now = new Date(),
+    usage?: { nodeName?: string; durationMs?: number }
+  ): Promise<void> {
     const upload = normalizeBytes(uploadDelta);
     const download = normalizeBytes(downloadDelta);
-    if (upload === 0 && download === 0) return;
+    const nodeName = normalizeNodeName(usage?.nodeName);
+    const durationMs = normalizeDurationMs(usage?.durationMs);
+    if (upload === 0 && download === 0 && (!nodeName || durationMs === 0)) return;
 
     await this.enqueue(async () => {
       const current = await this.read();
       const dateKey = toDateKey(now);
       const day = current.daily[dateKey] ?? { upload: 0, download: 0 };
+      const nodeUsage = { ...current.nodeUsage };
+      if (nodeName) {
+        const currentNodeUsage = nodeUsage[nodeName] ?? { upload: 0, download: 0, durationMs: 0 };
+        nodeUsage[nodeName] = {
+          upload: currentNodeUsage.upload + upload,
+          download: currentNodeUsage.download + download,
+          durationMs: currentNodeUsage.durationMs + durationMs,
+          lastUsedAt: now.toISOString()
+        };
+      }
       const next: TrafficFile = {
         ...current,
         totalUpload: current.totalUpload + upload,
@@ -84,8 +109,12 @@ export class TrafficStore {
             download: day.download + download
           }
         },
+        nodeUsage,
         lastUpdatedAt: now.toISOString(),
-        reportStatus: current.identity ? 'pending' : current.reportStatus ?? 'idle',
+        reportStatus:
+          current.identity && (current.pendingUpload + upload > 0 || current.pendingDownload + download > 0)
+            ? 'pending'
+            : current.reportStatus ?? 'idle',
         reportError: undefined
       };
       await this.write(next);
@@ -240,6 +269,7 @@ export class TrafficStore {
         todayDownload: today.download,
         pendingUpload: current.pendingUpload,
         pendingDownload: current.pendingDownload,
+        nodeUsage: summarizeNodeUsage(current.nodeUsage),
         lastUpdatedAt: current.lastUpdatedAt,
         lastReportedAt: current.lastReportedAt,
         reportStatus: current.reportStatus ?? 'idle',
@@ -270,6 +300,7 @@ export class TrafficStore {
       pendingUpload: normalizeBytes(value.pendingUpload),
       pendingDownload: normalizeBytes(value.pendingDownload),
       daily: normalizeDaily(value.daily),
+      nodeUsage: normalizeNodeUsage(value.nodeUsage),
       lastUpdatedAt: typeof value.lastUpdatedAt === 'string' ? value.lastUpdatedAt : undefined,
       lastReportedAt: typeof value.lastReportedAt === 'string' ? value.lastReportedAt : undefined,
       reportStatus: normalizeReportStatus(value.reportStatus),
@@ -344,8 +375,74 @@ function normalizeDaily(value: unknown): Record<string, TrafficDay> {
   return next;
 }
 
+function normalizeNodeUsage(value: unknown): Record<string, TrafficNodeUsage> {
+  if (!value || typeof value !== 'object') return {};
+  const next: Record<string, TrafficNodeUsage> = {};
+  for (const [key, usage] of Object.entries(value as Record<string, Partial<TrafficNodeUsage>>)) {
+    const nodeName = normalizeNodeName(key);
+    if (!nodeName) continue;
+    next[nodeName] = {
+      upload: normalizeBytes(usage.upload),
+      download: normalizeBytes(usage.download),
+      durationMs: normalizeDurationMs(usage.durationMs),
+      lastUsedAt: typeof usage.lastUsedAt === 'string' ? usage.lastUsedAt : undefined
+    };
+  }
+  return next;
+}
+
+function summarizeNodeUsage(value: Record<string, TrafficNodeUsage>): PersistentTrafficStats['nodeUsage'] {
+  const entries = Object.entries(value)
+    .map(([name, usage]) => ({
+      name,
+      upload: normalizeBytes(usage.upload),
+      download: normalizeBytes(usage.download),
+      durationMs: normalizeDurationMs(usage.durationMs),
+      lastUsedAt: usage.lastUsedAt
+    }))
+    .filter((usage) => usage.name && (usage.upload > 0 || usage.download > 0 || usage.durationMs > 0));
+
+  return {
+    mostUsed: entries.toSorted(compareMostUsedNode)[0],
+    longestUsed: entries.toSorted(compareLongestUsedNode)[0]
+  };
+}
+
+function compareMostUsedNode(left: TrafficNodeUsage & { name: string }, right: TrafficNodeUsage & { name: string }) {
+  const leftBytes = left.upload + left.download;
+  const rightBytes = right.upload + right.download;
+  if (rightBytes !== leftBytes) return rightBytes - leftBytes;
+  if (right.durationMs !== left.durationMs) return right.durationMs - left.durationMs;
+  return compareLastUsedAt(left, right);
+}
+
+function compareLongestUsedNode(left: TrafficNodeUsage & { name: string }, right: TrafficNodeUsage & { name: string }) {
+  if (right.durationMs !== left.durationMs) return right.durationMs - left.durationMs;
+  const leftBytes = left.upload + left.download;
+  const rightBytes = right.upload + right.download;
+  if (rightBytes !== leftBytes) return rightBytes - leftBytes;
+  return compareLastUsedAt(left, right);
+}
+
+function compareLastUsedAt(left: TrafficNodeUsage, right: TrafficNodeUsage) {
+  const rightTime = Date.parse(right.lastUsedAt ?? '');
+  const leftTime = Date.parse(left.lastUsedAt ?? '');
+  return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+}
+
 function normalizeBytes(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function normalizeDurationMs(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function normalizeNodeName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || text === 'DIRECT') return undefined;
+  return text;
 }
 
 function normalizeReportStatus(value: unknown): PersistentTrafficStats['reportStatus'] {
@@ -355,5 +452,8 @@ function normalizeReportStatus(value: unknown): PersistentTrafficStats['reportSt
 }
 
 function toDateKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }

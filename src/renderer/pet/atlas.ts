@@ -1,6 +1,6 @@
 import manifest from '../assets/pet/youyu/spritesheet-manifest.json';
-import mainAtlasUrl from '../assets/pet/youyu/main-spritesheet.webp';
-import extraAtlasUrl from '../assets/pet/youyu/extra-spritesheet.webp';
+import mainAtlasUrl from '../assets/pet/youyu/main-spritesheet.png';
+import extraAtlasUrl from '../assets/pet/youyu/extra-spritesheet.png';
 import type { DesktopPetState } from '../../shared/ipc';
 
 type AtlasName = 'main' | 'extra';
@@ -54,10 +54,10 @@ const stateConfig: Record<DesktopPetState, StateConfig> = {
   happy: { atlas: 'main', rowKey: 'happy', frameIndexes: [4, 5, 4], fps: 4, loop: true },
   edgeLeft: { atlas: 'extra', rowKey: 'edgePeek', frameIndexes: [0], fps: 1, loop: true },
   edgeRight: { atlas: 'extra', rowKey: 'edgePeek', frameIndexes: [0], fps: 1, loop: true },
-  edgeLeftBlink: { atlas: 'extra', rowKey: 'edgePeek', frameIndexes: [0, 0, 0], fps: 5, loop: false },
-  edgeRightBlink: { atlas: 'extra', rowKey: 'edgePeek', frameIndexes: [0, 0, 0], fps: 5, loop: false },
-  edgeLeftSleep: { atlas: 'extra', rowKey: 'edgePeek', frameIndexes: [0], fps: 1, loop: true },
-  edgeRightSleep: { atlas: 'extra', rowKey: 'edgePeek', frameIndexes: [0], fps: 1, loop: true },
+  edgeLeftBlink: { atlas: 'extra', rowKey: 'edgeBlink', frameIndexes: [0, 1, 2], fps: 8, loop: false },
+  edgeRightBlink: { atlas: 'extra', rowKey: 'edgeBlink', frameIndexes: [0, 1, 2], fps: 8, loop: false },
+  edgeLeftSleep: { atlas: 'extra', rowKey: 'edgeSleep', frameIndexes: [0, 1], fps: 1, loop: true },
+  edgeRightSleep: { atlas: 'extra', rowKey: 'edgeSleep', frameIndexes: [0, 1], fps: 1, loop: true },
   topSleep: { atlas: 'main', rowKey: 'sleepWake', frameIndexes: [1, 2, 3, 2], fps: 2, loop: true },
   bottomSleep: { atlas: 'main', rowKey: 'sleepWake', frameIndexes: [3], fps: 1, loop: true },
   bottomDizzy: { atlas: 'extra', rowKey: 'fallRecover', frameIndexes: [3, 4, 3, 4], fps: 5, loop: true },

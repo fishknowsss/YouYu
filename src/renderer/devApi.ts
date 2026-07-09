@@ -80,6 +80,7 @@ export function createDevYouYuApi(): YouYuApi {
       todayDownload: 0,
       pendingUpload: 0,
       pendingDownload: 0,
+      nodeUsage: {},
       reportStatus: 'idle'
     },
     subscriptionUrl: '',
