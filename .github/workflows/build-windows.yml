@@ -6,8 +6,6 @@ on:
     branches:
       - main
       - vc
-    tags:
-      - "v*"
 
 permissions:
   contents: write
@@ -70,37 +68,3 @@ jobs:
             release/latest-no.yml
           if-no-files-found: error
           retention-days: 3
-
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $version = "${{ steps.package.outputs.version }}"
-          $tag = "${{ github.ref_name }}"
-          $assets = @(
-            "release/YouYu-$version-x64.exe",
-            "release/YouYu-$version-x64.exe.blockmap",
-            "release/latest.yml",
-            "release/YouYu-$version-x64-in.exe",
-            "release/YouYu-$version-x64-in.exe.blockmap",
-            "release/latest-in.yml",
-            "release/YouYu-$version-x64-no.exe",
-            "release/YouYu-$version-x64-no.exe.blockmap",
-            "release/latest-no.yml"
-          )
-
-          $releaseExists = $false
-          try {
-            gh release view $tag *> $null
-            $releaseExists = $LASTEXITCODE -eq 0
-          } catch {
-            $releaseExists = $false
-          }
-
-          if ($releaseExists) {
-            gh release edit $tag --title "YouYu $version" --notes "YouYu $version"
-            gh release upload $tag @assets --clobber
-          } else {
-            gh release create $tag @assets --title "YouYu $version" --notes "YouYu $version"
-          }
