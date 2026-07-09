@@ -145,7 +145,7 @@ export function Settings({
                 />
                 <strong>TUN</strong>
               </span>
-              <span className="network-route-note">路由保护 {tunEnabled ? '开启' : '待用'}</span>
+              <span className="network-route-note">严格路由 {tunEnabled ? '开启' : '待用'}</span>
             </label>
           </div>
 

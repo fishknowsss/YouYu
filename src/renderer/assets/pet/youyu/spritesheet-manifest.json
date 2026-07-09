@@ -227,7 +227,7 @@
           "frames": 3,
           "sourceKeys": [
             "edgePeek_open",
-            "edgePeek_redrawn_blink",
+            "edgeSide_sleep_reference",
             "edgePeek_open"
           ],
           "profiles": [
@@ -238,13 +238,11 @@
         },
         "edgeSleep": {
           "row": 6,
-          "frames": 2,
+          "frames": 1,
           "sourceKeys": [
-            "edgePeek_redrawn_sleep",
-            "edgePeek_redrawn_sleep_low"
+            "edgeSide_sleep_reference"
           ],
           "profiles": [
-            "edge",
             "edge"
           ]
         },

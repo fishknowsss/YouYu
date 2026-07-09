@@ -938,13 +938,11 @@ select:focus-visible {
 }
 
 .pet-sprite-edgeLeftSleep {
-  transform: translate(-18px, 8px) rotate(-2deg) scale(1.01);
-  animation: pet-side-sleep-left 2500ms ease-in-out infinite;
+  transform: translateX(-18px);
 }
 
 .pet-sprite-edgeRightSleep {
-  transform: translate(18px, 8px) scaleX(-1.01) scaleY(1.01) rotate(-2deg);
-  animation: pet-side-sleep-right 2500ms ease-in-out infinite;
+  transform: translateX(18px) scaleX(-1);
 }
 
 .pet-sprite-topSleep {
@@ -959,13 +957,13 @@ select:focus-visible {
 }
 
 .pet-sprite-bottomDizzy {
-  transform: translateY(22px) rotate(-2deg) scaleX(1.14) scaleY(0.96);
+  transform: translateY(18px) rotate(-2deg) scale(1.04);
   filter: saturate(0.9) contrast(0.98);
   animation: pet-bottom-dizzy 720ms ease-in-out infinite;
 }
 
 .pet-sprite-bottomAngry {
-  transform: translateY(21px) scaleX(1.13) scaleY(0.98);
+  transform: translateY(18px) scale(1.04);
   filter: saturate(1.12) contrast(1.04);
   animation: pet-bottom-angry 560ms ease-in-out infinite;
 }
@@ -1119,11 +1117,11 @@ select:focus-visible {
 }
 
 .pet-preview-card.active .pet-preview-stage .pet-sprite-edgeLeftSleep {
-  transform: translate(-18px, 8px) rotate(-2deg) scale(1.06);
+  transform: translateX(-18px) scale(1.04);
 }
 
 .pet-preview-card.active .pet-preview-stage .pet-sprite-edgeRightSleep {
-  transform: translate(18px, 8px) scaleX(-1.06) scaleY(1.06) rotate(-2deg);
+  transform: translateX(18px) scaleX(-1.04) scaleY(1.04);
 }
 
 .pet-preview-card.active .pet-preview-stage .pet-sprite-topSleep {
@@ -1134,7 +1132,7 @@ select:focus-visible {
 .pet-preview-card.active .pet-preview-stage .pet-sprite-bottomSleep,
 .pet-preview-card.active .pet-preview-stage .pet-sprite-bottomDizzy,
 .pet-preview-card.active .pet-preview-stage .pet-sprite-bottomAngry {
-  transform: translateY(6px) scale(0.98);
+  transform: translateY(-2px) scale(0.98);
 }
 
 .pet-preview-stage .pet-sprite-walkRight {
@@ -1170,11 +1168,11 @@ select:focus-visible {
 }
 
 .pet-preview-stage .pet-sprite-edgeLeftSleep {
-  transform: translate(-18px, 8px) rotate(-2deg) scale(1.01);
+  transform: translateX(-18px);
 }
 
 .pet-preview-stage .pet-sprite-edgeRightSleep {
-  transform: translate(18px, 8px) scaleX(-1.01) scaleY(1.01) rotate(-2deg);
+  transform: translateX(18px) scaleX(-1);
 }
 
 .pet-preview-stage .pet-sprite-topSleep {
@@ -1185,7 +1183,7 @@ select:focus-visible {
 .pet-preview-stage .pet-sprite-bottomSleep,
 .pet-preview-stage .pet-sprite-bottomDizzy,
 .pet-preview-stage .pet-sprite-bottomAngry {
-  transform: translateY(6px) scale(0.94);
+  transform: translateY(-2px) scale(0.92);
 }
 
 .pet-preview-inspector {
@@ -1228,7 +1226,7 @@ select:focus-visible {
 .pet-preview-large .pet-sprite-bottomSleep,
 .pet-preview-large .pet-sprite-bottomDizzy,
 .pet-preview-large .pet-sprite-bottomAngry {
-  transform: translateY(8px) scale(0.96);
+  transform: translateY(-4px) scale(0.98);
 }
 
 .pet-preview-detail {
@@ -1310,28 +1308,6 @@ select:focus-visible {
   }
 }
 
-@keyframes pet-side-sleep-left {
-  0%,
-  100% {
-    transform: translate(-18px, 8px) rotate(-2deg) scale(1.01);
-  }
-
-  50% {
-    transform: translate(-18px, 11px) rotate(-2.5deg) scaleX(1.02) scaleY(0.99);
-  }
-}
-
-@keyframes pet-side-sleep-right {
-  0%,
-  100% {
-    transform: translate(18px, 8px) scaleX(-1.01) scaleY(1.01) rotate(-2deg);
-  }
-
-  50% {
-    transform: translate(18px, 11px) scaleX(-1.02) scaleY(0.99) rotate(-2.5deg);
-  }
-}
-
 @keyframes pet-top-hang-sleep {
   0%,
   100% {
@@ -1357,26 +1333,26 @@ select:focus-visible {
 @keyframes pet-bottom-dizzy {
   0%,
   100% {
-    transform: translateY(22px) rotate(-2deg) scaleX(1.14) scaleY(0.96);
+    transform: translateY(18px) rotate(-2deg) scale(1.04);
   }
 
   50% {
-    transform: translateY(24px) rotate(2deg) scaleX(1.14) scaleY(0.94);
+    transform: translateY(18px) rotate(2deg) scale(1.04);
   }
 }
 
 @keyframes pet-bottom-angry {
   0%,
   100% {
-    transform: translate(0, 21px) scaleX(1.13) scaleY(0.98);
+    transform: translate(0, 18px) scale(1.04);
   }
 
   35% {
-    transform: translate(-3px, 21px) scaleX(1.15) scaleY(0.96);
+    transform: translate(-3px, 18px) scale(1.04);
   }
 
   70% {
-    transform: translate(3px, 21px) scaleX(1.15) scaleY(0.96);
+    transform: translate(3px, 18px) scale(1.04);
   }
 }
 
@@ -2095,7 +2071,7 @@ select:focus-visible {
   display: grid;
   min-height: 0;
   height: 100%;
-  padding: 24px 14px 14px;
+  padding: 20px 14px 14px;
 }
 
 .settings-form-grid {
@@ -2103,8 +2079,8 @@ select:focus-visible {
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(150px, 0.92fr) 128px;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(292px, 1fr) 204px 130px;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   align-items: start;
   column-gap: 26px;
   row-gap: 18px;
@@ -2129,14 +2105,14 @@ select:focus-visible {
   grid-column: 2;
   grid-row: 2;
   gap: 26px;
-  padding-top: 28px;
+  padding-top: 26px;
 }
 
 .settings-actions-column {
   grid-column: 3;
   grid-row: 2;
   gap: 22px;
-  padding-top: 28px;
+  padding-top: 26px;
 }
 
 .field-wide {
@@ -2348,21 +2324,21 @@ select:focus-visible {
 
 .update-row {
   grid-column: 1 / -1;
-  grid-row: 3;
+  grid-row: 4;
   align-self: end;
   min-width: 0;
   min-height: 48px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 84px;
+  grid-template-columns: minmax(0, 1fr) 96px;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   border-radius: 8px;
-  padding: 0 10px;
+  padding: 0 12px;
   background: var(--accent-tint);
 }
 
 .update-row.is-downloading {
-  grid-template-columns: minmax(0, 1fr) minmax(96px, 116px) 84px;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 128px) 96px;
 }
 
 .update-copy {
