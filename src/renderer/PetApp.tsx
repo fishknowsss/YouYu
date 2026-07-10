@@ -308,7 +308,7 @@ export function PetApp() {
     }
 
     const settleState = await window.youyu?.stopPetDrag(true);
-    if (settleState && isDockHoldState(settleState) && !isBottomReactionState(settleState)) {
+    if (settleState && isDockHoldState(settleState)) {
       baseState.current = settleState;
       clearActionTimer();
       clearAmbientTimer();
@@ -316,7 +316,7 @@ export function PetApp() {
       scheduleAmbient(settleState);
       return;
     }
-    if (!settleState || settleState === 'fallRecover' || isBottomReactionState(settleState)) {
+    if (!settleState || settleState === 'fallRecover') {
       lockSequence([
         { state: 'fallRecover', holdMs: 100 },
         { state: 'bottomDizzy', holdMs: 180 },
@@ -422,8 +422,4 @@ function isDockHoldState(state: DesktopPetState): boolean {
 
 function isDragVisual(state: DesktopPetState): boolean {
   return state === 'drag' || state === 'walkLeft' || state === 'walkRight';
-}
-
-function isBottomReactionState(state: DesktopPetState): boolean {
-  return state === 'bottomSleep' || state === 'bottomDizzy' || state === 'bottomAngry';
 }

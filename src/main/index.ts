@@ -2327,19 +2327,13 @@ function stopPetDrag(options: { settle?: boolean } = {}): DesktopPetState | unde
     petWindow.setBounds(settled.bounds, false);
     savePetBounds(settled.bounds);
     const nextState: DesktopPetState = settled.dockState ?? 'fallRecover';
-    if (settled.dockState === 'bottomSleep') {
-      setPetState('fallRecover');
-      playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'bottomSleep']);
-      return 'fallRecover';
-    }
     if (settled.dockState) {
       setPetState(settled.dockState);
-    } else {
-      setPetState('fallRecover');
-      playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'idle'], syncPetStateToRuntime);
-      return 'fallRecover';
+      return nextState;
     }
-    return nextState;
+    setPetState('fallRecover');
+    playPetBottomSequence(['bottomDizzy', 'bottomAngry', 'idle'], syncPetStateToRuntime);
+    return 'fallRecover';
   }
 
   syncPetStateToRuntime();
