@@ -15,6 +15,8 @@ import {
 import type { AppSnapshot } from '../../src/shared/ipc';
 import { AppShell } from '../../src/renderer/components/AppShell';
 
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 let root: Root | undefined;
 
 afterEach(async () => {
