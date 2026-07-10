@@ -89,14 +89,17 @@ describe('pet atlas', () => {
     expect(idleRow.sourceKeys[4]).toBe('a_no_mouth_r1c2');
   });
 
-  it('uses the user reference side-edge frame for blink and sleep states', () => {
+  it('keeps blink and sleep side-edge frames independent', () => {
     const blinkRow = manifest.atlases.extra.rows.edgeBlink;
     const sleepRow = manifest.atlases.extra.rows.edgeSleep;
 
-    expect(blinkRow.sourceKeys).toEqual(['edgePeek_open', 'edgeSide_sleep_reference', 'edgePeek_open']);
+    expect(blinkRow.sourceKeys).toEqual([
+      'edgePeek_open',
+      'edgeBlink_closed_redraw_gpt_image_2',
+      'edgePeek_open'
+    ]);
     expect(sleepRow.frames).toBe(1);
     expect(sleepRow.sourceKeys).toEqual(['edgeSide_sleep_reference']);
-    expect(blinkRow.sourceKeys.join(' ')).not.toContain('redrawn');
     expect(sleepRow.sourceKeys.join(' ')).not.toContain('redrawn');
     expect(getPetAnimation('edgeLeftBlink').row).toBe(blinkRow.row);
     expect(getPetAnimation('edgeRightBlink').row).toBe(blinkRow.row);

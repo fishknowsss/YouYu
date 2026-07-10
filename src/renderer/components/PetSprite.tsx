@@ -13,6 +13,7 @@ type PetSpriteProps = {
 export function PetSprite({ state, scale = 0.78, animated = true, className = '' }: PetSpriteProps) {
   const animation = getPetAnimation(state);
   const [frame, setFrame] = useState(0);
+  const showsSideSleepZs = state === 'edgeLeftSleep' || state === 'edgeRightSleep';
 
   useEffect(() => {
     let timer: number | undefined;
@@ -40,6 +41,7 @@ export function PetSprite({ state, scale = 0.78, animated = true, className = ''
 
   const frameIndex = animation.frameIndexes[Math.min(frame, animation.frameIndexes.length - 1)] ?? 0;
   const style = {
+    '--pet-scale': `${scale}`,
     '--pet-width': `${animation.frameWidth * scale}px`,
     '--pet-height': `${animation.frameHeight * scale}px`,
     '--pet-atlas-width': `${animation.frameWidth * animation.atlasColumns * scale}px`,
@@ -53,5 +55,15 @@ export function PetSprite({ state, scale = 0.78, animated = true, className = ''
     .filter(Boolean)
     .join(' ');
 
-  return <span className={classNames} style={style} aria-hidden="true" />;
+  return (
+    <span className={classNames} style={style} aria-hidden="true">
+      {showsSideSleepZs ? (
+        <span className="pet-side-sleep-zs">
+          <span className="pet-side-sleep-z">Z</span>
+          <span className="pet-side-sleep-z">Z</span>
+          <span className="pet-side-sleep-z">Z</span>
+        </span>
+      ) : null}
+    </span>
+  );
 }

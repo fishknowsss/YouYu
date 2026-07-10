@@ -922,27 +922,82 @@ select:focus-visible {
 }
 
 .pet-sprite-edgeLeft {
-  transform: translateX(-18px);
+  transform: translateX(-21px);
 }
 
 .pet-sprite-edgeRight {
-  transform: translateX(18px) scaleX(-1);
+  transform: translateX(21px) scaleX(-1);
 }
 
 .pet-sprite-edgeLeftBlink {
-  transform: translateX(-18px);
+  transform: translateX(-21px);
 }
 
 .pet-sprite-edgeRightBlink {
-  transform: translateX(18px) scaleX(-1);
+  transform: translateX(21px) scaleX(-1);
 }
 
 .pet-sprite-edgeLeftSleep {
-  transform: translateX(-18px);
+  transform: translateX(-21px);
 }
 
 .pet-sprite-edgeRightSleep {
-  transform: translateX(18px) scaleX(-1);
+  transform: translateX(21px) scaleX(-1);
+}
+
+.pet-side-sleep-zs {
+  --pet-z-mid-x: calc(4px * var(--pet-scale));
+  --pet-z-end-x: calc(10px * var(--pet-scale));
+  position: absolute;
+  left: calc(82px * var(--pet-scale));
+  top: calc(44px * var(--pet-scale));
+  width: calc(74px * var(--pet-scale));
+  height: calc(80px * var(--pet-scale));
+  display: block;
+  color: #6f48a8;
+  pointer-events: none;
+}
+
+.pet-sprite-edgeRightSleep .pet-side-sleep-zs {
+  --pet-z-mid-x: calc(-4px * var(--pet-scale));
+  --pet-z-end-x: calc(-10px * var(--pet-scale));
+  transform: scaleX(-1);
+}
+
+.pet-side-sleep-z {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  display: block;
+  font-size: calc(18px * var(--pet-scale));
+  font-weight: 900;
+  line-height: 1;
+  opacity: 0;
+  text-shadow:
+    0 1px 0 #fff,
+    0 0 7px rgb(143 88 215 / 28%);
+  will-change: opacity, transform;
+  animation: pet-side-sleep-z 2200ms ease-in-out infinite;
+}
+
+.pet-side-sleep-z:nth-child(2) {
+  left: calc(15px * var(--pet-scale));
+  bottom: calc(14px * var(--pet-scale));
+  font-size: calc(21px * var(--pet-scale));
+  animation-delay: 280ms;
+}
+
+.pet-side-sleep-z:nth-child(3) {
+  left: calc(35px * var(--pet-scale));
+  bottom: calc(31px * var(--pet-scale));
+  font-size: calc(23px * var(--pet-scale));
+  animation-delay: 560ms;
+}
+
+.pet-sprite-static .pet-side-sleep-z {
+  opacity: 0.76;
+  transform: none;
+  animation: none;
 }
 
 .pet-sprite-topSleep {
@@ -1364,6 +1419,25 @@ select:focus-visible {
   100% {
     opacity: 0;
     transform: translate(15px, -15px) scale(1.16);
+  }
+}
+
+@keyframes pet-side-sleep-z {
+  0%,
+  18% {
+    opacity: 0;
+    transform: translate(0, calc(6px * var(--pet-scale))) scale(0.78);
+  }
+
+  38%,
+  68% {
+    opacity: 0.92;
+    transform: translate(var(--pet-z-mid-x), calc(-4px * var(--pet-scale))) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(var(--pet-z-end-x), calc(-13px * var(--pet-scale))) scale(1.08);
   }
 }
 

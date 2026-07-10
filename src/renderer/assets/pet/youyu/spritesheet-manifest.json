@@ -227,7 +227,7 @@
           "frames": 3,
           "sourceKeys": [
             "edgePeek_open",
-            "edgeSide_sleep_reference",
+            "edgeBlink_closed_redraw_gpt_image_2",
             "edgePeek_open"
           ],
           "profiles": [

@@ -91,7 +91,7 @@ export function PetPreviewPage() {
 
         <aside className="pet-preview-inspector">
           <div className="pet-preview-large">
-            <PetSprite state={selectedState} animated={false} className="pet-preview-main-sprite" />
+            <PetSprite state={selectedState} className="pet-preview-main-sprite" />
           </div>
           <div className="pet-preview-detail">
             <h2>{stateLabels[selectedState]}</h2>
