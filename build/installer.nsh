@@ -29,10 +29,6 @@ Var YouYuDialog
   Var YouYuIsUpdateInstall
 !endif
 
-!macro customInstallMode
-  StrCpy $isForceCurrentInstall "1"
-!macroend
-
 !macro customInit
   InitPluginsDir
   !ifndef BUILD_UNINSTALLER

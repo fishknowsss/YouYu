@@ -1,6 +1,6 @@
 import manifest from '../assets/pet/youyu/spritesheet-manifest.json';
-import mainAtlasUrl from '../assets/pet/youyu/main-spritesheet.png';
-import extraAtlasUrl from '../assets/pet/youyu/extra-spritesheet.png';
+import mainAtlasUrl from '../assets/pet/youyu/main-spritesheet.webp';
+import extraAtlasUrl from '../assets/pet/youyu/extra-spritesheet.webp';
 import type { DesktopPetState } from '../../shared/ipc';
 
 type AtlasName = 'main' | 'extra';

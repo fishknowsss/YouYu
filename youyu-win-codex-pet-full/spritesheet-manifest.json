@@ -27,54 +27,19 @@
             "a_no_mouth_r1c5",
             "a_no_mouth_r1c6"
           ],
-          "profiles": [
-            "normal",
-            "normal",
-            "normal",
-            "normal",
-            "normal",
-            "normal"
-          ]
+          "profiles": ["normal", "normal", "normal", "normal", "normal", "normal"]
         },
         "walkRight": {
           "row": 1,
           "frames": 6,
-          "sourceKeys": [
-            "base_r5c1",
-            "base_r5c2",
-            "base_r5c3",
-            "base_r5c4",
-            "base_r5c5",
-            "base_r5c6"
-          ],
-          "profiles": [
-            "walk",
-            "walk",
-            "walk",
-            "walk",
-            "walk",
-            "walk"
-          ]
+          "sourceKeys": ["base_r5c1", "base_r5c2", "base_r5c3", "base_r5c4", "base_r5c5", "base_r5c6"],
+          "profiles": ["walk", "walk", "walk", "walk", "walk", "walk"]
         },
         "walkLeft": {
           "row": 2,
           "frames": 6,
-          "sourceKeys": [
-            "base_r5c1",
-            "base_r5c2",
-            "base_r5c3",
-            "base_r5c4",
-            "base_r5c5",
-            "base_r5c6"
-          ],
-          "profiles": [
-            "walk",
-            "walk",
-            "walk",
-            "walk",
-            "walk",
-            "walk"
-          ]
+          "sourceKeys": ["base_r5c1", "base_r5c2", "base_r5c3", "base_r5c4", "base_r5c5", "base_r5c6"],
+          "profiles": ["walk", "walk", "walk", "walk", "walk", "walk"]
         },
         "wave": {
           "row": 3,
@@ -87,14 +52,7 @@
             "a_no_mouth_r2c5",
             "a_no_mouth_r2c6"
           ],
-          "profiles": [
-            "normal",
-            "normal",
-            "normal",
-            "normal",
-            "normal",
-            "normal"
-          ]
+          "profiles": ["normal", "normal", "normal", "normal", "normal", "normal"]
         },
         "jump": {
           "row": 4,
@@ -107,14 +65,7 @@
             "a_no_mouth_r3c5",
             "a_no_mouth_r3c6"
           ],
-          "profiles": [
-            "very_low",
-            "normal",
-            "normal",
-            "normal",
-            "very_low",
-            "normal"
-          ]
+          "profiles": ["very_low", "normal", "normal", "normal", "very_low", "normal"]
         },
         "drag": {
           "row": 5,
@@ -127,14 +78,7 @@
             "a_no_mouth_r4c5",
             "a_no_mouth_r4c6"
           ],
-          "profiles": [
-            "normal",
-            "tall",
-            "tall",
-            "tall",
-            "normal",
-            "normal"
-          ]
+          "profiles": ["normal", "tall", "tall", "tall", "normal", "normal"]
         },
         "sleepWake": {
           "row": 6,
@@ -147,14 +91,7 @@
             "b_no_mouth_r1c5",
             "b_no_mouth_r1c6"
           ],
-          "profiles": [
-            "normal",
-            "low",
-            "low",
-            "low",
-            "normal",
-            "normal"
-          ]
+          "profiles": ["normal", "low", "low", "low", "normal", "normal"]
         },
         "focusWait": {
           "row": 7,
@@ -167,14 +104,7 @@
             "b_no_mouth_r4c5",
             "b_no_mouth_r4c6"
           ],
-          "profiles": [
-            "normal",
-            "normal",
-            "normal",
-            "normal",
-            "normal",
-            "normal"
-          ]
+          "profiles": ["normal", "normal", "normal", "normal", "normal", "normal"]
         },
         "happy": {
           "row": 8,
@@ -187,14 +117,7 @@
             "c_no_mouth_r1c5",
             "c_no_mouth_r1c6"
           ],
-          "profiles": [
-            "normal",
-            "normal",
-            "normal",
-            "normal",
-            "normal",
-            "normal"
-          ]
+          "profiles": ["normal", "normal", "normal", "normal", "normal", "normal"]
         }
       }
     },
@@ -213,14 +136,7 @@
             "b_no_mouth_r2c5",
             "b_no_mouth_r2c6"
           ],
-          "profiles": [
-            "edge",
-            "edge",
-            "very_low",
-            "edge",
-            "very_low",
-            "normal"
-          ]
+          "profiles": ["edge", "edge", "very_low", "edge", "very_low", "normal"]
         },
         "fallRecover": {
           "row": 1,
@@ -233,14 +149,7 @@
             "b_no_mouth_r3c5",
             "b_no_mouth_r3c6"
           ],
-          "profiles": [
-            "normal",
-            "normal",
-            "very_low",
-            "normal",
-            "normal",
-            "normal"
-          ]
+          "profiles": ["normal", "normal", "very_low", "normal", "normal", "normal"]
         },
         "annoyed": {
           "row": 2,
@@ -253,14 +162,7 @@
             "c_no_mouth_r2c5",
             "c_no_mouth_r2c6"
           ],
-          "profiles": [
-            "normal",
-            "normal",
-            "normal",
-            "normal",
-            "normal",
-            "normal"
-          ]
+          "profiles": ["normal", "normal", "normal", "normal", "normal", "normal"]
         },
         "comfortSad": {
           "row": 3,
@@ -273,14 +175,7 @@
             "c_no_mouth_r3c5",
             "c_no_mouth_r3c6"
           ],
-          "profiles": [
-            "normal",
-            "normal",
-            "very_low",
-            "very_low",
-            "normal",
-            "normal"
-          ]
+          "profiles": ["normal", "normal", "very_low", "very_low", "normal", "normal"]
         },
         "rewardObserve": {
           "row": 4,
@@ -293,14 +188,7 @@
             "c_no_mouth_r4c5",
             "c_no_mouth_r4c6"
           ],
-          "profiles": [
-            "normal",
-            "normal",
-            "reward",
-            "reward",
-            "reward",
-            "normal"
-          ]
+          "profiles": ["normal", "normal", "reward", "reward", "reward", "normal"]
         }
       }
     }

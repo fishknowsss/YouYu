@@ -53,6 +53,7 @@ export default defineConfig({
     plugins: [react()],
     root: '.',
     build: {
+      minify: 'esbuild',
       rollupOptions: {
         input: 'index.html'
       }

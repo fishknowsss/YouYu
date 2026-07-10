@@ -61,12 +61,10 @@ export class TrafficTracker {
       this.options.readRuntimeStats(),
       this.options.readCurrentNode?.().catch(() => undefined)
     ]);
-    const uploadDelta = this.lastUpload > 0 && stats.uploadTotal >= this.lastUpload
-      ? stats.uploadTotal - this.lastUpload
-      : 0;
-    const downloadDelta = this.lastDownload > 0 && stats.downloadTotal >= this.lastDownload
-      ? stats.downloadTotal - this.lastDownload
-      : 0;
+    const uploadDelta =
+      this.lastUpload > 0 && stats.uploadTotal >= this.lastUpload ? stats.uploadTotal - this.lastUpload : 0;
+    const downloadDelta =
+      this.lastDownload > 0 && stats.downloadTotal >= this.lastDownload ? stats.downloadTotal - this.lastDownload : 0;
     const durationMs = this.lastSampleAt > 0 ? Math.max(0, sampledAt - this.lastSampleAt) : 0;
     const sampledNode = this.lastNode ?? currentNode;
     const excludedDelta = this.collectExcludedDelta(stats.connections ?? []);

@@ -42,8 +42,14 @@ export function NodeSelect({
           <p>当前出口：{snapshot.currentNode}</p>
         </div>
         <div className="header-actions">
-          <button className="secondary-button" onClick={onBack}>返回</button>
-          <button className="wide-button" disabled={busy && !testingAll} onClick={testingAll ? onCancelTestAll : onTestAll}>
+          <button className="secondary-button" onClick={onBack}>
+            返回
+          </button>
+          <button
+            className="wide-button"
+            disabled={busy && !testingAll}
+            onClick={testingAll ? onCancelTestAll : onTestAll}
+          >
             {testingAll ? '停止' : '全部测速'}
           </button>
           <button className="secondary-button" disabled={busy} onClick={onRefresh}>

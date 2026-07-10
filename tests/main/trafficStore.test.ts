@@ -1,10 +1,16 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TrafficStore } from '../../src/main/traffic/store';
 
 let dir: string;
+
+const testSecretStorage = {
+  isEncryptionAvailable: () => true,
+  encryptString: (value: string) => Buffer.from(`protected:${value}`, 'utf8'),
+  decryptString: (value: Buffer) => value.toString('utf8').replace(/^protected:/, '')
+};
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'youyu-traffic-'));
@@ -160,7 +166,7 @@ describe('TrafficStore', () => {
   });
 
   it('can keep a pending local registration until activation succeeds later', async () => {
-    const store = new TrafficStore(dir);
+    const store = new TrafficStore(dir, { secretStorage: testSecretStorage });
 
     const pending = await store.registerPendingIdentity({
       name: '张三',
@@ -185,7 +191,7 @@ describe('TrafficStore', () => {
   });
 
   it('can clear a failed pending registration so the gate can be shown again', async () => {
-    const store = new TrafficStore(dir);
+    const store = new TrafficStore(dir, { secretStorage: testSecretStorage });
 
     await store.registerPendingIdentity({
       name: '张三',
@@ -198,6 +204,120 @@ describe('TrafficStore', () => {
     expect(snapshot.stats.reportStatus).toBe('failed');
     expect(snapshot.stats.reportError).toBe('traffic activation failed: 403 invalid passphrase');
     await expect(store.getPendingRegistration()).resolves.toBeUndefined();
+  });
+
+  it('persists pending registration passphrases only as protected ciphertext', async () => {
+    const store = new TrafficStore(dir, { secretStorage: testSecretStorage });
+
+    await store.registerPendingIdentity({ name: 'Alice', passphrase: 'plain-secret' });
+
+    const persisted = await readFile(join(dir, 'traffic.json'), 'utf8');
+    expect(persisted).not.toContain('plain-secret');
+    expect(persisted).not.toContain('"passphrase"');
+    expect(persisted).toContain('"encryptedPassphrase"');
+    await expect(store.getPendingRegistration()).resolves.toEqual({
+      name: 'Alice',
+      passphrase: 'plain-secret'
+    });
+  });
+
+  it('migrates a legacy plaintext pending passphrase after it is read', async () => {
+    await writeFile(
+      join(dir, 'traffic.json'),
+      `${JSON.stringify({
+        version: 1,
+        deviceSeed: 'seed-1',
+        identity: {
+          userId: 'pending:seed-1',
+          deviceId: 'pending:seed-1',
+          name: 'Alice',
+          registeredAt: '2026-05-10T08:00:00.000Z',
+          verificationStatus: 'pending'
+        },
+        pendingRegistration: { name: 'Alice', passphrase: 'legacy-secret' },
+        totalUpload: 0,
+        totalDownload: 0,
+        pendingUpload: 0,
+        pendingDownload: 0,
+        daily: {},
+        nodeUsage: {}
+      })}\n`,
+      'utf8'
+    );
+    const store = new TrafficStore(dir, { secretStorage: testSecretStorage });
+
+    await expect(store.getPendingRegistration()).resolves.toEqual({
+      name: 'Alice',
+      passphrase: 'legacy-secret'
+    });
+    const persisted = await readFile(join(dir, 'traffic.json'), 'utf8');
+    expect(persisted).not.toContain('legacy-secret');
+    expect(persisted).toContain('"encryptedPassphrase"');
+    expect(await readFile(join(dir, 'traffic.json.bak'), 'utf8')).not.toContain('legacy-secret');
+  });
+
+  it('removes a legacy plaintext secret when secure storage is unavailable', async () => {
+    await writeFile(
+      join(dir, 'traffic.json'),
+      `${JSON.stringify({
+        version: 1,
+        deviceSeed: 'seed-1',
+        identity: {
+          userId: 'pending:seed-1',
+          deviceId: 'pending:seed-1',
+          name: 'Alice',
+          registeredAt: '2026-05-10T08:00:00.000Z',
+          verificationStatus: 'pending'
+        },
+        pendingRegistration: { name: 'Alice', passphrase: 'legacy-secret' },
+        totalUpload: 0,
+        totalDownload: 0,
+        pendingUpload: 0,
+        pendingDownload: 0,
+        daily: {},
+        nodeUsage: {}
+      })}\n`,
+      'utf8'
+    );
+    const store = new TrafficStore(dir);
+
+    const snapshot = await store.getSnapshot();
+
+    expect(snapshot.identity).toBeUndefined();
+    expect(await readFile(join(dir, 'traffic.json'), 'utf8')).not.toContain('legacy-secret');
+    expect(await readFile(join(dir, 'traffic.json.bak'), 'utf8')).not.toContain('legacy-secret');
+  });
+
+  it('does not preserve a corrupt traffic file that may contain a plaintext secret', async () => {
+    await writeFile(join(dir, 'traffic.json'), '{"pendingRegistration":{"passphrase":"plain-secret"', 'utf8');
+    await writeFile(join(dir, 'traffic.json.bak'), '{"pendingRegistration":{"passphrase":"backup-secret"', 'utf8');
+    const store = new TrafficStore(dir);
+
+    await store.getSnapshot();
+
+    const entries = await readdir(dir);
+    expect(entries.some((name) => name.startsWith('traffic.json.corrupt-'))).toBe(false);
+    expect(await readFile(join(dir, 'traffic.json'), 'utf8')).not.toContain('plain-secret');
+    const backup = await readFile(join(dir, 'traffic.json.bak'), 'utf8');
+    expect(backup).not.toContain('plain-secret');
+    expect(backup).not.toContain('backup-secret');
+  });
+
+  it('clears a pending identity when ciphertext can no longer be decrypted', async () => {
+    const store = new TrafficStore(dir, { secretStorage: testSecretStorage });
+    await store.registerPendingIdentity({ name: 'Alice', passphrase: 'protected-secret' });
+    const unreadable = new TrafficStore(dir, {
+      secretStorage: {
+        ...testSecretStorage,
+        decryptString: () => {
+          throw new Error('key unavailable');
+        }
+      }
+    });
+
+    await expect(unreadable.getPendingRegistration()).resolves.toBeUndefined();
+    expect((await unreadable.getSnapshot()).identity).toBeUndefined();
+    expect(await readFile(join(dir, 'traffic.json'), 'utf8')).not.toContain('protected-secret');
   });
 
   it('repairs known damaged identity name JSON instead of dropping registration', async () => {

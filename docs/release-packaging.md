@@ -201,6 +201,11 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    ```powershell
    npm run typecheck
    npm test
+   npm run test:worker
+   npm run typecheck:worker
+   npm run build:worker
+   npm run lint
+   npm run format:check
    npm run build
    ```
 

@@ -145,7 +145,6 @@ export function buildYouYuRuleSetRules(options: RuleSetTargetOptions = {}): stri
   const telegram = options.telegramTarget ?? defaultTelegram;
   const discord = options.discordTarget ?? defaultDiscord;
   const dev = options.devTarget ?? defaultDev;
-  const captcha = options.captchaTarget ?? defaultCaptcha;
   const apple = options.appleTarget ?? defaultApple;
   const microsoft = options.microsoftTarget ?? defaultMicrosoft;
   const direct = options.directTarget ?? defaultDirect;
@@ -205,7 +204,10 @@ export function mergeProxyGroupsByName(existingGroups: unknown, groupsToAdd: unk
   return result;
 }
 
-export function pickExistingGroupRefs(existingGroups: unknown, candidates = ['自动选择', '故障转移', '负载均衡']): string[] {
+export function pickExistingGroupRefs(
+  existingGroups: unknown,
+  candidates = ['自动选择', '故障转移', '负载均衡']
+): string[] {
   if (!Array.isArray(existingGroups)) return [];
   const names = new Set(
     existingGroups
@@ -217,9 +219,7 @@ export function pickExistingGroupRefs(existingGroups: unknown, candidates = ['�
 
 function normalizeCustomRules(rules: string[] | undefined, fallbackTarget: string): string[] {
   if (!rules?.length) return [];
-  return rules
-    .map((rule) => normalizeCustomRule(rule, fallbackTarget))
-    .filter((rule): rule is string => Boolean(rule));
+  return rules.map((rule) => normalizeCustomRule(rule, fallbackTarget)).filter((rule): rule is string => Boolean(rule));
 }
 
 function normalizeCustomRule(rule: string, fallbackTarget: string): string | undefined {

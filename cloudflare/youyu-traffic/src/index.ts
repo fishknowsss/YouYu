@@ -81,6 +81,18 @@ type RemoteControlConfig = {
   updatedAt: string;
 };
 
+const TRAFFIC_REPORT_RETENTION_DAYS = 90;
+const RETENTION_DELETE_BATCH_SIZE = 500;
+const RETENTION_MAX_REPORT_BATCHES = 20;
+
+export type RetentionCleanupResult = {
+  cutoff: string;
+  deletedReportRows: number;
+  deletedRateLimitRows: number;
+  reportBatchLimitReached: boolean;
+  rateLimitBatchLimitReached: boolean;
+};
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -112,6 +124,10 @@ export default {
         await requireAdmin(request, env);
         return await syncGlobalConfigToUsers(env);
       }
+      if (request.method === 'POST' && url.pathname === '/api/admin/maintenance') {
+        await requireAdmin(request, env);
+        return json({ ok: true, cleanup: await cleanupExpiredData(env) });
+      }
       if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/admin')) {
         return adminPageV3();
       }
@@ -141,6 +157,14 @@ export default {
       const status = error instanceof HttpError ? error.status : 500;
       return json({ error: message }, status);
     }
+  },
+  scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
+    ctx.waitUntil(
+      cleanupExpiredData(env, controller.scheduledTime).catch((error) => {
+        console.error('retention cleanup failed', error);
+        throw error;
+      })
+    );
   }
 };
 
@@ -332,7 +356,8 @@ async function resetAdminUserConfig(env: Env, userId: string): Promise<Response>
 }
 
 function adminPageV3(): Response {
-  return new Response(`<!doctype html>
+  return new Response(
+    `<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
@@ -938,467 +963,13 @@ function adminPageV3(): Response {
     function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]); }
   </script>
 </body>
-</html>`, {
-    headers: {
-      'content-type': 'text/html; charset=utf-8'
-    }
-  });
-}
-
-function adminPageV2(): Response {
-  return new Response(`<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>YouYu 后台</title>
-  <style>
-    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f4f1; color: #202124; }
-    body { margin: 0; padding: 28px; }
-    main { max-width: 1180px; margin: 0 auto; display: grid; gap: 16px; }
-    header, .toolbar, .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    h1, h2 { margin: 0; letter-spacing: 0; }
-    h1 { font-size: 28px; }
-    h2 { font-size: 18px; }
-    .panel, .auth { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgb(0 0 0 / 6%); }
-    .auth { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 10px; }
-    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-    .rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
-    label { display: grid; gap: 6px; font-size: 13px; font-weight: 700; color: #5f5a52; }
-    input, select, textarea, button { border-radius: 8px; font: inherit; }
-    input, select { height: 40px; border: 1px solid #d8d3ca; padding: 0 10px; background: #fff; }
-    textarea { min-height: 88px; resize: vertical; border: 1px solid #d8d3ca; padding: 10px; line-height: 1.4; }
-    button { height: 40px; border: 0; padding: 0 14px; background: #202124; color: #fff; font-weight: 800; cursor: pointer; }
-    button.secondary { background: #ece8df; color: #202124; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 11px 8px; border-bottom: 1px solid #eee9df; text-align: left; white-space: nowrap; }
-    th { color: #6b665e; font-size: 13px; }
-    td.num, th.num { text-align: right; }
-    .muted { color: #777168; }
-    .danger { color: #b42318; font-weight: 800; }
-    .hidden { display: none; }
-    @media (max-width: 820px) {
-      body { padding: 16px; }
-      header, .toolbar, .row { align-items: start; flex-direction: column; }
-      .auth, .grid, .rules { grid-template-columns: 1fr; }
-      table { display: block; overflow-x: auto; }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <header><div><h1>YouYu 后台</h1><div class="muted" id="status">未加载</div></div><button class="secondary" id="refresh">刷新</button></header>
-    <section class="auth"><input id="token" type="password" placeholder="管理 token" autocomplete="current-password" /><button id="login">进入</button></section>
-    <section class="panel">
-      <div class="toolbar"><h2>远程配置</h2><button id="saveGlobal">保存</button></div>
-      <div class="grid">
-        <label>启用<select id="globalEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
-        <label>规则<select id="globalRuleProfile"><option value="">不覆盖</option><option value="ruleset">智能规则</option><option value="subscription">兼容机场</option><option value="smart">本地规则</option><option value="global">全局代理</option></select></label>
-        <label>策略<select id="globalStrategy"><option value="">不覆盖</option><option value="auto">自动</option><option value="fallback">故障</option><option value="load-balance">均衡</option><option value="direct">直连</option></select></label>
-        <label>阈值 MB<input id="globalThreshold" type="number" min="1" step="1" /></label>
-      </div>
-      <div class="rules"><label>直连规则<textarea id="globalDirect"></textarea></label><label>代理规则<textarea id="globalProxy"></textarea></label></div>
-      <div class="row" style="margin-top:10px"><label style="flex:1">节点<input id="globalNode" placeholder="留空不覆盖" /></label><span class="muted" id="globalVersion"></span></div>
-    </section>
-    <section class="panel">
-      <div class="toolbar"><h2>用户</h2><span class="muted" id="userCount">0 个用户</span></div>
-      <table><thead><tr><th>姓名</th><th class="num">设备</th><th class="num">上传</th><th class="num">下载</th><th class="num">异常</th><th>最后在线</th><th></th></tr></thead><tbody id="users"></tbody></table>
-    </section>
-    <section class="panel hidden" id="userConfigPanel">
-      <div class="toolbar"><h2 id="userConfigTitle">用户配置</h2><div class="row"><button class="secondary" id="resetUserConfig">重置</button><button id="saveUserConfig">保存</button></div></div>
-      <div class="grid">
-        <label>启用<select id="userEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
-        <label>规则<select id="userRuleProfile"><option value="">不覆盖</option><option value="ruleset">智能规则</option><option value="subscription">兼容机场</option><option value="smart">本地规则</option><option value="global">全局代理</option></select></label>
-        <label>策略<select id="userStrategy"><option value="">不覆盖</option><option value="auto">自动</option><option value="fallback">故障</option><option value="load-balance">均衡</option><option value="direct">直连</option></select></label>
-        <label>节点<input id="userNode" placeholder="留空不覆盖" /></label>
-      </div>
-      <div class="rules"><label>直连规则<textarea id="userDirect"></textarea></label><label>代理规则<textarea id="userProxy"></textarea></label></div>
-    </section>
-    <section class="panel hidden" id="detailPanel"><div class="toolbar"><h2 id="detailTitle">明细</h2><button class="secondary" id="closeDetail">收起</button></div><table><thead><tr><th>日期</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>更新时间</th></tr></thead><tbody id="details"></tbody></table></section>
-    <section class="panel"><div class="toolbar"><h2>异常</h2><span class="muted" id="anomalyCount">0 条</span></div><table><thead><tr><th>用户</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>时间</th></tr></thead><tbody id="anomalies"></tbody></table></section>
-  </main>
-  <script>
-    const tokenInput = document.getElementById('token');
-    const usersBody = document.getElementById('users');
-    const detailsBody = document.getElementById('details');
-    const anomaliesBody = document.getElementById('anomalies');
-    const statusEl = document.getElementById('status');
-    const userCountEl = document.getElementById('userCount');
-    const anomalyCountEl = document.getElementById('anomalyCount');
-    const detailPanel = document.getElementById('detailPanel');
-    const detailTitle = document.getElementById('detailTitle');
-    const userConfigPanel = document.getElementById('userConfigPanel');
-    const userConfigTitle = document.getElementById('userConfigTitle');
-    let activeUserId = '';
-    let activeUserName = '';
-    tokenInput.value = localStorage.getItem('youyu_admin_token') || '';
-    document.getElementById('login').onclick = () => { localStorage.setItem('youyu_admin_token', tokenInput.value.trim()); loadAll(); };
-    document.getElementById('refresh').onclick = loadAll;
-    document.getElementById('closeDetail').onclick = () => detailPanel.classList.add('hidden');
-    document.getElementById('saveGlobal').onclick = saveGlobalConfig;
-    document.getElementById('saveUserConfig').onclick = saveUserConfig;
-    document.getElementById('resetUserConfig').onclick = resetUserConfig;
-    async function api(path, options) {
-      const token = tokenInput.value.trim() || localStorage.getItem('youyu_admin_token') || '';
-      const headers = Object.assign({ authorization: 'Bearer ' + token }, options && options.headers ? options.headers : {});
-      const res = await fetch(path, Object.assign({}, options || {}, { headers }));
-      if (!res.ok) throw new Error('请求失败');
-      return res.json();
-    }
-    async function loadAll() {
-      statusEl.textContent = '加载中';
-      try { await Promise.all([loadGlobalConfig(), loadUsers(), loadAnomalies()]); statusEl.textContent = '已更新'; }
-      catch { statusEl.textContent = '无法加载'; }
-    }
-    async function loadGlobalConfig() {
-      const data = await api('/api/admin/config');
-      setConfigFields('global', data.config || {});
-      document.getElementById('globalVersion').textContent = 'v' + ((data.config && data.config.version) || 1);
-    }
-    async function saveGlobalConfig() {
-      const data = await api('/api/admin/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(readConfigFields('global', true)) });
-      setConfigFields('global', data.config || {});
-      document.getElementById('globalVersion').textContent = 'v' + ((data.config && data.config.version) || 1);
-      statusEl.textContent = '已保存';
-    }
-    async function loadUsers() {
-      const data = await api('/api/admin/users');
-      usersBody.innerHTML = '';
-      for (const user of data.users || []) {
-        const tr = document.createElement('tr');
-        const anomalyText = user.anomalies ? '<span class="danger">' + user.anomalies + '</span>' : '0';
-        tr.innerHTML = '<td>' + escapeHtml(user.name || '') + '</td><td class="num">' + (user.devices || 0) + '</td><td class="num">' + formatBytes(user.uploadBytes || 0) + '</td><td class="num">' + formatBytes(user.downloadBytes || 0) + '</td><td class="num">' + anomalyText + '</td><td>' + formatTime(user.lastSeenAt) + '</td><td><button class="secondary" data-action="detail" data-id="' + user.id + '" data-name="' + escapeHtml(user.name || '') + '">明细</button> <button data-action="config" data-id="' + user.id + '" data-name="' + escapeHtml(user.name || '') + '">配置</button></td>';
-        usersBody.appendChild(tr);
-      }
-      usersBody.querySelectorAll('button[data-action="detail"]').forEach((button) => { button.onclick = () => loadDetails(button.dataset.id, button.dataset.name); });
-      usersBody.querySelectorAll('button[data-action="config"]').forEach((button) => { button.onclick = () => loadUserConfig(button.dataset.id, button.dataset.name); });
-      userCountEl.textContent = (data.users || []).length + ' 个用户';
-    }
-    async function loadUserConfig(userId, name) {
-      activeUserId = userId; activeUserName = name;
-      const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/config');
-      setConfigFields('user', data.override || {});
-      userConfigTitle.textContent = name + ' 配置';
-      userConfigPanel.classList.remove('hidden');
-    }
-    async function saveUserConfig() {
-      if (!activeUserId) return;
-      await api('/api/admin/users/' + encodeURIComponent(activeUserId) + '/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(readConfigFields('user', false)) });
-      statusEl.textContent = activeUserName + ' 已保存';
-    }
-    async function resetUserConfig() {
-      if (!activeUserId) return;
-      await api('/api/admin/users/' + encodeURIComponent(activeUserId) + '/config/reset', { method: 'POST' });
-      setConfigFields('user', {});
-      statusEl.textContent = activeUserName + ' 已重置';
-    }
-    async function loadDetails(userId, name) {
-      const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/traffic');
-      detailTitle.textContent = name + ' 明细'; detailsBody.innerHTML = '';
-      for (const row of data.rows || []) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = '<td>' + escapeHtml(row.date || '') + '</td><td>' + escapeHtml(row.deviceName || row.deviceId || '') + '</td><td class="num">' + formatBytes(row.uploadBytes || 0) + '</td><td class="num">' + formatBytes(row.downloadBytes || 0) + '</td><td>' + formatTime(row.updatedAt) + '</td>';
-        detailsBody.appendChild(tr);
-      }
-      detailPanel.classList.remove('hidden');
-    }
-    async function loadAnomalies() {
-      const data = await api('/api/admin/anomalies');
-      anomaliesBody.innerHTML = '';
-      for (const row of data.anomalies || []) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = '<td>' + escapeHtml(row.userName || row.userId || '') + '</td><td>' + escapeHtml(row.deviceName || row.deviceId || '') + '</td><td class="num danger">' + formatBytes(row.uploadBytes || 0) + '</td><td class="num danger">' + formatBytes(row.downloadBytes || 0) + '</td><td>' + formatTime(row.createdAt) + '</td>';
-        anomaliesBody.appendChild(tr);
-      }
-      anomalyCountEl.textContent = (data.anomalies || []).length + ' 条';
-    }
-    function setConfigFields(prefix, config) {
-      document.getElementById(prefix + 'Enabled').value = config.enabled === false ? 'false' : 'true';
-      document.getElementById(prefix + 'RuleProfile').value = config.ruleProfile || '';
-      document.getElementById(prefix + 'Strategy').value = config.preferredStrategy || '';
-      document.getElementById(prefix + 'Node').value = config.preferredNode || '';
-      document.getElementById(prefix + 'Direct').value = (config.directRules || []).join('\\n');
-      document.getElementById(prefix + 'Proxy').value = (config.proxyRules || []).join('\\n');
-      if (prefix === 'global') document.getElementById('globalThreshold').value = Math.round((config.anomalyThresholdBytes || 1073741824) / 1024 / 1024);
-    }
-    function readConfigFields(prefix, includeThreshold) {
-      const value = { enabled: document.getElementById(prefix + 'Enabled').value === 'true', ruleProfile: document.getElementById(prefix + 'RuleProfile').value || null, preferredStrategy: document.getElementById(prefix + 'Strategy').value || null, preferredNode: document.getElementById(prefix + 'Node').value.trim() || null, directRules: splitRules(document.getElementById(prefix + 'Direct').value), proxyRules: splitRules(document.getElementById(prefix + 'Proxy').value) };
-      if (includeThreshold) value.anomalyThresholdBytes = Math.max(1, Number(document.getElementById('globalThreshold').value || 1024)) * 1024 * 1024;
-      return value;
-    }
-    function splitRules(value) { return String(value).split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean); }
-    function formatBytes(bytes) { if (bytes < 1024) return bytes + ' B'; if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB'; if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB'; return (bytes / 1073741824).toFixed(2) + ' GB'; }
-    function formatTime(value) { if (!value) return '-'; return new Date(value).toLocaleString('zh-CN', { hour12: false }); }
-    function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]); }
-  </script>
-</body>
-</html>`, {
-    headers: {
-      'content-type': 'text/html; charset=utf-8'
-    }
-  });
-}
-
-function adminPage(): Response {
-  return new Response(`<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>YouYu 用量</title>
-  <style>
-    :root {
-      color-scheme: light;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f6f4f1;
-      color: #202124;
-    }
-    body {
-      margin: 0;
-      padding: 32px;
-    }
-    main {
-      max-width: 1120px;
-      margin: 0 auto;
-      display: grid;
-      gap: 18px;
-    }
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: end;
-      gap: 16px;
-    }
-    h1, h2 {
-      margin: 0;
-      letter-spacing: 0;
-    }
-    h1 {
-      font-size: 28px;
-    }
-    h2 {
-      font-size: 18px;
-    }
-    .auth, .panel {
-      background: #fff;
-      border-radius: 8px;
-      padding: 18px;
-      box-shadow: 0 1px 3px rgb(0 0 0 / 6%);
-    }
-    .auth {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 96px;
-      gap: 10px;
-    }
-    input, button {
-      height: 42px;
-      border-radius: 8px;
-      font: inherit;
-    }
-    input {
-      border: 1px solid #d8d3ca;
-      padding: 0 12px;
-    }
-    button {
-      border: 0;
-      background: #202124;
-      color: #fff;
-      font-weight: 700;
-      cursor: pointer;
-    }
-    button.secondary {
-      background: #ece8df;
-      color: #202124;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-    th, td {
-      padding: 12px 8px;
-      border-bottom: 1px solid #eee9df;
-      text-align: left;
-      white-space: nowrap;
-    }
-    th {
-      color: #6b665e;
-      font-size: 13px;
-    }
-    td.num, th.num {
-      text-align: right;
-    }
-    .muted {
-      color: #777168;
-    }
-    .toolbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-    .hidden {
-      display: none;
-    }
-    @media (max-width: 760px) {
-      body {
-        padding: 18px;
-      }
-      header, .toolbar {
-        align-items: start;
-        flex-direction: column;
-      }
-      .auth {
-        grid-template-columns: 1fr;
-      }
-      table {
-        display: block;
-        overflow-x: auto;
+</html>`,
+    {
+      headers: {
+        'content-type': 'text/html; charset=utf-8'
       }
     }
-  </style>
-</head>
-<body>
-  <main>
-    <header>
-      <div>
-        <h1>YouYu 用量</h1>
-        <div class="muted">用户和设备流量</div>
-      </div>
-      <button class="secondary" id="refresh">刷新</button>
-    </header>
-
-    <section class="auth">
-      <input id="token" type="password" placeholder="管理 token" autocomplete="current-password" />
-      <button id="login">进入</button>
-    </section>
-
-    <section class="panel">
-      <div class="toolbar">
-        <h2>用户</h2>
-        <span class="muted" id="status">未加载</span>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>姓名</th>
-            <th class="num">设备</th>
-            <th class="num">上传</th>
-            <th class="num">下载</th>
-            <th>最后在线</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="users"></tbody>
-      </table>
-    </section>
-
-    <section class="panel hidden" id="detailPanel">
-      <div class="toolbar">
-        <h2 id="detailTitle">明细</h2>
-        <button class="secondary" id="closeDetail">收起</button>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>日期</th>
-            <th>设备</th>
-            <th class="num">上传</th>
-            <th class="num">下载</th>
-            <th>更新时间</th>
-          </tr>
-        </thead>
-        <tbody id="details"></tbody>
-      </table>
-    </section>
-  </main>
-  <script>
-    const tokenInput = document.getElementById('token');
-    const usersBody = document.getElementById('users');
-    const detailsBody = document.getElementById('details');
-    const statusEl = document.getElementById('status');
-    const detailPanel = document.getElementById('detailPanel');
-    const detailTitle = document.getElementById('detailTitle');
-    tokenInput.value = localStorage.getItem('youyu_admin_token') || '';
-
-    document.getElementById('login').onclick = () => {
-      localStorage.setItem('youyu_admin_token', tokenInput.value.trim());
-      loadUsers();
-    };
-    document.getElementById('refresh').onclick = loadUsers;
-    document.getElementById('closeDetail').onclick = () => detailPanel.classList.add('hidden');
-
-    async function api(path) {
-      const token = tokenInput.value.trim() || localStorage.getItem('youyu_admin_token') || '';
-      const res = await fetch(path, { headers: { authorization: 'Bearer ' + token } });
-      if (!res.ok) throw new Error('请求失败');
-      return res.json();
-    }
-
-    async function loadUsers() {
-      statusEl.textContent = '加载中';
-      try {
-        const data = await api('/api/admin/users');
-        usersBody.innerHTML = '';
-        for (const user of data.users || []) {
-          const tr = document.createElement('tr');
-          tr.innerHTML =
-            '<td>' + escapeHtml(user.name || '') + '</td>' +
-            '<td class="num">' + (user.devices || 0) + '</td>' +
-            '<td class="num">' + formatBytes(user.uploadBytes || 0) + '</td>' +
-            '<td class="num">' + formatBytes(user.downloadBytes || 0) + '</td>' +
-            '<td>' + formatTime(user.lastSeenAt) + '</td>' +
-            '<td><button class="secondary" data-id="' + user.id + '" data-name="' + escapeHtml(user.name || '') + '">明细</button></td>';
-          usersBody.appendChild(tr);
-        }
-        usersBody.querySelectorAll('button[data-id]').forEach((button) => {
-          button.onclick = () => loadDetails(button.dataset.id, button.dataset.name);
-        });
-        statusEl.textContent = (data.users || []).length + ' 个用户';
-      } catch {
-        statusEl.textContent = '无法加载';
-      }
-    }
-
-    async function loadDetails(userId, name) {
-      const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/traffic');
-      detailTitle.textContent = name + ' 明细';
-      detailsBody.innerHTML = '';
-      for (const row of data.rows || []) {
-        const tr = document.createElement('tr');
-        tr.innerHTML =
-          '<td>' + escapeHtml(row.date || '') + '</td>' +
-          '<td>' + escapeHtml(row.deviceName || row.deviceId || '') + '</td>' +
-          '<td class="num">' + formatBytes(row.uploadBytes || 0) + '</td>' +
-          '<td class="num">' + formatBytes(row.downloadBytes || 0) + '</td>' +
-          '<td>' + formatTime(row.updatedAt) + '</td>';
-        detailsBody.appendChild(tr);
-      }
-      detailPanel.classList.remove('hidden');
-    }
-
-    function formatBytes(bytes) {
-      if (bytes < 1024) return bytes + ' B';
-      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-      if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
-      return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
-    }
-    function formatTime(value) {
-      if (!value) return '-';
-      return new Date(value).toLocaleString('zh-CN', { hour12: false });
-    }
-    function escapeHtml(value) {
-      return String(value).replace(/[&<>"']/g, (char) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-      })[char]);
-    }
-  </script>
-</body>
-</html>`, {
-    headers: {
-      'content-type': 'text/html; charset=utf-8'
-    }
-  });
+  );
 }
 
 async function reportTraffic(request: Request, env: Env): Promise<Response> {
@@ -1418,11 +989,9 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
 
   await verifyDeviceRequest(request, env, userId, deviceId, bodyText);
   if (upload === 0 && download === 0) {
-    await env.DB.prepare('UPDATE devices SET last_seen_at = ?, app_version = COALESCE(?, app_version) WHERE id = ?').bind(
-      now,
-      cleanOptional(input.appVersion),
-      deviceId
-    ).run();
+    await env.DB.prepare('UPDATE devices SET last_seen_at = ?, app_version = COALESCE(?, app_version) WHERE id = ?')
+      .bind(now, cleanOptional(input.appVersion), deviceId)
+      .run();
     return json({ ok: true, traffic: await getTrafficSummary(env, userId, deviceId, date) });
   }
 
@@ -1471,6 +1040,72 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
   }
 
   return json({ ok: true, anomaly, traffic: await getTrafficSummary(env, userId, deviceId, date) });
+}
+
+export async function cleanupExpiredData(
+  env: Env,
+  now = Date.now(),
+  maxReportBatches = RETENTION_MAX_REPORT_BATCHES
+): Promise<RetentionCleanupResult> {
+  const safeNow = Number.isFinite(now) && now > 0 ? now : Date.now();
+  const safeMaxBatches = Math.max(1, Math.min(Math.floor(maxReportBatches), RETENTION_MAX_REPORT_BATCHES));
+  const cutoff = new Date(safeNow - TRAFFIC_REPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  let deletedReportRows = 0;
+  let completedBatches = 0;
+  let lastBatchChanges = 0;
+  let deletedRateLimitRows = 0;
+  let completedRateLimitBatches = 0;
+  let lastRateLimitBatchChanges = 0;
+
+  for (let batch = 0; batch < safeMaxBatches; batch += 1) {
+    const result = await env.DB.prepare(
+      `DELETE FROM traffic_reports
+       WHERE id IN (
+         SELECT id FROM traffic_reports
+         WHERE created_at < ?
+         ORDER BY created_at
+         LIMIT ?
+       )`
+    )
+      .bind(cutoff, RETENTION_DELETE_BATCH_SIZE)
+      .run();
+    lastBatchChanges = getD1Changes(result);
+    deletedReportRows += lastBatchChanges;
+    completedBatches += 1;
+    if (lastBatchChanges < RETENTION_DELETE_BATCH_SIZE) break;
+  }
+
+  for (let batch = 0; batch < safeMaxBatches; batch += 1) {
+    const result = await env.DB.prepare(
+      `DELETE FROM rate_limits
+       WHERE key IN (
+         SELECT key FROM rate_limits
+         WHERE reset_at <= ?
+         ORDER BY reset_at
+         LIMIT ?
+       )`
+    )
+      .bind(safeNow, RETENTION_DELETE_BATCH_SIZE)
+      .run();
+    lastRateLimitBatchChanges = getD1Changes(result);
+    deletedRateLimitRows += lastRateLimitBatchChanges;
+    completedRateLimitBatches += 1;
+    if (lastRateLimitBatchChanges < RETENTION_DELETE_BATCH_SIZE) break;
+  }
+
+  return {
+    cutoff,
+    deletedReportRows,
+    deletedRateLimitRows,
+    reportBatchLimitReached: completedBatches === safeMaxBatches && lastBatchChanges === RETENTION_DELETE_BATCH_SIZE,
+    rateLimitBatchLimitReached:
+      completedRateLimitBatches === safeMaxBatches && lastRateLimitBatchChanges === RETENTION_DELETE_BATCH_SIZE
+  };
+}
+
+function getD1Changes(result: unknown): number {
+  const changes = (result as { meta?: { changes?: unknown } } | null)?.meta?.changes;
+  return typeof changes === 'number' && Number.isFinite(changes) && changes > 0 ? Math.floor(changes) : 0;
 }
 
 async function getTrafficSummary(env: Env, userId: string, deviceId: string, date: string): Promise<TrafficSummary> {
@@ -1677,11 +1312,9 @@ function normalizeRemoteConfigRow(row: RemoteConfigRow): RemoteControlConfig {
   };
 }
 
-function normalizeRemoteConfigInput(
-  input: RemoteConfigInput,
-  fallback: RemoteControlConfig
-): RemoteControlConfig {
-  const ruleProfile = normalizeChoice(input.ruleProfile, ['ruleset', 'smart', 'global', 'subscription']) ?? fallback.ruleProfile;
+function normalizeRemoteConfigInput(input: RemoteConfigInput, fallback: RemoteControlConfig): RemoteControlConfig {
+  const ruleProfile =
+    normalizeChoice(input.ruleProfile, ['ruleset', 'smart', 'global', 'subscription']) ?? fallback.ruleProfile;
   const preferredStrategy =
     normalizeChoice(input.preferredStrategy, ['manual', 'auto', 'fallback', 'load-balance', 'direct']) ??
     fallback.preferredStrategy;
@@ -1719,22 +1352,25 @@ function normalizeUserRemoteConfigInput(input: RemoteConfigInput): Partial<Remot
         : normalizeSubscriptionUrl(input.subscriptionUrl),
     ruleProfile: normalizeChoice(input.ruleProfile, ['ruleset', 'smart', 'global', 'subscription']),
     preferredNode: normalizeText(input.preferredNode, 120) ?? undefined,
-    preferredStrategy: normalizeChoice(input.preferredStrategy, ['manual', 'auto', 'fallback', 'load-balance', 'direct']),
-    directRules: input.directRules === null || typeof input.directRules === 'undefined' ? undefined : parseRuleList(input.directRules),
-    proxyRules: input.proxyRules === null || typeof input.proxyRules === 'undefined' ? undefined : parseRuleList(input.proxyRules)
+    preferredStrategy: normalizeChoice(input.preferredStrategy, [
+      'manual',
+      'auto',
+      'fallback',
+      'load-balance',
+      'direct'
+    ]),
+    directRules:
+      input.directRules === null || typeof input.directRules === 'undefined'
+        ? undefined
+        : parseRuleList(input.directRules),
+    proxyRules:
+      input.proxyRules === null || typeof input.proxyRules === 'undefined' ? undefined : parseRuleList(input.proxyRules)
   };
 }
 
 async function requireKnownUser(env: Env, userId: string): Promise<void> {
   const user = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first<{ id: string }>();
   if (!user) throw new HttpError(404, 'unknown user');
-}
-
-async function requireKnownDevice(env: Env, userId: string, deviceId: string): Promise<void> {
-  const device = await env.DB.prepare('SELECT id FROM devices WHERE id = ? AND user_id = ?')
-    .bind(deviceId, userId)
-    .first<{ id: string }>();
-  if (!device) throw new HttpError(403, 'unknown device');
 }
 
 async function verifyDeviceRequest(
@@ -1758,7 +1394,13 @@ async function verifyDeviceRequest(
     throw new HttpError(401, 'stale signature');
   }
 
-  const expected = await signDeviceRequest(request.method, new URL(request.url), bodyText, device.deviceSeed, timestamp);
+  const expected = await signDeviceRequest(
+    request.method,
+    new URL(request.url),
+    bodyText,
+    device.deviceSeed,
+    timestamp
+  );
   if (!constantTimeEqual(signature, expected)) throw new HttpError(401, 'invalid signature');
 }
 
@@ -1769,12 +1411,9 @@ async function signDeviceRequest(
   secret: string,
   timestamp: string
 ): Promise<string> {
-  const canonical = [
-    method.toUpperCase(),
-    `${url.pathname}${url.search}`,
-    timestamp,
-    await sha256Hex(bodyText)
-  ].join('\n');
+  const canonical = [method.toUpperCase(), `${url.pathname}${url.search}`, timestamp, await sha256Hex(bodyText)].join(
+    '\n'
+  );
   return hmacSha256Hex(secret, canonical);
 }
 
@@ -1786,13 +1425,9 @@ async function sha256Hex(value: string): Promise<string> {
 
 async function hmacSha256Hex(secret: string, value: string): Promise<string> {
   const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, [
+    'sign'
+  ]);
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(value));
   return bytesToHex(new Uint8Array(signature));
 }
@@ -1805,7 +1440,10 @@ async function requireAdmin(request: Request, env: Env): Promise<void> {
   if (!env.ADMIN_TOKEN) throw new HttpError(403, 'admin disabled');
   const rateLimitKey = `admin:${getClientIp(request)}`;
   await assertRateLimit(env, rateLimitKey, 10, 15 * 60 * 1000);
-  const token = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim();
+  const token = request.headers
+    .get('authorization')
+    ?.replace(/^Bearer\s+/i, '')
+    .trim();
   if (!constantTimeEqual(token ?? '', env.ADMIN_TOKEN.trim())) {
     await recordRateLimitFailure(env, rateLimitKey, 15 * 60 * 1000);
     throw new HttpError(403, 'forbidden');
@@ -1843,7 +1481,7 @@ function getClientIp(request: Request): string {
   );
 }
 
-async function assertRateLimit(env: Env, key: string, maxAttempts: number, windowMs: number): Promise<void> {
+async function assertRateLimit(env: Env, key: string, maxAttempts: number, _windowMs: number): Promise<void> {
   const now = Date.now();
   const row = await env.DB.prepare('SELECT attempts, reset_at AS resetAt FROM rate_limits WHERE key = ?')
     .bind(key)
@@ -1892,15 +1530,13 @@ function parseRuleList(value: unknown): string[] {
   const raw = Array.isArray(value)
     ? value
     : typeof value === 'string' && value.trim().startsWith('[')
-    ? safeParseJson(value)
-    : typeof value === 'string'
-    ? value.split(/\r?\n/)
-    : [];
+      ? safeParseJson(value)
+      : typeof value === 'string'
+        ? value.split(/\r?\n/)
+        : [];
   if (!Array.isArray(raw)) return [];
 
-  return raw
-    .map((item) => normalizeText(item, 160))
-    .filter((item): item is string => Boolean(item));
+  return raw.map((item) => normalizeText(item, 160)).filter((item): item is string => Boolean(item));
 }
 
 function safeParseJson(value: string): unknown {

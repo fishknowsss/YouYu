@@ -45,9 +45,7 @@ if (!internalBuild && exeEntries.some((entry) => /-in\.exe$/i.test(entry))) {
 if (!noPetBuild && exeEntries.some((entry) => /-no\.exe$/i.test(entry))) {
   throw new Error(`Standard release must not contain no-pet installer: ${exeEntries.join(', ')}`);
 }
-const confusingEntries = entries
-  .filter((entry) => /arm64|ia32/i.test(entry.name))
-  .map((entry) => entry.name);
+const confusingEntries = entries.filter((entry) => /arm64|ia32/i.test(entry.name)).map((entry) => entry.name);
 
 if (confusingEntries.length > 0) {
   throw new Error(`Unexpected non-x64 Windows release entries: ${confusingEntries.join(', ')}`);

@@ -77,6 +77,8 @@ export function PetApp() {
       clearAmbientTimer();
       clearLiftTimer();
     };
+    // Pet callbacks operate on refs so the main-process subscription must stay stable for the window lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -121,12 +123,15 @@ export function PetApp() {
     actionLocked.current = true;
     setVisual(next);
 
-    actionTimer.current = setTimeout(() => {
-      actionTimer.current = undefined;
-      actionLocked.current = false;
-      setVisual(baseState.current);
-      scheduleAmbient(baseState.current);
-    }, getPetAnimationDurationMs(next) + holdMs);
+    actionTimer.current = setTimeout(
+      () => {
+        actionTimer.current = undefined;
+        actionLocked.current = false;
+        setVisual(baseState.current);
+        scheduleAmbient(baseState.current);
+      },
+      getPetAnimationDurationMs(next) + holdMs
+    );
   }
 
   function lockSequence(steps: ActionStep[], options: SequenceOptions = {}) {
@@ -158,11 +163,14 @@ export function PetApp() {
       }
 
       setVisual(step.state);
-      actionTimer.current = setTimeout(() => {
-        actionTimer.current = undefined;
-        index += 1;
-        playNext();
-      }, getPetAnimationDurationMs(step.state) + step.holdMs);
+      actionTimer.current = setTimeout(
+        () => {
+          actionTimer.current = undefined;
+          index += 1;
+          playNext();
+        },
+        getPetAnimationDurationMs(step.state) + step.holdMs
+      );
     };
 
     playNext();
@@ -272,8 +280,7 @@ export function PetApp() {
       return;
     }
 
-    const insideHitTarget =
-      target instanceof Element && Boolean(target.closest('.pet-hit-target'));
+    const insideHitTarget = target instanceof Element && Boolean(target.closest('.pet-hit-target'));
     setMousePassthrough(!insideHitTarget);
   }
 
@@ -291,11 +298,14 @@ export function PetApp() {
     if (!moved) {
       void window.youyu?.stopPetDrag(false);
       if (currentDrag?.visual === 'liftHold') {
-        lockSequence([
-          { state: 'fallRecover', holdMs: 80 },
-          { state: 'bottomDizzy', holdMs: 160 },
-          { state: 'bottomAngry', holdMs: 260 }
-        ], dropRecoveryOptions);
+        lockSequence(
+          [
+            { state: 'fallRecover', holdMs: 80 },
+            { state: 'bottomDizzy', holdMs: 160 },
+            { state: 'bottomAngry', holdMs: 260 }
+          ],
+          dropRecoveryOptions
+        );
         return;
       }
       if (playTapAction) {
@@ -317,11 +327,14 @@ export function PetApp() {
       return;
     }
     if (!settleState || settleState === 'fallRecover') {
-      lockSequence([
-        { state: 'fallRecover', holdMs: 100 },
-        { state: 'bottomDizzy', holdMs: 180 },
-        { state: 'bottomAngry', holdMs: 320 }
-      ], dropRecoveryOptions);
+      lockSequence(
+        [
+          { state: 'fallRecover', holdMs: 100 },
+          { state: 'bottomDizzy', holdMs: 180 },
+          { state: 'bottomAngry', holdMs: 320 }
+        ],
+        dropRecoveryOptions
+      );
       return;
     }
     lockState(settleState ?? 'fallRecover', 320);

@@ -13,9 +13,7 @@ const subscriptionSource = bundledSubscriptionBuild
 const generatedSubscription = join(process.cwd(), 'resources', 'generated', 'default-subscription.txt');
 const releaseDir = join(process.cwd(), 'release');
 const updateMetadataName = internalBuild ? 'latest-in.yml' : noPetBuild ? 'latest-no.yml' : 'latest.yml';
-const nodeOptions = [process.env.NODE_OPTIONS, '--disable-warning=DEP0190']
-  .filter(Boolean)
-  .join(' ');
+const nodeOptions = [process.env.NODE_OPTIONS, '--disable-warning=DEP0190'].filter(Boolean).join(' ');
 
 await prepareSubscriptionResource();
 
@@ -64,7 +62,8 @@ async function prepareSubscriptionResource() {
   } catch (error) {
     if (bundledSubscriptionBuild) {
       throw new Error(
-        `Missing bundled subscription file: ${subscriptionSource}. Create it locally; it is gitignored.`
+        `Missing bundled subscription file: ${subscriptionSource}. Create it locally; it is gitignored.`,
+        { cause: error }
       );
     }
   }

@@ -11,12 +11,13 @@ export type UsageMode = 'easy' | 'advanced';
 type AppShellProps = {
   page: PageKey;
   usageMode: UsageMode;
+  inert?: boolean;
   children: ReactNode;
   onPageChange: (page: PageKey) => void;
   onAdvancedUnlock?: () => void;
 };
 
-export function AppShell({ page, usageMode, children, onPageChange, onAdvancedUnlock }: AppShellProps) {
+export function AppShell({ page, usageMode, inert = false, children, onPageChange, onAdvancedUnlock }: AppShellProps) {
   const navItems: Array<{ key: PageKey; label: string }> = [
     { key: 'home', label: '首页' },
     { key: 'nodes', label: '节点' },
@@ -29,7 +30,11 @@ export function AppShell({ page, usageMode, children, onPageChange, onAdvancedUn
   const versionLabel = getVersionLabel(__YOUYU_APP_VERSION__, __YOUYU_BUILD_CHANNEL__);
 
   return (
-    <div className={`app-shell ${usageMode === 'easy' ? 'easy-shell' : 'advanced-shell'}`}>
+    <div
+      className={`app-shell ${usageMode === 'easy' ? 'easy-shell' : 'advanced-shell'}`}
+      inert={inert}
+      aria-hidden={inert || undefined}
+    >
       {usageMode === 'advanced' && (
         <aside className="sidebar">
           <div className="brand-lockup">

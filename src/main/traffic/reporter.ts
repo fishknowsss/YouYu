@@ -41,9 +41,12 @@ export class TrafficReporter {
 
   start() {
     if (this.timer) return;
-    this.timer = setInterval(() => {
-      void this.reportPending().catch((error) => this.options.onError?.(error));
-    }, this.options.intervalMs ?? 10 * 60 * 1000);
+    this.timer = setInterval(
+      () => {
+        void this.reportPending().catch((error) => this.options.onError?.(error));
+      },
+      this.options.intervalMs ?? 10 * 60 * 1000
+    );
     void this.reportPending().catch((error) => this.options.onError?.(error));
   }
 

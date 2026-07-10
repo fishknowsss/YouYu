@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { readJsonFile, writeJsonFileAtomic } from './jsonFile';
 import type {
   ConnectivityResult,
   CurrentNodeHealth,
@@ -27,40 +27,55 @@ const currentNodeHealthVersion = 1;
 
 export class NodeHealthStore {
   private readonly filePath: string;
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly baseDir: string) {
     this.filePath = join(baseDir, nodeHealthFileName);
   }
 
   async getTodayAvailability(nodeName: string, now = new Date()): Promise<StoredNodeAvailability | undefined> {
-    const file = await this.read();
-    const record = file.availabilityByNode[nodeName];
-    return record?.date === formatLocalDate(now) ? record : undefined;
-  }
-
-  async saveAvailability(record: StoredNodeAvailability): Promise<void> {
-    const file = await this.read();
-    await this.write({
-      version: currentNodeHealthVersion,
-      availabilityByNode: {
-        ...file.availabilityByNode,
-        [record.nodeName]: record
-      }
+    return this.enqueue(async () => {
+      const file = await this.readCurrent();
+      const record = file.availabilityByNode[nodeName];
+      return record?.date === formatLocalDate(now) ? record : undefined;
     });
   }
 
-  private async read(): Promise<NodeHealthFile> {
-    try {
-      const raw = await readFile(this.filePath, 'utf8');
-      return normalizeNodeHealthFile(JSON.parse(raw));
-    } catch {
-      return createEmptyNodeHealthFile();
-    }
+  async saveAvailability(record: StoredNodeAvailability): Promise<void> {
+    await this.enqueue(async () => {
+      const file = await this.readCurrent();
+      await this.write({
+        version: currentNodeHealthVersion,
+        availabilityByNode: {
+          ...file.availabilityByNode,
+          [record.nodeName]: record
+        }
+      });
+    });
+  }
+
+  private async readCurrent(): Promise<NodeHealthFile> {
+    const result = await readJsonFile<unknown>(this.filePath, {
+      validate: (value) =>
+        Boolean(value) &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        (value as { version?: unknown }).version === currentNodeHealthVersion &&
+        Boolean((value as { availabilityByNode?: unknown }).availabilityByNode) &&
+        typeof (value as { availabilityByNode?: unknown }).availabilityByNode === 'object' &&
+        !Array.isArray((value as { availabilityByNode?: unknown }).availabilityByNode)
+    });
+    return result.status === 'found' ? normalizeNodeHealthFile(result.value) : createEmptyNodeHealthFile();
   }
 
   private async write(file: NodeHealthFile): Promise<void> {
-    await mkdir(this.baseDir, { recursive: true });
-    await writeFile(this.filePath, `${JSON.stringify(file, null, 2)}\n`, 'utf8');
+    await writeJsonFileAtomic(this.filePath, file);
+  }
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task, task);
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 }
 
@@ -147,8 +162,8 @@ function normalizeAvailabilityRecord(value: unknown): StoredNodeAvailability | u
       Number.isFinite(record.percent) && typeof record.percent === 'number'
         ? Math.min(100, Math.max(0, Math.round(record.percent)))
         : totalCount > 0
-        ? Math.round((availableCount / totalCount) * 100)
-        : 0,
+          ? Math.round((availableCount / totalCount) * 100)
+          : 0,
     tone: getAvailabilityTone(availableCount, totalCount)
   };
 }

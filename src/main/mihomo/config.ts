@@ -79,8 +79,7 @@ const carrierTransitNoticeExcludeFilter =
   '(?:联通|电信|移动|unicom|telecom|mobile).*(?:联通|电信|移动|unicom|telecom|mobile).*(?:中转|cf|cloudflare|relay)|(?:中转|cf|cloudflare|relay).*(?:联通|电信|移动|unicom|telecom|mobile).*(?:联通|电信|移动|unicom|telecom|mobile)|(?:联通|电信|移动).*(?:用|走|适合).*(?:中转|cf|cloudflare)|(?:unicom|telecom|mobile).*(?:use|via|for).*(?:relay|cf|cloudflare)';
 const carrierNoticeExcludeFilter =
   '(?:联通|电信|移动|unicom|telecom|mobile).*(?:订阅|官网|地址|链接|公告|剩余|流量|重置|到期|套餐|失去支持|客户端|更新|通知|traffic|remaining|subscription|subscribe|official|address|expire|reset)|(?:订阅|官网|地址|链接|公告|剩余|流量|重置|到期|套餐|失去支持|客户端|更新|通知|traffic|remaining|subscription|subscribe|official|address|expire|reset).*(?:联通|电信|移动|unicom|telecom|mobile)';
-const noticeNodeExcludeFilter =
-  `(?i)(剩余流量|剩余|订阅|官网|官网地址|订阅地址|订阅链接|距离下次重置|重置剩余|套餐到期|失去支持|更新.*客户端|丛雨云|全部超时|congyu\\.org|全球直连|节点选择|自动选择|全球拦截|traffic|remaining|subscription|subscribe|official|address|expire|reset|${carrierTransitNoticeExcludeFilter}|${carrierNoticeExcludeFilter})`;
+const noticeNodeExcludeFilter = `(?i)(剩余流量|剩余|订阅|官网|官网地址|订阅地址|订阅链接|距离下次重置|重置剩余|套餐到期|失去支持|更新.*客户端|丛雨云|全部超时|congyu\\.org|全球直连|节点选择|自动选择|全球拦截|traffic|remaining|subscription|subscribe|official|address|expire|reset|${carrierTransitNoticeExcludeFilter}|${carrierNoticeExcludeFilter})`;
 const aiFlowDomains = [
   'openai.com',
   'chatgpt.com',
@@ -477,16 +476,16 @@ function isCarrierNoticeNodeName(name: string): boolean {
 
   const hasCarrier = carrierNodeKeywords.some((keyword) => normalized.includes(keyword.toLowerCase()));
   if (!hasCarrier) return false;
-  const carrierKeywordCount = carrierNodeKeywords.filter((keyword) => normalized.includes(keyword.toLowerCase())).length;
+  const carrierKeywordCount = carrierNodeKeywords.filter((keyword) =>
+    normalized.includes(keyword.toLowerCase())
+  ).length;
   if (carrierKeywordCount >= 2 && carrierTransitHintPattern.test(normalized)) return true;
 
   return carrierNoticeHints.some((hint) => normalized.includes(hint.toLowerCase()));
 }
 
 function orderProxyNames(proxyNames: string[]): string[] {
-  const preferred = proxyNames.find((name) =>
-    preferredDefaultNodeKeywords.every((keyword) => name.includes(keyword))
-  );
+  const preferred = proxyNames.find((name) => preferredDefaultNodeKeywords.every((keyword) => name.includes(keyword)));
   if (!preferred) {
     return proxyNames;
   }
@@ -672,11 +671,7 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
   return options;
 }
 
-function buildManagedRules(
-  ruleProfile: RuleProfile,
-  proxyTarget = selectorName,
-  remoteConfig?: RemoteControlConfig
-) {
+function buildManagedRules(ruleProfile: RuleProfile, proxyTarget = selectorName, remoteConfig?: RemoteControlConfig) {
   const rulePrefix = buildRulePrefix(proxyTarget, remoteConfig);
   if (ruleProfile === 'global') {
     return dedupeRules([...rulePrefix, ...buildPriorityProxyRules(proxyTarget), `MATCH,${proxyTarget}`]);
@@ -899,9 +894,7 @@ function buildChinaDirectRules(): string[] {
 function normalizeRemoteRules(rules: string[] | undefined, fallbackTarget: string): string[] {
   if (!rules?.length) return [];
 
-  return rules
-    .map((rule) => normalizeRemoteRule(rule, fallbackTarget))
-    .filter((rule): rule is string => Boolean(rule));
+  return rules.map((rule) => normalizeRemoteRule(rule, fallbackTarget)).filter((rule): rule is string => Boolean(rule));
 }
 
 function normalizeRemoteRule(rule: string, fallbackTarget: string): string | undefined {
@@ -956,9 +949,11 @@ function isPriorityProxyRule(normalizedRule: string): boolean {
 function isManagedDirectRule(normalizedRule: string): boolean {
   const parts = normalizedRule.split(',').map((part) => part.trim().toLowerCase());
   if (parts.length < 3) return false;
-  return parts[0] === 'process-name' && parts[2] === 'direct' && remoteDesktopProcessNames
-    .map((name) => name.toLowerCase())
-    .includes(parts[1]);
+  return (
+    parts[0] === 'process-name' &&
+    parts[2] === 'direct' &&
+    remoteDesktopProcessNames.map((name) => name.toLowerCase()).includes(parts[1])
+  );
 }
 
 function splitSubscriptionRules(rules: unknown[]): {
@@ -1005,7 +1000,10 @@ function splitSubscriptionRules(rules: unknown[]): {
 }
 
 function getRuleTarget(normalizedRule: string): string | undefined {
-  const parts = normalizedRule.split(',').map((part) => part.trim()).filter(Boolean);
+  const parts = normalizedRule
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
   if (parts.length < 2) {
     return undefined;
   }

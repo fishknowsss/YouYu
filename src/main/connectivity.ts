@@ -343,9 +343,7 @@ export function parseTraceData(body?: string): TraceData {
 }
 
 async function lookupIpCountry(ip: string): Promise<string | undefined> {
-  const response = await fetch(
-    `http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,query`
-  );
+  const response = await fetch(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,query`);
   if (!response.ok) return undefined;
   const data = (await response.json()) as {
     status?: string;
@@ -371,7 +369,9 @@ async function findRecentConnection(deps: ConnectivityDeps, host: string): Promi
   const data = (await response.json()) as MihomoConnectionsResponse;
   return data.connections?.find((connection) => {
     const currentHost = connection.metadata?.host ?? '';
-    return Boolean(currentHost) && (currentHost === host || currentHost.endsWith(`.${host}`) || host.endsWith(currentHost));
+    return (
+      Boolean(currentHost) && (currentHost === host || currentHost.endsWith(`.${host}`) || host.endsWith(currentHost))
+    );
   });
 }
 

@@ -21,10 +21,6 @@ type MihomoProxiesResponse = {
   proxies?: Record<string, MihomoProxyItem>;
 };
 
-type MihomoProviderProxyItem = MihomoProxyItem & {
-  name?: string;
-};
-
 type MihomoProviderNode = {
   provider: string;
   name: string;
@@ -50,7 +46,7 @@ export type MihomoApiClient = {
     options?: { avoidNode?: string; signal?: AbortSignal }
   ) => Promise<string | undefined>;
   closeConnections: () => Promise<void>;
-  updateProvider: () => Promise<void>;
+  updateProvider: (options?: { signal?: AbortSignal }) => Promise<void>;
 };
 
 const selectorName = '节点选择';
@@ -140,7 +136,10 @@ export function createMihomoApiClient(options: {
       .filter(({ name, item, nodes }) => {
         return nodes > 0 && item.all?.length && !builtInProxyNames.has(name);
       })
-      .sort((left, right) => scoreSelector(right.name, right.item, right.nodes) - scoreSelector(left.name, left.item, left.nodes));
+      .sort(
+        (left, right) =>
+          scoreSelector(right.name, right.item, right.nodes) - scoreSelector(left.name, left.item, left.nodes)
+      );
 
     const selector = selectors[0];
 
@@ -192,7 +191,11 @@ export function createMihomoApiClient(options: {
 
   function resolveCurrentNode(proxies: Record<string, MihomoProxyItem>, selector: MihomoProxyItem | undefined) {
     const current = selector?.now ?? strategyTargets.auto;
-    return resolveProxyNode(proxies, current, new Set()) ?? collectSelectableNodes(proxies, selector?.all ?? [])[0] ?? current;
+    return (
+      resolveProxyNode(proxies, current, new Set()) ??
+      collectSelectableNodes(proxies, selector?.all ?? [])[0] ??
+      current
+    );
   }
 
   function resolveProxyNode(
@@ -295,7 +298,9 @@ export function createMihomoApiClient(options: {
           item: {
             type: typeof rawProxy.type === 'string' ? rawProxy.type : undefined,
             now: typeof rawProxy.now === 'string' ? rawProxy.now : undefined,
-            all: Array.isArray(rawProxy.all) ? rawProxy.all.filter((value): value is string => typeof value === 'string') : undefined,
+            all: Array.isArray(rawProxy.all)
+              ? rawProxy.all.filter((value): value is string => typeof value === 'string')
+              : undefined,
             history: Array.isArray(rawProxy.history)
               ? rawProxy.history.filter((entry): entry is { delay?: number } => isRecord(entry))
               : undefined
@@ -305,11 +310,6 @@ export function createMihomoApiClient(options: {
     }
 
     return nodes;
-  }
-
-  function inferStrategy(current: string): StrategyKey {
-    const found = Object.entries(strategyTargets).find(([_key, target]) => target === current);
-    return found ? (found[0] as StrategyKey) : 'manual';
   }
 
   function resolveSelectionSteps(
@@ -509,7 +509,7 @@ export function createMihomoApiClient(options: {
     async listNodes() {
       const [data, providers] = await Promise.all([
         readProxies(),
-        readProviders().catch(() => ({ providers: {} } as MihomoProvidersResponse))
+        readProviders().catch(() => ({ providers: {} }) as MihomoProvidersResponse)
       ]);
       const proxies = data.proxies ?? {};
       const selector = findSelector(proxies)?.item;
@@ -566,7 +566,7 @@ export function createMihomoApiClient(options: {
         activeConnections: data.connections?.length ?? 0,
         uploadTotal: data.uploadTotal ?? 0,
         downloadTotal: data.downloadTotal ?? 0,
-        connections: options.includeConnections ? data.connections ?? [] : undefined
+        connections: options.includeConnections ? (data.connections ?? []) : undefined
       };
     },
     async selectNode(name: string) {
@@ -734,18 +734,21 @@ export function createMihomoApiClient(options: {
         headers: headers()
       });
     },
-    async updateProvider() {
+    async updateProvider(options = {}) {
+      assertNotAborted(options.signal);
       let providerNames = [providerName];
       try {
         const response = await request('/providers/proxies', {
-          headers: headers()
+          headers: headers(),
+          signal: options.signal
         });
         const data = (await response.json()) as MihomoProvidersResponse;
         const names = Object.keys(data.providers ?? {}).filter((name) => name !== 'default');
         if (names.length > 0) {
           providerNames = names;
         }
-      } catch {
+      } catch (_error) {
+        assertNotAborted(options.signal);
         providerNames = [providerName];
       }
 
@@ -756,7 +759,8 @@ export function createMihomoApiClient(options: {
         providerNames.map((name) =>
           request(`/providers/proxies/${encodeURIComponent(name)}`, {
             method: 'PUT',
-            headers: headers()
+            headers: headers(),
+            signal: options.signal
           })
         )
       );

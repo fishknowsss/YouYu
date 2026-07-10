@@ -52,17 +52,14 @@ describe('createMihomoApiClient', () => {
 
     await api.selectNode('日本 01');
 
-    expect(fetcher).toHaveBeenCalledWith(
-      'http://127.0.0.1:9090/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9',
-      {
-        method: 'PUT',
-        headers: {
-          Authorization: 'Bearer secret',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ name: '日本 01' })
-      }
-    );
+    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9', {
+      method: 'PUT',
+      headers: {
+        Authorization: 'Bearer secret',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: '日本 01' })
+    });
   });
 
   it('reads nodes from nested strategy groups', async () => {

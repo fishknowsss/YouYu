@@ -15,6 +15,7 @@ describe('pet atlas', () => {
       expect(animation.row).toBeGreaterThanOrEqual(0);
       expect(animation.row).toBeLessThan(animation.atlasRows);
       expect(animation.imageUrl).toContain('spritesheet');
+      expect(animation.imageUrl).toContain('.webp');
     }
   });
 
@@ -93,11 +94,7 @@ describe('pet atlas', () => {
     const blinkRow = manifest.atlases.extra.rows.edgeBlink;
     const sleepRow = manifest.atlases.extra.rows.edgeSleep;
 
-    expect(blinkRow.sourceKeys).toEqual([
-      'edgePeek_open',
-      'edgeBlink_closed_redraw_gpt_image_2',
-      'edgePeek_open'
-    ]);
+    expect(blinkRow.sourceKeys).toEqual(['edgePeek_open', 'edgeBlink_closed_redraw_gpt_image_2', 'edgePeek_open']);
     expect(sleepRow.frames).toBe(1);
     expect(sleepRow.sourceKeys).toEqual(['edgeSide_sleep_reference']);
     expect(sleepRow.sourceKeys.join(' ')).not.toContain('redrawn');

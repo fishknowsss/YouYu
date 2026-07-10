@@ -17,7 +17,6 @@ type HomeProps = {
   onStrategyChange: (strategy: StrategyKey) => void;
   onOpenNodes: () => void;
   onUsageModeChange: (mode: UsageMode) => void;
-  onCheckUpdate: () => void;
   onInstallUpdate: () => void;
 };
 
@@ -79,12 +78,7 @@ function EasyHome(props: HomeProps) {
             <span className={`startup-ring ${starting ? 'is-starting' : ''}`} aria-hidden="true" />
           </button>
         </div>
-        <EasyUpdateNotice
-          snapshot={props.snapshot}
-          busy={props.busy}
-          onCheckUpdate={props.onCheckUpdate}
-          onInstallUpdate={props.onInstallUpdate}
-        />
+        <EasyUpdateNotice snapshot={props.snapshot} busy={props.busy} onInstallUpdate={props.onInstallUpdate} />
       </section>
     </div>
   );
@@ -93,12 +87,10 @@ function EasyHome(props: HomeProps) {
 function EasyUpdateNotice({
   snapshot,
   busy,
-  onCheckUpdate,
   onInstallUpdate
 }: {
   snapshot: AppSnapshot;
   busy: boolean;
-  onCheckUpdate: () => void;
   onInstallUpdate: () => void;
 }) {
   const update = snapshot.update;
@@ -115,8 +107,8 @@ function EasyUpdateNotice({
       ? verifying
         ? '校验中'
         : version
-        ? `下载中 ${version}`
-        : '下载中'
+          ? `下载中 ${version}`
+          : '下载中'
       : version
         ? `发现 ${version}`
         : '发现更新';
@@ -257,7 +249,6 @@ function AdvancedHome(props: HomeProps) {
             )}
           </div>
         </section>
-
       </section>
     </div>
   );

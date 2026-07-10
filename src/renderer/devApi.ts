@@ -29,22 +29,82 @@ const devConnectivity: Array<{
   ip?: string;
   region?: string;
 }> = [
-  { key: 'steam', name: 'Steam', url: 'https://store.steampowered.com', category: 'special', totalMs: 142, ip: '23.203.232.145', region: 'Japan' },
-  { key: 'steamNetwork', name: 'Steam 联机', url: 'https://api.steampowered.com', category: 'special', totalMs: 166, ip: '23.203.232.145', region: 'Japan' },
-  { key: 'steamCloud', name: 'Steam 云同步', url: 'https://steamcloud-ugc.storage.googleapis.com', category: 'special', totalMs: 184, ip: '172.217.25.176', region: 'Japan' },
-  { key: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com', category: 'ai', totalMs: 286, ip: '126.63.231.113', region: 'Japan' },
-  { key: 'claude', name: 'Claude', url: 'https://claude.ai', category: 'ai', totalMs: 312, ip: '126.63.231.113', region: 'Japan' },
+  {
+    key: 'steam',
+    name: 'Steam',
+    url: 'https://store.steampowered.com',
+    category: 'special',
+    totalMs: 142,
+    ip: '23.203.232.145',
+    region: 'Japan'
+  },
+  {
+    key: 'steamNetwork',
+    name: 'Steam 联机',
+    url: 'https://api.steampowered.com',
+    category: 'special',
+    totalMs: 166,
+    ip: '23.203.232.145',
+    region: 'Japan'
+  },
+  {
+    key: 'steamCloud',
+    name: 'Steam 云同步',
+    url: 'https://steamcloud-ugc.storage.googleapis.com',
+    category: 'special',
+    totalMs: 184,
+    ip: '172.217.25.176',
+    region: 'Japan'
+  },
+  {
+    key: 'chatgpt',
+    name: 'ChatGPT',
+    url: 'https://chatgpt.com',
+    category: 'ai',
+    totalMs: 286,
+    ip: '126.63.231.113',
+    region: 'Japan'
+  },
+  {
+    key: 'claude',
+    name: 'Claude',
+    url: 'https://claude.ai',
+    category: 'ai',
+    totalMs: 312,
+    ip: '126.63.231.113',
+    region: 'Japan'
+  },
   { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai', totalMs: 248 },
   { key: 'flow', name: 'Flow', url: 'https://labs.google/fx/tools/flow', category: 'special', totalMs: 338 },
   { key: 'pixverse', name: 'PixVerse', url: 'https://app.pixverse.ai', category: 'ai', totalMs: 428 },
   { key: 'github', name: 'GitHub', url: 'https://github.com', category: 'global', totalMs: 194 },
-  { key: 'microsoftStore', name: 'Microsoft 商店', url: 'https://apps.microsoft.com', category: 'special', totalMs: 232 },
+  {
+    key: 'microsoftStore',
+    name: 'Microsoft 商店',
+    url: 'https://apps.microsoft.com',
+    category: 'special',
+    totalMs: 232
+  },
   { key: 'discord', name: 'Discord', url: 'https://discord.com', category: 'special', totalMs: 266 },
-  { key: 'turnstile', name: 'Cloudflare 验证', url: 'https://challenges.cloudflare.com', category: 'special', totalMs: 188 },
+  {
+    key: 'turnstile',
+    name: 'Cloudflare 验证',
+    url: 'https://challenges.cloudflare.com',
+    category: 'special',
+    totalMs: 188
+  },
   { key: 'recaptcha', name: 'Google 验证', url: 'https://www.recaptcha.net', category: 'special', totalMs: 246 },
   { key: 'hcaptcha', name: 'hCaptcha', url: 'https://js.hcaptcha.com', category: 'special', totalMs: 221 },
   { key: 'google', name: 'Google', url: 'https://www.google.com', category: 'global', totalMs: 168 },
-  { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global', totalMs: 198, ip: '216.236.40.177', region: 'Hong Kong' }
+  {
+    key: 'cloudflare',
+    name: 'Cloudflare',
+    url: 'https://www.cloudflare.com',
+    category: 'global',
+    totalMs: 198,
+    ip: '216.236.40.177',
+    region: 'Hong Kong'
+  }
 ];
 
 export function createDevYouYuApi(): YouYuApi {
@@ -85,6 +145,7 @@ export function createDevYouYuApi(): YouYuApi {
       reportStatus: 'idle'
     },
     subscriptionUrl: '',
+    subscriptionRevision: 0,
     update: {
       currentVersion: __YOUYU_APP_VERSION__,
       buildChannel: getDevBuildChannel(),
@@ -332,9 +393,7 @@ export function createDevYouYuApi(): YouYuApi {
     async saveSettings(settings) {
       return publish({
         subscriptionUrl:
-          typeof settings.subscriptionUrl === 'string'
-            ? settings.subscriptionUrl.trim()
-            : snapshot.subscriptionUrl,
+          typeof settings.subscriptionUrl === 'string' ? settings.subscriptionUrl.trim() : snapshot.subscriptionUrl,
         mode: settings.mode ?? snapshot.mode,
         strategy: settings.strategy ?? snapshot.strategy,
         ruleProfile: settings.ruleProfile ?? snapshot.ruleProfile,
@@ -347,8 +406,7 @@ export function createDevYouYuApi(): YouYuApi {
           strictRouteEnabled: true,
           allowLan: settings.allowLan ?? snapshot.features.allowLan,
           subscriptionRefreshIntervalHours:
-            settings.subscriptionRefreshIntervalHours ??
-            snapshot.features.subscriptionRefreshIntervalHours
+            settings.subscriptionRefreshIntervalHours ?? snapshot.features.subscriptionRefreshIntervalHours
         },
         nodes: snapshot.status === 'running' ? withNodes() : snapshot.nodes
       });
@@ -377,6 +435,9 @@ export function createDevYouYuApi(): YouYuApi {
         remoteSubscriptionUrl: snapshot.remoteSubscriptionUrl,
         subscriptionUrl: snapshot.subscriptionUrl
       });
+    },
+    async cancelOperation() {
+      return false;
     },
     async checkForUpdates() {
       return publish({

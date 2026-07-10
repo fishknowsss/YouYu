@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { saveSubscriptionSettings, testAllMihomoNodes, testMihomoNode, updateSubscriptionNodes } from '../../src/main/appActions';
+import {
+  saveSubscriptionSettings,
+  testAllMihomoNodes,
+  testMihomoNode,
+  updateSubscriptionNodes
+} from '../../src/main/appActions';
 import type { AppSnapshot } from '../../src/shared/ipc';
 import type { AppSettings } from '../../src/main/storage/settings';
 
@@ -117,29 +122,64 @@ describe('app actions', () => {
   });
 
   it('repairs and retries when starting for an update fails once', async () => {
+    const signal = new AbortController().signal;
     const lifecycle = {
       getStatus: vi.fn(() => 'stopped' as const),
-      start: vi
-        .fn()
-        .mockRejectedValueOnce(new Error('startup failed'))
-        .mockResolvedValueOnce(undefined),
+      start: vi.fn().mockRejectedValueOnce(new Error('startup failed')).mockResolvedValueOnce(undefined),
       stop: vi.fn(async () => undefined),
       restart: vi.fn(async () => undefined),
       repair: vi.fn(async () => undefined)
     };
 
-    await updateSubscriptionNodes({
-      settingsStore: {
-        read: async () => makeSettings(),
-        update: vi.fn()
+    await updateSubscriptionNodes(
+      {
+        settingsStore: {
+          read: async () => makeSettings(),
+          update: vi.fn()
+        },
+        lifecycle,
+        createMihomoApi: () => makeMihomoApi(),
+        createSnapshot: async () => makeSnapshot()
       },
-      lifecycle,
-      createMihomoApi: () => makeMihomoApi(),
-      createSnapshot: async () => makeSnapshot()
-    });
+      { signal }
+    );
 
     expect(lifecycle.start).toHaveBeenCalledTimes(2);
-    expect(lifecycle.repair).toHaveBeenCalledOnce();
+    expect(lifecycle.repair).toHaveBeenCalledWith(signal);
+  });
+
+  it('does not restart after a running provider update is canceled', async () => {
+    const controller = new AbortController();
+    const stop = vi.fn(async () => undefined);
+    const start = vi.fn(async () => undefined);
+    const updateProvider = vi.fn(async () => {
+      controller.abort(new Error('operation canceled'));
+      throw controller.signal.reason;
+    });
+
+    await expect(
+      updateSubscriptionNodes(
+        {
+          settingsStore: {
+            read: async () => makeSettings(),
+            update: vi.fn()
+          },
+          lifecycle: {
+            getStatus: () => 'running',
+            start,
+            stop,
+            restart: vi.fn(),
+            repair: vi.fn()
+          },
+          createMihomoApi: () => makeMihomoApi({ updateProvider }),
+          createSnapshot: async () => makeSnapshot()
+        },
+        { signal: controller.signal }
+      )
+    ).rejects.toThrow('operation canceled');
+
+    expect(stop).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
   });
 
   it('updates the running provider without restarting when mihomo accepts it', async () => {
@@ -286,9 +326,11 @@ describe('app actions', () => {
   it('passes every all-node progress result to the node health hook', async () => {
     const testedNode = { name: '日本 01', delay: 88, active: true, testState: 'tested' as const };
     const onNodeTested = vi.fn();
-    const testAllNodes = vi.fn(async (options: { onNodeTested?: (node: typeof testedNode) => void | Promise<void> }) => {
-      await options.onNodeTested?.(testedNode);
-    });
+    const testAllNodes = vi.fn(
+      async (options: { onNodeTested?: (node: typeof testedNode) => void | Promise<void> }) => {
+        await options.onNodeTested?.(testedNode);
+      }
+    );
 
     await testAllMihomoNodes(
       {

@@ -1,11 +1,22 @@
-﻿import { useEffect, useRef, useState } from 'react';
-import type { AppSettingsInput, AppSnapshot, MihomoMode, TrafficRegistrationInput } from '../shared/ipc';
+﻿import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
+import type {
+  AppSettingsInput,
+  AppSnapshot,
+  MihomoMode,
+  OperationRequest,
+  TrafficRegistrationInput
+} from '../shared/ipc';
 import { AppShell, type PageKey, type UsageMode } from './components/AppShell';
 import { Home } from './pages/Home';
 import { NodeSelect } from './pages/NodeSelect';
-import { PetPreviewPage } from './pages/PetPreviewPage';
 import { Settings } from './pages/Settings';
 import { TestPage } from './pages/TestPage';
+
+const PetPreviewPage = lazy(async () => {
+  const module = await import('./pages/PetPreviewPage');
+  return { default: module.PetPreviewPage };
+});
 
 const emptySnapshot: AppSnapshot = {
   status: 'stopped',
@@ -53,6 +64,7 @@ const emptySnapshot: AppSnapshot = {
     reportStatus: 'idle'
   },
   subscriptionUrl: '',
+  subscriptionRevision: 0,
   update: {
     currentVersion: '0.0.0',
     buildChannel: 'standard',
@@ -79,6 +91,20 @@ const easyStartSettings: AppSettingsInput = {
 const actionTimeoutMs = 120000;
 const nodeTestActionTimeoutMs = 10 * 60 * 1000;
 
+type ActionOptions = {
+  workingMessage?: string;
+  timeoutMs?: number;
+  timeoutLabel?: string;
+  messageSink?: (message: string) => void;
+  cancellable?: boolean;
+  onTimeout?: (api: NonNullable<Window['youyu']>) => void;
+};
+
+type OperationRequestTracker = {
+  current?: OperationRequest;
+  next: () => OperationRequest;
+};
+
 export function App() {
   const [page, setPage] = useState<PageKey>(readInitialPage);
   const [usageMode, setUsageMode] = useState<UsageMode>(readUsageMode);
@@ -96,6 +122,8 @@ export function App() {
 
   useEffect(() => {
     void runAction((api) => api.getSnapshot(), '');
+    // The preload snapshot is fetched exactly once; later changes arrive through onSnapshotUpdated.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -154,32 +182,49 @@ export function App() {
   }, [usageMode]);
 
   async function runAction(
-    action: (api: NonNullable<Window['youyu']>) => Promise<AppSnapshot>,
+    action: (api: NonNullable<Window['youyu']>, request?: OperationRequest) => Promise<AppSnapshot>,
     doneMessage: string,
-    workingMessage = '',
-    timeoutMs = actionTimeoutMs,
-    messageSink?: (message: string) => void
+    options: ActionOptions = {}
   ) {
+    const {
+      workingMessage = '',
+      timeoutMs = actionTimeoutMs,
+      timeoutLabel = workingMessage.replace(/中$/, '') || '操作',
+      messageSink,
+      cancellable = false,
+      onTimeout
+    } = options;
     const api = window.youyu;
     if (!api) {
-      setSnapshot((current) => ({ ...current, status: 'failed' }));
       setMessage('核心接口未加载');
+      messageSink?.('核心接口未加载');
       return;
     }
 
+    const request = cancellable ? createOperationRequest() : undefined;
     setBusy(true);
     setBusyLabel(workingMessage);
     setMessage('');
     messageSink?.('');
     try {
-      const next = await withTimeout(action(api), timeoutMs);
+      const actionPromise = action(api, request);
+      const next =
+        cancellable || onTimeout
+          ? await withTimeout(actionPromise, timeoutMs, timeoutLabel, () => {
+              if (request) void api.cancelOperation(request.requestId).catch(() => false);
+              onTimeout?.(api);
+            })
+          : await actionPromise;
       setSnapshot(next);
       setSnapshotLoaded(true);
       setMessage(doneMessage);
       messageSink?.(doneMessage);
     } catch (error) {
+      if (error instanceof ActionTimeoutError && request) {
+        await api.cancelOperation(request.requestId).catch(() => false);
+      }
       const next = await api.getSnapshot().catch(() => snapshot);
-      setSnapshot(next.status === 'running' ? next : { ...next, status: 'failed' });
+      setSnapshot(next);
       setSnapshotLoaded(true);
       const errorMessage = getActionErrorMessage(error);
       setMessage(errorMessage);
@@ -193,7 +238,6 @@ export function App() {
   async function quickStart(subscriptionUrl: string) {
     const api = window.youyu;
     if (!api) {
-      setSnapshot((current) => ({ ...current, status: 'failed' }));
       setMessage('核心接口未加载');
       return;
     }
@@ -207,17 +251,47 @@ export function App() {
     setBusy(true);
     setBusyLabel('启动中');
     setMessage('');
+    const requestTracker = createOperationRequestTracker();
+    const quickStartController = new AbortController();
     try {
+      const saveRequest = requestTracker.next();
+      await withTimeout(
+        api.saveSettings(
+          {
+            ...easyStartSettings,
+            ...(snapshot.remoteSubscriptionUrl ? {} : { subscriptionUrl: nextUrl })
+          },
+          saveRequest
+        ),
+        actionTimeoutMs,
+        '保存',
+        () => {
+          quickStartController.abort(new Error('operation canceled'));
+          void api.cancelOperation(saveRequest.requestId).catch(() => false);
+        }
+      );
       const next = await withTimeout(
-        startEasyProxy(api, nextUrl, Boolean(snapshot.remoteSubscriptionUrl)),
-        actionTimeoutMs
+        startEasyProxy(api, requestTracker, quickStartController.signal),
+        actionTimeoutMs,
+        '启动',
+        () => {
+          quickStartController.abort(new Error('operation canceled'));
+          if (requestTracker.current) {
+            void api.cancelOperation(requestTracker.current.requestId).catch(() => false);
+          }
+          void api.cancelNodeTests().catch(() => undefined);
+        }
       );
       setSnapshot(next);
       setSnapshotLoaded(true);
       setMessage('已启动');
     } catch (error) {
+      if (error instanceof ActionTimeoutError && requestTracker.current) {
+        await api.cancelOperation(requestTracker.current.requestId).catch(() => false);
+        await api.cancelNodeTests().catch(() => undefined);
+      }
       const next = await api.getSnapshot().catch(() => snapshot);
-      setSnapshot(next.status === 'running' ? next : { ...next, status: 'failed' });
+      setSnapshot(next);
       setSnapshotLoaded(true);
       setMessage(getActionErrorMessage(error));
     } finally {
@@ -230,7 +304,12 @@ export function App() {
     setTestingAllNodes(true);
     testingAllNodesRef.current = true;
     try {
-      await runAction((api) => api.testAllNodes(), '测速完成', '测速中', nodeTestActionTimeoutMs);
+      await runAction((api) => api.testAllNodes(), '测速完成', {
+        workingMessage: '测速中',
+        timeoutMs: nodeTestActionTimeoutMs,
+        timeoutLabel: '测速',
+        onTimeout: (api) => void api.cancelNodeTests().catch(() => undefined)
+      });
     } finally {
       testingAllNodesRef.current = false;
       setTestingAllNodes(false);
@@ -270,7 +349,7 @@ export function App() {
     setSwitchingNode(name);
     setMessage('');
     try {
-      const next = await withTimeout(api.selectNode(name), actionTimeoutMs);
+      const next = await api.selectNode(name);
       setSnapshot(next);
       setSnapshotLoaded(true);
       const activeNode = next.nodes.find((node) => node.active)?.name || next.currentNode;
@@ -278,7 +357,7 @@ export function App() {
       setMessage(selected ? '已切换' : activeNode ? `已切至${activeNode}` : '切换失败');
     } catch (error) {
       const next = await api.getSnapshot().catch(() => snapshot);
-      setSnapshot(next.status === 'running' ? next : { ...next, status: 'failed' });
+      setSnapshot(next);
       setSnapshotLoaded(true);
       setMessage(getActionErrorMessage(error));
     } finally {
@@ -308,6 +387,7 @@ export function App() {
       <AppShell
         page={page}
         usageMode={usageMode}
+        inert={snapshotLoaded && !registered}
         onPageChange={setPage}
         onAdvancedUnlock={handleAdvancedUnlockClick}
       >
@@ -319,15 +399,33 @@ export function App() {
             busyLabel={busyLabel}
             message={message}
             onQuickStart={quickStart}
-            onStart={() => runAction((api) => api.start(), '已启动', '启动中')}
-            onStop={() => runAction((api) => api.stop(), '已停止', '停止中')}
-            onRepair={() => runAction((api) => api.repair(), '已修复', '修复中')}
+            onStart={() =>
+              runAction((api, request) => api.start(request), '已启动', {
+                workingMessage: '启动中',
+                timeoutLabel: '启动',
+                cancellable: true
+              })
+            }
+            onStop={() =>
+              runAction((api) => api.stop(), '已停止', {
+                workingMessage: '停止中',
+                timeoutLabel: '停止'
+              })
+            }
+            onRepair={() =>
+              runAction((api, request) => api.repair(request), '已修复', {
+                workingMessage: '修复中',
+                timeoutLabel: '修复',
+                cancellable: true
+              })
+            }
             onModeChange={(mode: MihomoMode) => runAction((api) => api.setMode(mode), '模式已切换')}
             onStrategyChange={(strategy) => runAction((api) => api.selectStrategy(strategy), '已切换')}
             onOpenNodes={() => setPage('nodes')}
             onUsageModeChange={changeUsageMode}
-            onCheckUpdate={() => runAction((api) => api.checkForUpdates(), '', '检查中')}
-            onInstallUpdate={() => runAction((api) => api.installUpdate(), '', '安装中')}
+            onInstallUpdate={() =>
+              runAction((api) => api.installUpdate(), '', { workingMessage: '安装中', timeoutLabel: '安装更新' })
+            }
           />
         )}
         {page === 'nodes' && (
@@ -342,11 +440,27 @@ export function App() {
             onTestNode={(name) => runAction((api) => api.testNode(name), '测速完成')}
             onTestAll={testAllNodes}
             onCancelTestAll={cancelNodeTests}
-            onRefresh={() => runAction((api) => api.updateSubscription(), '已更新', '更新中')}
+            onRefresh={() =>
+              runAction((api, request) => api.updateSubscription(request), '已更新', {
+                workingMessage: '更新中',
+                timeoutLabel: '更新',
+                cancellable: true
+              })
+            }
           />
         )}
         {page === 'test' && <TestPage snapshot={snapshot} />}
-        {page === 'petPreview' && <PetPreviewPage />}
+        {page === 'petPreview' && (
+          <Suspense
+            fallback={
+              <div className="page-loading" role="status">
+                加载中
+              </div>
+            }
+          >
+            <PetPreviewPage />
+          </Suspense>
+        )}
         {page === 'settings' && (
           <Settings
             snapshot={snapshot}
@@ -354,15 +468,44 @@ export function App() {
             busyLabel={busyLabel}
             message={settingsMessage}
             onBack={() => setPage('home')}
-            onRepair={() => runAction((api) => api.repair(), '已修复', '修复中', actionTimeoutMs, setSettingsMessage)}
+            onRepair={() =>
+              runAction((api, request) => api.repair(request), '已修复', {
+                workingMessage: '修复中',
+                timeoutLabel: '修复',
+                messageSink: setSettingsMessage,
+                cancellable: true
+              })
+            }
             onSave={(settings: AppSettingsInput) =>
-              runAction((api) => api.saveSettings(settings), '已保存', '保存中', actionTimeoutMs, setSettingsMessage)
+              runAction((api, request) => api.saveSettings(settings, request), '已保存', {
+                workingMessage: '保存中',
+                timeoutLabel: '保存',
+                messageSink: setSettingsMessage,
+                cancellable: true
+              })
             }
             onSyncRemoteConfig={() =>
-              runAction((api) => api.syncRemoteConfig(), '已同步', '同步中', actionTimeoutMs, setSettingsMessage)
+              runAction((api, request) => api.syncRemoteConfig(request), '已同步', {
+                workingMessage: '同步中',
+                timeoutLabel: '同步',
+                messageSink: setSettingsMessage,
+                cancellable: true
+              })
             }
-            onCheckUpdate={() => runAction((api) => api.checkForUpdates(), '', '检查中', actionTimeoutMs, setSettingsMessage)}
-            onInstallUpdate={() => runAction((api) => api.installUpdate(), '', '安装中', actionTimeoutMs, setSettingsMessage)}
+            onCheckUpdate={() =>
+              runAction((api) => api.checkForUpdates(), '', {
+                workingMessage: '检查中',
+                timeoutLabel: '检查更新',
+                messageSink: setSettingsMessage
+              })
+            }
+            onInstallUpdate={() =>
+              runAction((api) => api.installUpdate(), '', {
+                workingMessage: '安装中',
+                timeoutLabel: '安装更新',
+                messageSink: setSettingsMessage
+              })
+            }
           />
         )}
       </AppShell>
@@ -370,7 +513,12 @@ export function App() {
         <RegistrationGate
           busy={busy}
           message={message}
-          onRegister={(input) => runAction((api) => api.registerTrafficIdentity(input), '已登记', '登记中')}
+          onRegister={(input) =>
+            runAction((api) => api.registerTrafficIdentity(input), '已登记', {
+              workingMessage: '登记中',
+              timeoutLabel: '登记'
+            })
+          }
         />
       )}
       {busyLabel === '修复中' && (
@@ -396,23 +544,33 @@ function readInitialPage(): PageKey {
   return 'home';
 }
 
-async function startEasyProxy(
+export async function startEasyProxy(
   api: NonNullable<Window['youyu']>,
-  subscriptionUrl: string,
-  remoteManaged = false
+  requestTracker: OperationRequestTracker,
+  signal?: AbortSignal
 ): Promise<AppSnapshot> {
   try {
-    return await startAndSelectUsableNode(api, subscriptionUrl, remoteManaged);
+    return await startAndSelectUsableNode(api, requestTracker, signal);
   } catch (error) {
-    if (isInputError(error)) {
+    if (isInputError(error) || isOperationCancelled(error)) {
       throw error;
     }
 
-    await api.repair().catch(() => undefined);
+    signal?.throwIfAborted();
+    await api.repair(requestTracker.next()).catch((repairError) => {
+      if (isOperationCancelled(repairError)) throw repairError;
+      return undefined;
+    });
+    signal?.throwIfAborted();
     try {
-      return await startAndSelectUsableNode(api, subscriptionUrl, remoteManaged);
+      return await startAndSelectUsableNode(api, requestTracker, signal);
     } catch (retryError) {
-      await api.repair().catch(() => undefined);
+      if (isOperationCancelled(retryError)) throw retryError;
+      signal?.throwIfAborted();
+      await api.repair(requestTracker.next()).catch((repairError) => {
+        if (isOperationCancelled(repairError)) throw repairError;
+        return undefined;
+      });
       throw retryError;
     }
   }
@@ -420,34 +578,48 @@ async function startEasyProxy(
 
 async function startAndSelectUsableNode(
   api: NonNullable<Window['youyu']>,
-  subscriptionUrl: string,
-  remoteManaged: boolean
+  requestTracker: OperationRequestTracker,
+  signal?: AbortSignal
 ): Promise<AppSnapshot> {
-  const saved = await api.saveSettings({
-    ...easyStartSettings,
-    ...(remoteManaged ? {} : { subscriptionUrl })
-  });
-  const started = saved.status === 'running' ? saved : await api.start();
-  return ensureUsableNode(api, started);
+  signal?.throwIfAborted();
+  const current = await api.getSnapshot();
+  signal?.throwIfAborted();
+  const started = current.status === 'running' ? current : await api.start(requestTracker.next());
+  signal?.throwIfAborted();
+  return ensureUsableNode(api, started, requestTracker, signal);
 }
 
 async function ensureUsableNode(
   api: NonNullable<Window['youyu']>,
-  snapshot: AppSnapshot
+  snapshot: AppSnapshot,
+  requestTracker: OperationRequestTracker,
+  signal?: AbortSignal
 ): Promise<AppSnapshot> {
   let next = snapshot;
   if (!next.nodes.length) {
-    next = await api.updateSubscription().catch(() => next);
+    signal?.throwIfAborted();
+    next = await api.updateSubscription(requestTracker.next()).catch((error) => {
+      if (isOperationCancelled(error)) throw error;
+      return next;
+    });
+    signal?.throwIfAborted();
   }
 
-  next = await api.testAllNodes().catch(() => next);
+  signal?.throwIfAborted();
+  next = await api.testAllNodes().catch((error) => {
+    if (isOperationCancelled(error)) throw error;
+    return next;
+  });
+  signal?.throwIfAborted();
   const activeMeasured = next.nodes.some((node) => node.active && isUsableDelay(node.delay));
   const bestNode = next.nodes
     .filter((node) => isUsableDelay(node.delay))
     .sort((left, right) => (left.delay ?? Number.MAX_SAFE_INTEGER) - (right.delay ?? Number.MAX_SAFE_INTEGER))[0];
 
   if (bestNode && !activeMeasured) {
-    return api.selectBestAutoNode();
+    const selected = await api.selectBestAutoNode(requestTracker.next());
+    signal?.throwIfAborted();
+    return selected;
   }
 
   if (!bestNode) {
@@ -466,7 +638,16 @@ function isInputError(error: unknown): boolean {
   return message.includes('missing subscription url') || message.includes('核心接口未加载');
 }
 
-function RegistrationGate({
+function isOperationCancelled(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('operation canceled') ||
+    message.includes('node testing cancelled') ||
+    message.includes('AbortError')
+  );
+}
+
+export function RegistrationGate({
   busy,
   message,
   onRegister
@@ -477,61 +658,116 @@ function RegistrationGate({
 }) {
   const [name, setName] = useState('');
   const [passphrase, setPassphrase] = useState('');
+  const dialogRef = useRef<HTMLElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const canSubmit = Boolean(name.trim() && passphrase.trim());
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    nameInputRef.current?.focus();
+    return () => previouslyFocused?.focus();
+  }, []);
 
   function submit() {
     if (busy || !canSubmit) return;
     onRegister({ name: name.trim(), passphrase: passphrase.trim() });
   }
 
+  function trapFocus(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key !== 'Tab') return;
+    const focusable = getFocusableElements(dialogRef.current);
+    if (!focusable.length) return;
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !dialogRef.current?.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
-    <div className="registration-gate" role="dialog" aria-modal="true" aria-labelledby="registration-title">
-      <section className="registration-dialog">
+    <div
+      className="registration-gate"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="registration-title"
+      aria-describedby="registration-description registration-status"
+    >
+      <section ref={dialogRef} className="registration-dialog" aria-busy={busy} onKeyDown={trapFocus}>
         <div>
           <h1 id="registration-title">使用登记</h1>
-          <p>填写姓名后开始使用</p>
+          <p id="registration-description">填写姓名和口令后开始使用</p>
         </div>
-        <label className="field">
-          <span>姓名</span>
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') submit();
-            }}
-            autoFocus
-          />
-        </label>
-        <label className="field">
-          <span>口令</span>
-          <input
-            type="password"
-            value={passphrase}
-            onChange={(event) => setPassphrase(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') submit();
-            }}
-          />
-        </label>
-        <button className="wide-button" disabled={busy || !canSubmit} onClick={submit}>
-          登记
-        </button>
-        <div className="registration-status" aria-live="polite">
-          {busy && <span className="registration-spinner" aria-hidden="true" />}
-          <span>{busy ? '登记中' : message}</span>
-        </div>
+        <form
+          className="registration-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+        >
+          <label className="field">
+            <span>姓名</span>
+            <input
+              ref={nameInputRef}
+              name="name"
+              autoComplete="name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              readOnly={busy}
+              aria-disabled={busy}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>口令</span>
+            <input
+              name="registration-passphrase"
+              type="password"
+              autoComplete="off"
+              value={passphrase}
+              onChange={(event) => setPassphrase(event.target.value)}
+              readOnly={busy}
+              aria-disabled={busy}
+              required
+            />
+          </label>
+          <button type="submit" className="wide-button" disabled={busy || !canSubmit}>
+            登记
+          </button>
+          <div id="registration-status" className="registration-status" aria-live="polite" aria-atomic="true">
+            {busy && <span className="registration-spinner" aria-hidden="true" />}
+            <span>{busy ? '登记中' : message}</span>
+          </div>
+        </form>
       </section>
     </div>
   );
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  operation = '操作',
+  onTimeout?: () => void
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error('operation timed out')), timeoutMs);
+        timer = setTimeout(() => {
+          try {
+            onTimeout?.();
+          } catch {
+            // The timeout result must not depend on best-effort cancellation.
+          }
+          reject(new ActionTimeoutError(operation));
+        }, timeoutMs);
       })
     ]);
   } finally {
@@ -539,9 +775,11 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 }
 
-function getActionErrorMessage(error: unknown): string {
+export function getActionErrorMessage(error: unknown): string {
+  if (error instanceof ActionTimeoutError) return `${error.operation}超时`;
   const message = error instanceof Error ? error.message : String(error);
-  if (message.includes('operation timed out')) return '启动超时';
+  if (message.includes('operation timed out')) return '操作超时';
+  if (message.includes('operation canceled')) return '已取消';
   if (message.includes('node testing cancelled') || message.includes('AbortError')) return '已停止';
   if (message.includes('missing subscription url')) return '先填写订阅地址';
   if (message.includes('no usable proxy node')) return '没有可用节点';
@@ -554,11 +792,52 @@ function getActionErrorMessage(error: unknown): string {
   if (message.includes('traffic activation failed: 403')) return '口令不对';
   if (message.includes('traffic activation failed: 429')) return '请求太频繁';
   if (message.includes('traffic activation failed: 5')) return '后台暂时不可用';
-  if (message.includes('remote config failed: 401') || message.includes('traffic report failed: 401')) return '请重新登记';
-  if (message.includes('signature required') || message.includes('invalid signature') || message.includes('stale signature')) return '请重新登记';
+  if (message.includes('remote config failed: 401') || message.includes('traffic report failed: 401'))
+    return '请重新登记';
+  if (
+    message.includes('signature required') ||
+    message.includes('invalid signature') ||
+    message.includes('stale signature')
+  )
+    return '请重新登记';
   if (message.includes('traffic request timed out')) return '连接后台超时';
   if (message.includes('fetch failed') || message.includes('Failed to fetch')) return '连接后台失败';
   if (message.includes('mihomo api failed')) return '更新失败';
   if (message.includes('mihomo controller')) return '启动失败';
   return '操作失败';
+}
+
+class ActionTimeoutError extends Error {
+  constructor(readonly operation: string) {
+    super(`operation timed out: ${operation}`);
+    this.name = 'ActionTimeoutError';
+  }
+}
+
+function createOperationRequest(): OperationRequest {
+  return { requestId: globalThis.crypto?.randomUUID?.() ?? createFallbackRequestId() };
+}
+
+export function createOperationRequestTracker(): OperationRequestTracker {
+  const tracker: OperationRequestTracker = {
+    next: () => {
+      const request = createOperationRequest();
+      tracker.current = request;
+      return request;
+    }
+  };
+  return tracker;
+}
+
+function createFallbackRequestId(): string {
+  return `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getFocusableElements(container: HTMLElement | null): HTMLElement[] {
+  if (!container) return [];
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+  );
 }

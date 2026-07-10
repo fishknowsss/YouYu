@@ -199,13 +199,7 @@ export type AppDiagnostics = {
 };
 
 export type AppUpdateStatus =
-  | 'idle'
-  | 'checking'
-  | 'available'
-  | 'downloading'
-  | 'downloaded'
-  | 'not-available'
-  | 'failed';
+  'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'failed';
 
 export type AppUpdateSnapshot = {
   currentVersion: string;
@@ -244,6 +238,10 @@ export type TrafficRegistrationInput = {
   passphrase: string;
 };
 
+export type OperationRequest = {
+  requestId: string;
+};
+
 export type AppSnapshot = {
   status: AppStatus;
   currentNode: string;
@@ -259,6 +257,7 @@ export type AppSnapshot = {
   trafficIdentity?: TrafficIdentity;
   subscriptionUrl: string;
   remoteSubscriptionUrl?: string;
+  subscriptionRevision?: number;
   update: AppUpdateSnapshot;
   diagnostics: AppDiagnostics;
 };
@@ -272,11 +271,11 @@ export type YouYuApi = {
   stopPetDrag: (moved?: boolean) => Promise<DesktopPetState | undefined>;
   setPetMousePassthrough: (passthrough: boolean) => Promise<void>;
   showMainWindow: () => Promise<void>;
-  start: () => Promise<AppSnapshot>;
-  stop: () => Promise<AppSnapshot>;
-  repair: () => Promise<AppSnapshot>;
+  start: (request?: OperationRequest) => Promise<AppSnapshot>;
+  stop: (request?: OperationRequest) => Promise<AppSnapshot>;
+  repair: (request?: OperationRequest) => Promise<AppSnapshot>;
   selectNode: (name: string) => Promise<AppSnapshot>;
-  selectBestAutoNode: () => Promise<AppSnapshot>;
+  selectBestAutoNode: (request?: OperationRequest) => Promise<AppSnapshot>;
   selectStrategy: (strategy: StrategyKey) => Promise<AppSnapshot>;
   setMode: (mode: MihomoMode) => Promise<AppSnapshot>;
   testNode: (name: string) => Promise<AppSnapshot>;
@@ -285,10 +284,11 @@ export type YouYuApi = {
   testConnectivity: (key: ConnectivityServiceKey) => Promise<ConnectivityResult>;
   testAllConnectivity: () => Promise<ConnectivityResult[]>;
   closeConnections: () => Promise<AppSnapshot>;
-  updateSubscription: () => Promise<AppSnapshot>;
-  saveSettings: (settings: AppSettingsInput) => Promise<AppSnapshot>;
+  updateSubscription: (request?: OperationRequest) => Promise<AppSnapshot>;
+  saveSettings: (settings: AppSettingsInput, request?: OperationRequest) => Promise<AppSnapshot>;
   registerTrafficIdentity: (input: TrafficRegistrationInput) => Promise<AppSnapshot>;
-  syncRemoteConfig: () => Promise<AppSnapshot>;
+  syncRemoteConfig: (request?: OperationRequest) => Promise<AppSnapshot>;
+  cancelOperation: (requestId: string) => Promise<boolean>;
   checkForUpdates: () => Promise<AppSnapshot>;
   installUpdate: () => Promise<AppSnapshot>;
 };
@@ -319,6 +319,7 @@ export const ipcChannels = {
   saveSettings: 'youyu:save-settings',
   registerTrafficIdentity: 'youyu:register-traffic-identity',
   syncRemoteConfig: 'youyu:sync-remote-config',
+  cancelOperation: 'youyu:cancel-operation',
   checkForUpdates: 'youyu:check-for-updates',
   installUpdate: 'youyu:install-update'
 } as const;

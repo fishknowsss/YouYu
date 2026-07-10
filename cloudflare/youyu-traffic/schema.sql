@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS traffic_reports (
 );
 
 CREATE INDEX IF NOT EXISTS idx_traffic_reports_user_created ON traffic_reports(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_traffic_reports_created_at ON traffic_reports(created_at);
 
 CREATE TABLE IF NOT EXISTS rate_limits (
   key TEXT PRIMARY KEY,
@@ -53,6 +54,8 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   reset_at INTEGER NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_rate_limits_reset_at ON rate_limits(reset_at);
 
 CREATE TABLE IF NOT EXISTS remote_config (
   id INTEGER PRIMARY KEY CHECK (id = 1),

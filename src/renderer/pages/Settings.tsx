@@ -168,7 +168,12 @@ export function Settings({
             )}
           </div>
 
-          <UpdatePanel snapshot={snapshot} busy={busy} onCheckUpdate={onCheckUpdate} onInstallUpdate={onInstallUpdate} />
+          <UpdatePanel
+            snapshot={snapshot}
+            busy={busy}
+            onCheckUpdate={onCheckUpdate}
+            onInstallUpdate={onInstallUpdate}
+          />
         </div>
       </section>
     </div>

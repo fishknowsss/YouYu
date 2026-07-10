@@ -63,6 +63,21 @@ describe('node availability health', () => {
     await expect(store.getTodayAvailability('JP Tokyo', new Date(2026, 6, 4, 0))).resolves.toBeUndefined();
   });
 
+  it('serializes concurrent node updates without dropping either record', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-node-health-'));
+    tempDirs.push(dir);
+    const store = new NodeHealthStore(dir);
+    const checkedAt = new Date(2026, 6, 3, 12);
+
+    await Promise.all([
+      store.saveAvailability(createAvailabilityRecord('JP Tokyo', [createConnectivityResult('available')], checkedAt)),
+      store.saveAvailability(createAvailabilityRecord('US West', [createConnectivityResult('blocked')], checkedAt))
+    ]);
+
+    await expect(store.getTodayAvailability('JP Tokyo', checkedAt)).resolves.toBeDefined();
+    await expect(store.getTodayAvailability('US West', checkedAt)).resolves.toBeDefined();
+  });
+
   it('recalculates cached availability tone after probe thresholds change', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'youyu-node-health-'));
     tempDirs.push(dir);

@@ -313,13 +313,8 @@ proxies:
     });
     const config = parse(yamlText);
 
-    expect(config.proxies.map((proxy: { name: string }) => proxy.name)).toEqual([
-      '中国移动 香港 01',
-      '电信 日本 02'
-    ]);
-    expect(config['proxy-groups'][0].proxies).toEqual(
-      expect.arrayContaining(['中国移动 香港 01', '电信 日本 02'])
-    );
+    expect(config.proxies.map((proxy: { name: string }) => proxy.name)).toEqual(['中国移动 香港 01', '电信 日本 02']);
+    expect(config['proxy-groups'][0].proxies).toEqual(expect.arrayContaining(['中国移动 香港 01', '电信 日本 02']));
     expect(config['proxy-groups'][0].proxies).not.toContain('中国联通 订阅地址');
     expect(config['proxy-groups'][0].proxies).not.toContain('中国移动 剩余流量 100 GB');
     expect(config['proxy-groups'][0].proxies).not.toContain('联通移动用中转，电信移动cf');
@@ -499,9 +494,7 @@ rules:
     expect(config.rules.indexOf('DOMAIN-SUFFIX,weixin.qq.com,DIRECT')).toBeLessThan(
       config.rules.indexOf('RULE-SET,proxy,PROXY')
     );
-    expect(config.rules.indexOf('RULE-SET,direct,DIRECT')).toBeLessThan(
-      config.rules.indexOf('RULE-SET,proxy,PROXY')
-    );
+    expect(config.rules.indexOf('RULE-SET,direct,DIRECT')).toBeLessThan(config.rules.indexOf('RULE-SET,proxy,PROXY'));
     expect(config.rules.indexOf('RULE-SET,cncidr,DIRECT,no-resolve')).toBeLessThan(
       config.rules.indexOf('RULE-SET,gfw,PROXY')
     );

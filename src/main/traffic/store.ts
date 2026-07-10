@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
 import type { PersistentTrafficStats, TrafficIdentity } from '../../shared/ipc';
+import { readJsonFile, writeJsonFileAtomic } from '../storage/jsonFile';
 
 type TrafficDay = {
   upload: number;
@@ -20,7 +21,7 @@ type TrafficFile = {
   version: number;
   deviceSeed: string;
   identity?: TrafficIdentity;
-  pendingRegistration?: TrafficRegistrationSecret;
+  pendingRegistration?: StoredTrafficRegistrationSecret;
   totalUpload: number;
   totalDownload: number;
   serverTotalUpload?: number;
@@ -43,36 +44,84 @@ type TrafficRegistrationSecret = {
   passphrase: string;
 };
 
+type StoredTrafficRegistrationSecret = {
+  name: string;
+  encryptedPassphrase?: string;
+  passphrase?: string;
+};
+
+export type TrafficSecretStorage = {
+  isEncryptionAvailable: () => boolean;
+  encryptString: (value: string) => Buffer;
+  decryptString: (value: Buffer) => string;
+};
+
+type TrafficStoreOptions = {
+  secretStorage?: TrafficSecretStorage;
+};
+
 const trafficFileName = 'traffic.json';
-const currentVersion = 1;
+const currentVersion = 2;
 
 export class TrafficStore {
   private readonly filePath: string;
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly baseDir: string) {
+  constructor(
+    private readonly baseDir: string,
+    private readonly options: TrafficStoreOptions = {}
+  ) {
     this.filePath = join(baseDir, trafficFileName);
   }
 
   async read(): Promise<TrafficFile> {
-    try {
-      const raw = await readFile(this.filePath, 'utf8');
-      try {
-        return this.normalize(JSON.parse(raw) as Partial<TrafficFile>);
-      } catch {
+    const result = await readJsonFile<Partial<TrafficFile>>(this.filePath, {
+      preserveInvalid: false,
+      validate: (value) =>
+        typeof value?.deviceSeed === 'string' &&
+        typeof value.totalUpload === 'number' &&
+        typeof value.totalDownload === 'number' &&
+        Boolean(value.daily) &&
+        typeof value.daily === 'object',
+      repair: (raw) => {
         const repaired = repairKnownTrafficJsonDamage(raw);
-        if (repaired) {
-          const normalized = this.normalize(repaired);
-          await this.write(normalized);
-          return normalized;
-        }
-        throw new Error('traffic file invalid');
+        return repaired ? this.normalize(repaired) : undefined;
       }
-    } catch {
-      const defaults = this.createDefaults();
-      await this.write(defaults);
-      return defaults;
+    });
+    if (result.status === 'found') {
+      const normalized = this.normalize(result.value);
+      const legacyPending = normalized.pendingRegistration;
+      if (legacyPending?.passphrase && !this.options.secretStorage?.isEncryptionAvailable()) {
+        const sanitized = {
+          ...normalized,
+          identity: normalized.identity?.verificationStatus === 'pending' ? undefined : normalized.identity,
+          pendingRegistration: undefined,
+          reportStatus: 'failed' as const,
+          reportError: 'secure traffic registration storage is unavailable'
+        };
+        await this.write(sanitized, false);
+        await this.removeLegacySecretArtifacts();
+        return sanitized;
+      }
+      if (legacyPending?.passphrase) {
+        const migrated = {
+          ...normalized,
+          pendingRegistration: {
+            name: legacyPending.name,
+            encryptedPassphrase: this.encryptPassphrase(legacyPending.passphrase)
+          }
+        };
+        await this.write(migrated, false);
+        await this.removeLegacySecretArtifacts();
+        return migrated;
+      }
+      return normalized;
     }
+
+    const defaults = this.createDefaults();
+    await this.write(defaults, false);
+    await this.removeLegacySecretArtifacts();
+    return defaults;
   }
 
   async addTraffic(
@@ -119,7 +168,7 @@ export class TrafficStore {
         reportStatus:
           current.identity && (current.pendingUpload + upload > 0 || current.pendingDownload + download > 0)
             ? 'pending'
-            : current.reportStatus ?? 'idle',
+            : (current.reportStatus ?? 'idle'),
         reportError: undefined
       };
       await this.write(next);
@@ -134,7 +183,9 @@ export class TrafficStore {
         ...identity,
         name: identity.name.trim(),
         deviceName: identity.deviceName?.trim() || hostname(),
-        registeredAt: sameIdentity ? current.identity?.registeredAt ?? new Date().toISOString() : new Date().toISOString(),
+        registeredAt: sameIdentity
+          ? (current.identity?.registeredAt ?? new Date().toISOString())
+          : new Date().toISOString(),
         lastReportedAt: sameIdentity ? current.identity?.lastReportedAt : undefined,
         verificationStatus: identity.verificationStatus ?? 'verified'
       };
@@ -172,7 +223,7 @@ export class TrafficStore {
         ...getServerTotalState(current, false),
         pendingRegistration: {
           name,
-          passphrase
+          encryptedPassphrase: this.encryptPassphrase(passphrase)
         },
         reportStatus: 'pending',
         reportError: 'traffic activation pending'
@@ -182,14 +233,52 @@ export class TrafficStore {
   }
 
   async getPendingRegistration(): Promise<TrafficRegistrationSecret | undefined> {
-    const current = await this.read();
-    if (current.identity?.verificationStatus !== 'pending') return undefined;
-    const pending = current.pendingRegistration;
-    if (!pending?.name.trim() || !pending.passphrase.trim()) return undefined;
-    return {
-      name: pending.name.trim(),
-      passphrase: pending.passphrase.trim()
-    };
+    return this.enqueue(async () => {
+      const current = await this.read();
+      if (current.identity?.verificationStatus !== 'pending') return undefined;
+      const pending = current.pendingRegistration;
+      if (!pending?.name.trim()) return undefined;
+
+      let passphrase: string | undefined;
+      try {
+        passphrase = pending.encryptedPassphrase
+          ? this.decryptPassphrase(pending.encryptedPassphrase)
+          : pending.passphrase?.trim();
+      } catch {
+        await this.write(
+          {
+            ...current,
+            identity: undefined,
+            pendingRegistration: undefined,
+            reportStatus: 'failed',
+            reportError: 'traffic registration secret cannot be decrypted'
+          },
+          false
+        );
+        await this.removeLegacySecretArtifacts();
+        return undefined;
+      }
+      if (!passphrase) return undefined;
+
+      if (!pending.encryptedPassphrase) {
+        await this.write(
+          {
+            ...current,
+            pendingRegistration: {
+              name: pending.name.trim(),
+              encryptedPassphrase: this.encryptPassphrase(passphrase)
+            }
+          },
+          false
+        );
+        await this.removeLegacySecretArtifacts();
+      }
+
+      return {
+        name: pending.name.trim(),
+        passphrase
+      };
+    });
   }
 
   async clearIdentity(message?: string): Promise<void> {
@@ -234,7 +323,10 @@ export class TrafficStore {
     });
   }
 
-  async markServerTotals(input: { totalUpload?: number; totalDownload?: number }, syncedAt = new Date()): Promise<void> {
+  async markServerTotals(
+    input: { totalUpload?: number; totalDownload?: number },
+    syncedAt = new Date()
+  ): Promise<void> {
     const totalUpload = normalizeOptionalBytes(input.totalUpload);
     const totalDownload = normalizeOptionalBytes(input.totalDownload);
     if (typeof totalUpload !== 'number' || typeof totalDownload !== 'number') return;
@@ -316,9 +408,39 @@ export class TrafficStore {
     };
   }
 
-  private async write(value: TrafficFile): Promise<void> {
-    await mkdir(this.baseDir, { recursive: true });
-    await writeFile(this.filePath, `${JSON.stringify(this.normalize(value), null, 2)}\n`, 'utf8');
+  private async write(value: TrafficFile, backupExisting = true): Promise<void> {
+    await writeJsonFileAtomic(this.filePath, this.normalize(value), { backupExisting, preserveInvalid: false });
+  }
+
+  private async removeLegacySecretArtifacts(): Promise<void> {
+    const entries = await readdir(this.baseDir).catch(() => []);
+    await Promise.all(
+      entries
+        .filter((name) => name.startsWith(`${trafficFileName}.corrupt-`) || name.startsWith(`${trafficFileName}.tmp-`))
+        .map((name) => rm(join(this.baseDir, name), { force: true }))
+    );
+  }
+
+  private encryptPassphrase(passphrase: string): string {
+    const secretStorage = this.getSecretStorage();
+    return secretStorage.encryptString(passphrase).toString('base64');
+  }
+
+  private decryptPassphrase(encryptedPassphrase: string): string {
+    const secretStorage = this.getSecretStorage();
+    try {
+      return secretStorage.decryptString(Buffer.from(encryptedPassphrase, 'base64')).trim();
+    } catch {
+      throw new Error('traffic registration secret cannot be decrypted');
+    }
+  }
+
+  private getSecretStorage(): TrafficSecretStorage {
+    const secretStorage = this.options.secretStorage;
+    if (!secretStorage?.isEncryptionAvailable()) {
+      throw new Error('secure traffic registration storage is unavailable');
+    }
+    return secretStorage;
   }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -390,7 +512,10 @@ function isSameTrafficIdentity(
 function getServerTotalState(
   current: TrafficFile,
   keep: boolean
-): Pick<TrafficFile, 'serverTotalUpload' | 'serverTotalDownload' | 'serverUserId' | 'serverDeviceId' | 'serverSyncedAt'> {
+): Pick<
+  TrafficFile,
+  'serverTotalUpload' | 'serverTotalDownload' | 'serverUserId' | 'serverDeviceId' | 'serverSyncedAt'
+> {
   if (keep) {
     return {
       serverTotalUpload: current.serverTotalUpload,
@@ -410,10 +535,7 @@ function getServerTotalState(
 }
 
 function repairKnownTrafficJsonDamage(raw: string): Partial<TrafficFile> | undefined {
-  const repairedRaw = raw.replace(
-    /("name"\s*:\s*")([^"\r\n]*?),?\r?\n(\s*"deviceName"\s*:)/,
-    '$1$2",\n$3'
-  );
+  const repairedRaw = raw.replace(/("name"\s*:\s*")([^"\r\n]*?),?\r?\n(\s*"deviceName"\s*:)/, '$1$2",\n$3');
 
   if (repairedRaw === raw) {
     return undefined;
@@ -426,12 +548,19 @@ function repairKnownTrafficJsonDamage(raw: string): Partial<TrafficFile> | undef
   }
 }
 
-function normalizePendingRegistration(value: unknown): TrafficRegistrationSecret | undefined {
+function normalizePendingRegistration(value: unknown): StoredTrafficRegistrationSecret | undefined {
   if (!value || typeof value !== 'object') return undefined;
-  const registration = value as Partial<TrafficRegistrationSecret>;
+  const registration = value as Partial<StoredTrafficRegistrationSecret>;
   const name = typeof registration.name === 'string' ? registration.name.trim() : '';
   const passphrase = typeof registration.passphrase === 'string' ? registration.passphrase.trim() : '';
-  return name && passphrase ? { name, passphrase } : undefined;
+  const encryptedPassphrase =
+    typeof registration.encryptedPassphrase === 'string' ? registration.encryptedPassphrase.trim() : '';
+  if (!name || (!passphrase && !encryptedPassphrase)) return undefined;
+  return {
+    name,
+    encryptedPassphrase: encryptedPassphrase || undefined,
+    passphrase: encryptedPassphrase ? undefined : passphrase
+  };
 }
 
 function normalizeDaily(value: unknown): Record<string, TrafficDay> {
@@ -522,9 +651,7 @@ function normalizeNodeName(value: unknown): string | undefined {
 }
 
 function normalizeReportStatus(value: unknown): PersistentTrafficStats['reportStatus'] {
-  return value === 'synced' || value === 'pending' || value === 'failed' || value === 'not-configured'
-    ? value
-    : 'idle';
+  return value === 'synced' || value === 'pending' || value === 'failed' || value === 'not-configured' ? value : 'idle';
 }
 
 function toDateKey(date: Date): string {

@@ -9,7 +9,14 @@ type NodeListProps = {
   onTestNode: (name: string) => void;
 };
 
-export function NodeList({ nodes, busy, switchingNode, emptyText = '先更新订阅', onSelect, onTestNode }: NodeListProps) {
+export function NodeList({
+  nodes,
+  busy,
+  switchingNode,
+  emptyText = '先更新订阅',
+  onSelect,
+  onTestNode
+}: NodeListProps) {
   if (nodes.length === 0) {
     return <div className="empty">{emptyText}</div>;
   }
@@ -18,9 +25,7 @@ export function NodeList({ nodes, busy, switchingNode, emptyText = '先更新订
     <div className="node-list">
       {nodes.map((node) => {
         const switching = switchingNode === node.name;
-        const className = ['node', node.active ? 'active' : '', switching ? 'switching' : '']
-          .filter(Boolean)
-          .join(' ');
+        const className = ['node', node.active ? 'active' : '', switching ? 'switching' : ''].filter(Boolean).join(' ');
 
         return (
           <div key={node.name} className={className}>

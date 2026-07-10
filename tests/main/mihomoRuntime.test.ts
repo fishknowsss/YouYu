@@ -258,9 +258,7 @@ proxies:
       )
     });
 
-    await expect(runtime.start()).rejects.toThrow(
-      'recent mihomo output: listen tcp 127.0.0.1:1053: bind failed'
-    );
+    await expect(runtime.start()).rejects.toThrow('recent mihomo output: listen tcp 127.0.0.1:1053: bind failed');
   });
 
   it('removes stale geo data files before spawning mihomo', async () => {
@@ -571,4 +569,54 @@ proxies:
     );
   });
 
+  it('uses the elevated launcher only when TUN is enabled', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const normalSpawn = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const elevatedSpawn = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ tunEnabled: true }),
+      spawnProcess: normalSpawn,
+      spawnElevatedProcess: elevatedSpawn,
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await runtime.start();
+
+    expect(elevatedSpawn).toHaveBeenCalledOnce();
+    expect(normalSpawn).not.toHaveBeenCalled();
+  });
+
+  it('kills an in-flight mihomo startup when the operation is cancelled', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.killed = false;
+    child.kill = vi.fn(() => {
+      child.killed = true;
+      queueMicrotask(() => child.emit('exit', null, 'SIGTERM'));
+      return true;
+    });
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      spawnProcess: () => child as never,
+      waitForReady: vi.fn(() => new Promise<void>(() => undefined))
+    });
+    const controller = new AbortController();
+    const startup = runtime.start(controller.signal);
+
+    await vi.waitFor(() => expect(runtime.isRunning?.()).toBe(true));
+    controller.abort(new Error('operation canceled'));
+
+    await expect(startup).rejects.toThrow();
+    expect(child.kill).toHaveBeenCalled();
+    expect(runtime.isRunning?.()).toBe(false);
+  });
 });

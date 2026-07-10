@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type {
   AppSnapshot,
   ConnectivityCategory,
@@ -26,7 +26,12 @@ const services: Array<{
 }> = [
   { key: 'steam', name: 'Steam', url: 'https://store.steampowered.com', category: 'special' },
   { key: 'steamNetwork', name: 'Steam 联机', url: 'https://api.steampowered.com', category: 'special' },
-  { key: 'steamCloud', name: 'Steam 云同步', url: 'https://steamcloud-ugc.storage.googleapis.com', category: 'special' },
+  {
+    key: 'steamCloud',
+    name: 'Steam 云同步',
+    url: 'https://steamcloud-ugc.storage.googleapis.com',
+    category: 'special'
+  },
   { key: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com', category: 'ai' },
   { key: 'claude', name: 'Claude', url: 'https://claude.ai', category: 'ai' },
   { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai' },
@@ -42,11 +47,15 @@ const services: Array<{
   { key: 'cloudflare', name: 'Cloudflare', url: 'https://www.cloudflare.com', category: 'global' }
 ];
 
-const cachedResultsByNode = new Map<string, TestResults>();
-const cachedActiveKeyByNode = new Map<string, ConnectivityServiceKey>();
+const maxCacheEntries = 12;
+const connectivityCache = new Map<string, { results: TestResults; activeKey: ConnectivityServiceKey }>();
 
 export function TestPage({ snapshot }: TestPageProps) {
-  const cacheKey = getCacheKey(snapshot);
+  const cacheKey = getConnectivityCacheKey(snapshot);
+  return <TestPageContent key={cacheKey} snapshot={snapshot} cacheKey={cacheKey} />;
+}
+
+function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: string }) {
   const [results, setResults] = useState<TestResults>(() => getCachedResults(cacheKey));
   const [activeKey, setActiveKey] = useState<ConnectivityServiceKey>(() => getCachedActiveKey(cacheKey));
   const [busyAll, setBusyAll] = useState(false);
@@ -55,11 +64,6 @@ export function TestPage({ snapshot }: TestPageProps) {
   const rows = useMemo(() => services.map((service) => results[service.key]), [results]);
   const active = results[activeKey];
   const summary = getSummary(rows);
-
-  useEffect(() => {
-    setResults(getCachedResults(cacheKey));
-    setActiveKey(getCachedActiveKey(cacheKey));
-  }, [cacheKey]);
 
   async function testOne(key: ConnectivityServiceKey) {
     const api = window.youyu;
@@ -110,13 +114,13 @@ export function TestPage({ snapshot }: TestPageProps) {
   }
 
   function selectActiveKey(key: ConnectivityServiceKey) {
-    cachedActiveKeyByNode.set(cacheKey, key);
+    setCachedActiveKey(cacheKey, key);
     setActiveKey(key);
   }
 
   function commitResults(updater: (current: TestResults) => TestResults) {
     const next = updater(getCachedResults(cacheKey));
-    cachedResultsByNode.set(cacheKey, next);
+    setCachedResults(cacheKey, next);
     setResults(next);
   }
 
@@ -153,7 +157,11 @@ export function TestPage({ snapshot }: TestPageProps) {
           <p>{proxyReady ? `当前节点：${snapshot.currentNode}` : '先启动代理'}</p>
         </div>
         <div className="header-actions">
-          <button className="secondary-button test-all-button" disabled={!apiReady || !proxyReady || busyAll} onClick={testAll}>
+          <button
+            className="secondary-button test-all-button"
+            disabled={!apiReady || !proxyReady || busyAll}
+            onClick={testAll}
+          >
             测全部
           </button>
         </div>
@@ -246,15 +254,7 @@ export function TestPage({ snapshot }: TestPageProps) {
   );
 }
 
-function SummaryItem({
-  label,
-  value,
-  tone
-}: {
-  label: string;
-  value: number | string;
-  tone?: 'available' | 'failed';
-}) {
+function SummaryItem({ label, value, tone }: { label: string; value: number | string; tone?: 'available' | 'failed' }) {
   return (
     <div className={`test-summary-item ${tone ?? ''}`}>
       <span>{label}</span>
@@ -263,20 +263,79 @@ function SummaryItem({
   );
 }
 
-function getCacheKey(snapshot: AppSnapshot): string {
-  return snapshot.currentNode || '未连接';
+export function getConnectivityCacheKey(snapshot: AppSnapshot): string {
+  return JSON.stringify({
+    subscription: snapshot.subscriptionUrl.trim(),
+    subscriptionRevision: snapshot.subscriptionRevision ?? 0,
+    remoteSubscription: snapshot.remoteSubscriptionUrl?.trim() ?? '',
+    identity: snapshot.trafficIdentity
+      ? [snapshot.trafficIdentity.userId, snapshot.trafficIdentity.deviceId, snapshot.trafficIdentity.registeredAt]
+      : [],
+    node: snapshot.currentNode || '未连接',
+    nodeSet: snapshot.nodes.map((node) => node.name).sort(),
+    mode: snapshot.mode,
+    strategy: snapshot.strategy,
+    ruleProfile: snapshot.ruleProfile,
+    routing: {
+      systemProxy: snapshot.features.systemProxyEnabled,
+      dns: snapshot.features.dnsEnhanced,
+      sniffer: snapshot.features.snifferEnabled,
+      tun: snapshot.features.tunEnabled,
+      strictRoute: snapshot.features.strictRouteEnabled,
+      allowLan: snapshot.features.allowLan
+    }
+  });
 }
 
 function getCachedActiveKey(cacheKey: string): ConnectivityServiceKey {
-  return cachedActiveKeyByNode.get(cacheKey) ?? 'steam';
+  return getCacheEntry(cacheKey).activeKey;
 }
 
 function getCachedResults(cacheKey: string): TestResults {
-  const cached = cachedResultsByNode.get(cacheKey);
-  if (cached) return cached;
-  const initial = createInitialResults();
-  cachedResultsByNode.set(cacheKey, initial);
-  return initial;
+  return getCacheEntry(cacheKey).results;
+}
+
+function setCachedResults(cacheKey: string, results: TestResults): void {
+  const current = getCacheEntry(cacheKey);
+  setCacheEntry(cacheKey, { ...current, results });
+}
+
+function setCachedActiveKey(cacheKey: string, activeKey: ConnectivityServiceKey): void {
+  const current = getCacheEntry(cacheKey);
+  setCacheEntry(cacheKey, { ...current, activeKey });
+}
+
+function getCacheEntry(cacheKey: string): { results: TestResults; activeKey: ConnectivityServiceKey } {
+  const cached = connectivityCache.get(cacheKey);
+  if (cached) {
+    setCacheEntry(cacheKey, cached);
+    return cached;
+  }
+  const created = { results: createInitialResults(), activeKey: 'steam' as ConnectivityServiceKey };
+  setCacheEntry(cacheKey, created);
+  return created;
+}
+
+function setCacheEntry(cacheKey: string, entry: { results: TestResults; activeKey: ConnectivityServiceKey }): void {
+  connectivityCache.delete(cacheKey);
+  connectivityCache.set(cacheKey, entry);
+  while (connectivityCache.size > maxCacheEntries) {
+    const oldest = connectivityCache.keys().next().value;
+    if (oldest === undefined) return;
+    connectivityCache.delete(oldest);
+  }
+}
+
+export function resetConnectivityCacheForTests(): void {
+  connectivityCache.clear();
+}
+
+export function getConnectivityCacheKeysForTests(): string[] {
+  return [...connectivityCache.keys()];
+}
+
+export function touchConnectivityCacheForTests(cacheKey: string): void {
+  getCacheEntry(cacheKey);
 }
 
 function createInitialResults(): TestResults {
@@ -297,10 +356,7 @@ function createInitialResults(): TestResults {
   ) as TestResults;
 }
 
-function markAllTesting(
-  current: TestResults,
-  testing: boolean
-): TestResults {
+function markAllTesting(current: TestResults, testing: boolean): TestResults {
   const next = { ...current };
   for (const key of Object.keys(next) as ConnectivityServiceKey[]) {
     next[key] = { ...next[key], testing };
@@ -324,10 +380,13 @@ function getSummary(rows: TestRow[]) {
   const totalMs = tested
     .map((row) => row.timings.totalMs)
     .filter((value): value is number => typeof value === 'number' && value > 0);
-  const averageMs = totalMs.length ? Math.round(totalMs.reduce((sum, value) => sum + value, 0) / totalMs.length) : undefined;
+  const averageMs = totalMs.length
+    ? Math.round(totalMs.reduce((sum, value) => sum + value, 0) / totalMs.length)
+    : undefined;
   return {
     available: rows.filter((row) => row.status === 'available').length,
-    blocked: rows.filter((row) => row.status === 'blocked' || row.status === 'timeout' || row.status === 'failed').length,
+    blocked: rows.filter((row) => row.status === 'blocked' || row.status === 'timeout' || row.status === 'failed')
+      .length,
     ipCount: new Set(rows.map((row) => row.ip).filter(Boolean)).size,
     averageMs
   };

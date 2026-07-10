@@ -47,6 +47,16 @@ describe('SettingsStore', () => {
     expect(after.controllerSecret).toBe(before.controllerSecret);
   });
 
+  it('serializes concurrent updates so unrelated fields are not lost', async () => {
+    const store = await makeStore();
+
+    await Promise.all([store.update({ mode: 'global' }), store.update({ strategy: 'manual' })]);
+
+    const current = await store.read();
+    expect(current.mode).toBe('global');
+    expect(current.strategy).toBe('manual');
+  });
+
   it('applies a remote subscription without replacing the local subscription', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'youyu-settings-'));
     tempDirs.push(dir);

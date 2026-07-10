@@ -13,14 +13,14 @@ directories:
 files:
   - out/**
   - package.json
-  - "!**/*.map"
-  - "!**/node_modules/.cache/**"
-  - "!**/release/**"
+  - '!**/*.map'
+  - '!**/node_modules/.cache/**'
+  - '!**/release/**'
 extraResources:
   - from: resources/mihomo
     to: mihomo
     filter:
-      - "**/*"
+      - '**/*'
   - from: resources/generated/default-subscription.txt
     to: default-subscription.txt
   - from: resources/traffic-api-url.txt
@@ -31,7 +31,7 @@ extraResources:
     to: assets/tray-icon.png
 win:
   icon: build/icon.ico
-  requestedExecutionLevel: requireAdministrator
+  requestedExecutionLevel: asInvoker
   target:
     - target: nsis
       arch:
@@ -39,13 +39,13 @@ win:
   artifactName: YouYu-${version}-${arch}.${ext}
 nsis:
   oneClick: false
-  perMachine: false
+  perMachine: true
   allowToChangeInstallationDirectory: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: YouYu
   uninstallDisplayName: YouYu ${version}
-  language: "2052"
+  language: '2052'
   installerLanguages:
     - zh_CN
   installerIcon: build/icon.ico

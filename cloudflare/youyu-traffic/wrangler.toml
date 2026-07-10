@@ -2,6 +2,9 @@ name = "youyu-traffic"
 main = "src/index.ts"
 compatibility_date = "2026-05-01"
 
+[triggers]
+crons = ["17 */6 * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "youyu_traffic"

@@ -38,6 +38,7 @@ export type MihomoRuntimeOptions = {
   logLine?: (line: string) => void;
   readRemoteConfig?: () => Promise<RemoteControlConfig | undefined>;
   spawnProcess?: (binaryPath: string, args: string[]) => SpawnedProcess;
+  spawnElevatedProcess?: (binaryPath: string, args: string[]) => SpawnedProcess;
   waitForReady?: (secret: string) => Promise<void>;
   onUnexpectedExit?: (reason: string) => void;
 };
@@ -53,13 +54,30 @@ const preferredDefaultNodeKeywordSets = [
 const subscriptionUserAgent = 'Clash Verge/2.3.2';
 const subscriptionCacheFileName = 'subscription-cache.yaml';
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return;
+  }
+  signal.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    };
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener('abort', abort, { once: true });
+  });
 }
 
-async function waitForController(secret: string, port: number): Promise<void> {
+async function waitForController(secret: string, port: number, signal?: AbortSignal): Promise<void> {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     try {
       const response = await fetch(`http://127.0.0.1:${port}/version`, {
         headers: {
@@ -70,7 +88,7 @@ async function waitForController(secret: string, port: number): Promise<void> {
     } catch {
       // The controller is not ready yet.
     }
-    await sleep(200);
+    await sleep(200, signal);
   }
   throw new Error(`mihomo controller not ready on 127.0.0.1:${port}`);
 }
@@ -79,12 +97,7 @@ function isControllerNotReadyError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('mihomo controller not ready');
 }
 
-async function requestController(
-  port: number,
-  secret: string,
-  path: string,
-  init?: RequestInit
-): Promise<Response> {
+async function requestController(port: number, secret: string, path: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(`http://127.0.0.1:${port}${path}`, {
     ...init,
     headers: {
@@ -228,10 +241,7 @@ function pickStartupNode(nodes: string[], selectedNode: string): string | undefi
   return pickDefaultNode(nodes);
 }
 
-function pickUsableNodeForGroup(
-  proxies: Record<string, MihomoProxyItem>,
-  group: string
-): string | undefined {
+function pickUsableNodeForGroup(proxies: Record<string, MihomoProxyItem>, group: string): string | undefined {
   const groupNodes = collectUsableNodes(proxies, proxies[group]?.all ?? []);
   return pickDefaultNode(groupNodes);
 }
@@ -273,13 +283,15 @@ async function waitForUsableProxies(
   port: number,
   selectedNode: string,
   strategy: AppSettings['strategy'],
-  logLine?: (line: string) => void
+  logLine?: (line: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const deadline = Date.now() + 25000;
   let refreshed = false;
   let lastSummary = 'no proxy data';
 
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     const proxies = await readProxies(port, secret);
     const selector = findSelector(proxies);
     const nodes = collectUsableNodes(proxies, selector?.item.all ?? []);
@@ -313,8 +325,8 @@ async function waitForUsableProxies(
           strategyTarget && target === strategyTarget
             ? `mihomo selected strategy: ${target}`
             : selectedNode.trim() && target === selectedNode.trim()
-            ? `mihomo restored selected node: ${target}`
-            : `mihomo selected default node: ${target}`
+              ? `mihomo restored selected node: ${target}`
+              : `mihomo selected default node: ${target}`
         );
       }
       return;
@@ -326,16 +338,19 @@ async function waitForUsableProxies(
       await refreshProviders(port, secret);
     }
 
-    await sleep(1000);
+    await sleep(1000, signal);
   }
 
   throw new Error(`mihomo has no usable subscription nodes after startup: ${lastSummary}`);
 }
 
-async function fetchSubscriptionConfigText(url: string): Promise<string | undefined> {
+async function fetchSubscriptionConfigText(url: string, operationSignal?: AbortSignal): Promise<string | undefined> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
+  const abort = () => controller.abort(operationSignal?.reason);
+  operationSignal?.addEventListener('abort', abort, { once: true });
   try {
+    operationSignal?.throwIfAborted();
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
@@ -347,13 +362,18 @@ async function fetchSubscriptionConfigText(url: string): Promise<string | undefi
     }
     return await response.text();
   } catch {
+    operationSignal?.throwIfAborted();
     return undefined;
   } finally {
     clearTimeout(timeout);
+    operationSignal?.removeEventListener('abort', abort);
   }
 }
 
-async function readCachedSubscriptionConfigText(cachePath: string, logLine?: (line: string) => void): Promise<string | undefined> {
+async function readCachedSubscriptionConfigText(
+  cachePath: string,
+  logLine?: (line: string) => void
+): Promise<string | undefined> {
   try {
     const cached = (await readFile(cachePath, 'utf8')).trim();
     if (!cached) return undefined;
@@ -391,7 +411,8 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
     );
   }
 
-  async function writeConfig() {
+  async function writeConfig(signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const settings = await options.readSettings();
     if (!settings.subscriptionUrl) {
       throw new Error('missing subscription url');
@@ -402,7 +423,8 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
     const ports = (await options.getPorts?.()) ?? { mixedPort: 7890, controllerPort: 9090 };
     const subscriptionCachePath = join(workDir, subscriptionCacheFileName);
     await mkdir(workDir, { recursive: true });
-    const fetchedSubscriptionConfigText = await fetchSubscriptionConfigText(settings.subscriptionUrl);
+    const fetchedSubscriptionConfigText = await fetchSubscriptionConfigText(settings.subscriptionUrl, signal);
+    signal?.throwIfAborted();
     await cacheSubscriptionConfigText(subscriptionCachePath, fetchedSubscriptionConfigText, options.logLine);
     const subscriptionConfigText =
       fetchedSubscriptionConfigText ?? (await readCachedSubscriptionConfigText(subscriptionCachePath, options.logLine));
@@ -441,47 +463,55 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
     const current = child;
     if (current && !current.killed) {
       stopping = true;
-      await new Promise<void>((resolve) => {
-        let settled = false;
-        const done = () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve();
-        };
-        const timer = setTimeout(done, 2500);
-        current.once('exit', done);
-        current.once('error', done);
-        current.kill();
-      });
-      stopping = false;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const done = (error?: Error) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (error) reject(error);
+            else resolve();
+          };
+          const timer = setTimeout(() => done(new Error('mihomo process did not exit after cancellation')), 10_000);
+          current.once('exit', () => done());
+          current.once('error', (error) => done(error));
+          current.kill();
+        });
+      } finally {
+        stopping = false;
+      }
     }
-    child = null;
+    if (!current || child !== current || current.killed) {
+      child = null;
+    }
   }
 
   return {
     isRunning() {
       return Boolean(child && !child.killed);
     },
-    async start() {
-      if (child && !child.killed) {
-        return;
+    async start(signal) {
+      if (child) {
+        if (!child.killed) return;
+        throw new Error('previous mihomo process has not exited');
       }
 
       const maxAttempts = options.waitForReady ? 1 : 3;
       let lastError: unknown;
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        const { workDir, configPath, settings, ports, remoteConfig } = await writeConfig();
+        signal?.throwIfAborted();
+        const { workDir, configPath, settings, ports, remoteConfig } = await writeConfig(signal);
         const startupNode = remoteConfig?.preferredNode ?? settings.selectedNode;
         const startupStrategy = remoteConfig?.preferredNode
           ? 'manual'
-          : remoteConfig?.preferredStrategy ?? settings.strategy;
+          : (remoteConfig?.preferredStrategy ?? settings.strategy);
         options.logLine?.(
           `mihomo starting: mixed-port=${ports.mixedPort}, controller=${ports.controllerPort}, dns=${ports.dnsPort ?? 1053}`
         );
         const spawnProcess =
-          options.spawnProcess ??
+          (settings.tunEnabled ? options.spawnElevatedProcess : options.spawnProcess) ??
           ((binaryPath: string, args: string[]) =>
             spawn(binaryPath, args, {
               windowsHide: true,
@@ -490,6 +520,8 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
 
         const current = spawnProcess(options.binaryPath, ['-d', workDir, '-f', configPath]);
         child = current;
+        const abortCurrent = () => current.kill();
+        signal?.addEventListener('abort', abortCurrent, { once: true });
         const recentOutput: string[] = [];
         const rememberOutput = (line: string) => {
           recentOutput.push(line);
@@ -536,8 +568,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
               child = null;
             }
             if (!ready) {
-              const reason =
-                code == null ? `signal ${signal ?? 'unknown'}` : `exit code ${code.toString()}`;
+              const reason = code == null ? `signal ${signal ?? 'unknown'}` : `exit code ${code.toString()}`;
               options.logLine?.(`mihomo exited before ready: ${reason}`);
               reject(formatStartupFailure(reason));
               return;
@@ -551,21 +582,28 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
           });
         });
 
+        let abortStartup: () => void = () => undefined;
         try {
+          const aborted = new Promise<never>((_resolve, reject) => {
+            abortStartup = () => reject(signal?.reason);
+            signal?.addEventListener('abort', abortStartup, { once: true });
+          });
           await Promise.race([
             options.waitForReady
               ? options.waitForReady(settings.controllerSecret)
               : (async () => {
-                  await waitForController(settings.controllerSecret, ports.controllerPort);
+                  await waitForController(settings.controllerSecret, ports.controllerPort, signal);
                   await waitForUsableProxies(
                     settings.controllerSecret,
                     ports.controllerPort,
                     startupNode,
                     startupStrategy,
-                    options.logLine
+                    options.logLine,
+                    signal
                   );
                 })(),
-            earlyFailure
+            earlyFailure,
+            aborted
           ]);
           ready = true;
           options.logLine?.('mihomo controller ready');
@@ -577,6 +615,9 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
             throw error;
           }
           options.logLine?.(`mihomo controller timeout, retrying with fresh ports (${attempt + 1}/${maxAttempts})`);
+        } finally {
+          signal?.removeEventListener('abort', abortCurrent);
+          signal?.removeEventListener('abort', abortStartup);
         }
       }
 

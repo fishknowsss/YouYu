@@ -30,6 +30,7 @@ describe('createDevYouYuApi', () => {
 
     expect(selected.currentNode).toBe('日本 01');
     expect(selected.nodes.find((node) => node.name === '日本 01')?.active).toBe(true);
+    await expect(api.cancelOperation('dev-operation')).resolves.toBe(false);
   });
 
   it('starts the preview flow when updating nodes from a saved subscription', async () => {

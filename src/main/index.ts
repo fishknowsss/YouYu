@@ -1,4 +1,13 @@
-import { app, BrowserWindow, Menu, Tray, ipcMain, screen, type Rectangle } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  ipcMain as electronIpcMain,
+  safeStorage,
+  screen,
+  type Rectangle
+} from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { execFile, execFileSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -6,11 +15,13 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { createLifecycleController, type MihomoRuntime } from './lifecycle';
+import { IpcOperationRegistry } from './ipcOperations';
 import { connectivityServices, testAllConnectivity, testConnectivity } from './connectivity';
 import { createMihomoApiClient } from './mihomo/api';
 import { strategyLabels, strategyTargets } from './mihomo/config';
 import { createMihomoRuntime } from './mihomo/process';
 import { createSystemProxyAdapter } from './platform/systemProxy';
+import { runWindowsElevatedProcess, spawnWindowsElevatedMihomo } from './platform/elevatedProcess';
 import { SettingsStore } from './storage/settings';
 import {
   availabilitySnapshotFromRecord,
@@ -38,6 +49,7 @@ import {
   type AppSnapshot,
   type CurrentNodeHealth,
   type DesktopPetState,
+  type OperationRequest,
   type ProxyNode,
   type RemoteControlConfig,
   type StrategyGroup,
@@ -54,6 +66,28 @@ const startupTaskName = 'YouYu';
 const execFileAsync = promisify(execFile);
 let mainWindow: BrowserWindow | null = null;
 let petWindow: BrowserWindow | null = null;
+const petIpcChannels = new Set<string>([
+  ipcChannels.getSnapshot,
+  ipcChannels.wavePet,
+  ipcChannels.startPetDrag,
+  ipcChannels.stopPetDrag,
+  ipcChannels.setPetMousePassthrough,
+  ipcChannels.showMainWindow
+]);
+const ipcMain: Pick<typeof electronIpcMain, 'handle'> = {
+  handle(channel, listener) {
+    return electronIpcMain.handle(channel, (event, ...args) => {
+      const trusted = event.sender === mainWindow?.webContents || event.sender === petWindow?.webContents;
+      if (!trusted || event.senderFrame !== event.sender.mainFrame || !isTrustedRendererUrl(event.senderFrame.url)) {
+        throw new Error('untrusted IPC sender');
+      }
+      if (event.sender === petWindow?.webContents && !petIpcChannels.has(channel)) {
+        throw new Error('IPC channel is not available to the pet window');
+      }
+      return listener(event, ...args);
+    });
+  }
+};
 let tray: Tray | null = null;
 let trayMenu: Menu | null = null;
 let cleanupFinished = false;
@@ -118,6 +152,8 @@ let runtimePorts = {
   dnsPort: 1053
 };
 let activeNodeTestController: AbortController | undefined;
+let subscriptionRevision = 0;
+const ipcOperations = new IpcOperationRegistry((error) => appendLog(`取消操作清理失败: ${formatError(error)}`));
 let lastError: string | undefined;
 const appLogs: string[] = [];
 const foldedMihomoDialWarnings = new Map<string, { count: number; lastAt: number }>();
@@ -142,6 +178,18 @@ const updatePeriodicIntervalMs = 30 * 60 * 1000;
 const trafficSnapshotBroadcastIntervalMs = 10000;
 const runtimeRecoveryInitialDelayMs = 1500;
 const runtimeRecoveryMaxDelayMs = 60000;
+
+function isTrustedRendererUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (isDev && process.env.ELECTRON_RENDERER_URL) {
+      return url.origin === new URL(process.env.ELECTRON_RENDERER_URL).origin;
+    }
+    return url.protocol === 'file:' && url.pathname.endsWith('/renderer/index.html');
+  } catch {
+    return false;
+  }
+}
 
 app.setName('YouYu');
 if (process.platform === 'win32') {
@@ -172,7 +220,7 @@ updateSnapshot = {
 const settingsStore = new SettingsStore(app.getPath('userData'), {
   defaultSubscriptionUrl: readDefaultSubscriptionUrl(defaultSubscriptionPath)
 });
-const trafficStore = new TrafficStore(app.getPath('userData'));
+const trafficStore = new TrafficStore(app.getPath('userData'), { secretStorage: safeStorage });
 const nodeHealthStore = new NodeHealthStore(app.getPath('userData'));
 const remoteConfigClient = new RemoteConfigClient({
   baseDir: app.getPath('userData'),
@@ -212,9 +260,7 @@ const trafficTracker = new TrafficTracker({
 const mihomoBinaryPath = isDev
   ? join(process.cwd(), 'resources/mihomo/win-x64/mihomo.exe')
   : join(process.resourcesPath, 'mihomo/win-x64/mihomo.exe');
-const windowIconPath = isDev
-  ? join(process.cwd(), 'build/icon.png')
-  : join(process.resourcesPath, 'assets/icon.png');
+const windowIconPath = isDev ? join(process.cwd(), 'build/icon.png') : join(process.resourcesPath, 'assets/icon.png');
 const trayIconPath = isDev
   ? join(process.cwd(), 'build/tray-icon.png')
   : join(process.resourcesPath, 'assets/tray-icon.png');
@@ -226,6 +272,7 @@ const mihomoRuntime: MihomoRuntime =
         readSettings: () => settingsStore.read(),
         readRemoteConfig: () => remoteConfigClient.getActiveConfig(),
         getPorts: allocateRuntimePorts,
+        spawnElevatedProcess: (binaryPath, args) => spawnWindowsElevatedMihomo(binaryPath, args),
         logLine: appendLog,
         onUnexpectedExit: (reason) => {
           recordError('mihomo 异常退出', reason);
@@ -296,9 +343,7 @@ function normalizeDiagnosticLog(message: string): string | undefined {
   return `连接警告：${warning.target} 访问失败（${warning.network}${foldedText}）`;
 }
 
-function parseMihomoDialWarning(
-  message: string
-): { signature: string; target: string; network: string } | undefined {
+function parseMihomoDialWarning(message: string): { signature: string; target: string; network: string } | undefined {
   if (!message.includes('[mihomo]') || !/level=warning/i.test(message) || !/\[(?:TCP|UDP)\]\s+dial/i.test(message)) {
     return undefined;
   }
@@ -367,16 +412,25 @@ function scheduleTrafficSnapshotBroadcast() {
 }
 
 async function syncRemoteConfig(
-  options: { proxyUrl?: string; restartIfRunning?: boolean; throwOnError?: boolean; quiet?: boolean } = {}
+  options: {
+    proxyUrl?: string;
+    restartIfRunning?: boolean;
+    throwOnError?: boolean;
+    quiet?: boolean;
+    signal?: AbortSignal;
+  } = {}
 ): Promise<boolean> {
   try {
-    const result = await remoteConfigClient.sync({ proxyUrl: options.proxyUrl });
+    throwIfAborted(options.signal);
+    const result = await remoteConfigClient.sync({ proxyUrl: options.proxyUrl, signal: options.signal });
+    throwIfAborted(options.signal);
     const subscriptionChanged = await applyRemoteSubscription(result.config);
+    throwIfAborted(options.signal);
     if (!result.changed && !subscriptionChanged) return false;
 
     appendLog(`remote config updated: v${result.config?.version ?? 0}`);
     if (options.restartIfRunning && lifecycle.getStatus() === 'running') {
-      await lifecycle.restart();
+      await lifecycle.restart(options.signal);
     }
     return true;
   } catch (error) {
@@ -418,7 +472,7 @@ async function syncRemoteConfigInBackground(): Promise<void> {
 }
 
 async function applyRemoteSubscription(config?: RemoteControlConfig): Promise<boolean> {
-  const nextRemoteSubscriptionUrl = config?.enabled ? config.subscriptionUrl?.trim() ?? '' : '';
+  const nextRemoteSubscriptionUrl = config?.enabled ? (config.subscriptionUrl?.trim() ?? '') : '';
   const settings = await settingsStore.read();
   const currentRemoteSubscriptionUrl = settings.remoteSubscriptionUrl ?? '';
   if (currentRemoteSubscriptionUrl === nextRemoteSubscriptionUrl) {
@@ -691,14 +745,18 @@ async function allocateRuntimePorts() {
   return runtimePorts;
 }
 
+const systemProxy = createSystemProxyAdapter({
+  stateDirectory: app.getPath('userData'),
+  runElevatedCommand: (command, signal) => runWindowsElevatedProcess(command.file, command.args, { signal }),
+  shouldManageProxy: async () => {
+    const settings = await settingsStore.read();
+    return settings.systemProxyEnabled;
+  },
+  getProxyServer: () => `127.0.0.1:${runtimePorts.mixedPort}`
+});
+
 lifecycle = createLifecycleController({
-  proxy: createSystemProxyAdapter({
-    shouldManageProxy: async () => {
-      const settings = await settingsStore.read();
-      return settings.systemProxyEnabled;
-    },
-    getProxyServer: () => `127.0.0.1:${runtimePorts.mixedPort}`
-  }),
+  proxy: systemProxy,
   mihomo: mihomoRuntime,
   onStatusChange: (status) => {
     if (status === 'running') {
@@ -739,9 +797,12 @@ function scheduleSubscriptionRefresh() {
         return;
       }
 
-      subscriptionRefreshTimer = setTimeout(() => {
-        void refreshSubscriptionInBackground();
-      }, intervalHours * 60 * 60 * 1000);
+      subscriptionRefreshTimer = setTimeout(
+        () => {
+          void refreshSubscriptionInBackground();
+        },
+        intervalHours * 60 * 60 * 1000
+      );
     })
     .catch((error) => {
       recordError('订阅刷新计划失败', error);
@@ -756,13 +817,14 @@ async function refreshSubscriptionInBackground() {
 
   try {
     appendLog('后台刷新订阅');
-    const snapshot = await updateSubscriptionNodes({
+    await updateSubscriptionNodes({
       settingsStore,
       lifecycle,
       createMihomoApi: createRuntimeMihomoApi,
       createSnapshot
     });
-    sendSnapshotToWindows(snapshot);
+    subscriptionRevision += 1;
+    sendSnapshotToWindows(await createSnapshot());
     clearLastError();
   } catch (error) {
     recordError('后台刷新订阅失败', error);
@@ -821,7 +883,9 @@ async function updateCurrentNodeDelayFromManualTest(
 ): Promise<void> {
   if (!isProxyNodeName(nodeName) || lifecycle.getStatus() !== 'running') return;
   const settings = await settingsStore.read();
-  const currentNode = await createRuntimeMihomoApi({ secret: settings.controllerSecret }).getCurrentNode().catch(() => '');
+  const currentNode = await createRuntimeMihomoApi({ secret: settings.controllerSecret })
+    .getCurrentNode()
+    .catch(() => '');
   if (currentNode !== nodeName) return;
 
   if (testState === 'testing') {
@@ -840,10 +904,7 @@ async function updateCurrentNodeDelayFromManualTest(
   });
 }
 
-function updateCurrentNodeAvailabilityStatus(
-  nodeName: string,
-  status: CurrentNodeHealth['availability']['status']
-) {
+function updateCurrentNodeAvailabilityStatus(nodeName: string, status: CurrentNodeHealth['availability']['status']) {
   syncCurrentNodeHealthName(nodeName);
   currentNodeHealth = {
     ...currentNodeHealth,
@@ -874,10 +935,7 @@ async function getCurrentNodeHealthSnapshot(nodeName: string, running: boolean):
     return currentNodeHealth;
   }
 
-  if (
-    currentNodeHealth.availability.status === 'measured' &&
-    !isLocalToday(currentNodeHealth.availability.checkedAt)
-  ) {
+  if (currentNodeHealth.availability.status === 'measured' && !isLocalToday(currentNodeHealth.availability.checkedAt)) {
     currentNodeHealth = {
       ...currentNodeHealth,
       availability: {
@@ -1141,9 +1199,7 @@ async function createSnapshot(): Promise<AppSnapshot> {
     ? await Promise.all([
         mihomoApi.listNodes().catch(() => []),
         mihomoApi.listStrategies().catch(() => createDefaultStrategies(settings.strategy)),
-        mihomoApi
-          .getRuntimeStats()
-          .catch(() => ({ activeConnections: 0, uploadTotal: 0, downloadTotal: 0 })),
+        mihomoApi.getRuntimeStats().catch(() => ({ activeConnections: 0, uploadTotal: 0, downloadTotal: 0 })),
         mihomoApi.getCurrentNode().catch(() => strategyTargets.auto)
       ])
     : [
@@ -1179,6 +1235,7 @@ async function createSnapshot(): Promise<AppSnapshot> {
     trafficIdentity: trafficSnapshot.identity,
     subscriptionUrl: settings.subscriptionUrl,
     remoteSubscriptionUrl: settings.remoteSubscriptionUrl,
+    subscriptionRevision,
     update: updateSnapshot,
     diagnostics: {
       lastError,
@@ -1301,14 +1358,18 @@ async function withTrayRefresh<T>(task: () => Promise<T>): Promise<T> {
   }
 }
 
-async function startProxy(): Promise<AppSnapshot> {
+async function startProxy(signal?: AbortSignal): Promise<AppSnapshot> {
+  throwIfAborted(signal);
   await requireTrafficIdentity();
-  await syncRemoteConfig();
-  await startLifecycleWithRepairRetry();
+  await syncRemoteConfig({ signal });
+  throwIfAborted(signal);
+  await startLifecycleWithRepairRetry(signal);
+  throwIfAborted(signal);
   await activatePendingTrafficIdentity().catch((error) => {
     appendLog(`登记验证暂未完成: ${formatError(error)}`);
   });
-  await syncRemoteConfig({ proxyUrl: getRuntimeTrafficProxyUrl(), restartIfRunning: true });
+  await syncRemoteConfig({ proxyUrl: getRuntimeTrafficProxyUrl(), restartIfRunning: true, signal });
+  throwIfAborted(signal);
   trafficTracker.start();
   trafficReporter.start();
   clearLastError();
@@ -1316,15 +1377,17 @@ async function startProxy(): Promise<AppSnapshot> {
   return createSnapshot();
 }
 
-async function selectBestAutoNode(): Promise<AppSnapshot> {
+async function selectBestAutoNode(signal?: AbortSignal): Promise<AppSnapshot> {
+  throwIfAborted(signal);
   await requireTrafficIdentity();
   const settings = await settingsStore.update({ strategy: 'auto', selectedNode: null });
   if (lifecycle.getStatus() !== 'running') {
-    await startProxy();
+    await startProxy(signal);
   }
 
   const mihomoApi = createRuntimeMihomoApi({ secret: settings.controllerSecret });
-  const selectedNode = await mihomoApi.selectBestUsableNodeForStrategy('auto');
+  const selectedNode = await mihomoApi.selectBestUsableNodeForStrategy('auto', { signal });
+  throwIfAborted(signal);
   if (!selectedNode) {
     throw new Error('没有可用节点');
   }
@@ -1371,15 +1434,16 @@ async function requireTrafficIdentity(): Promise<void> {
   }
 }
 
-async function startLifecycleWithRepairRetry(): Promise<void> {
+async function startLifecycleWithRepairRetry(signal?: AbortSignal): Promise<void> {
   try {
-    await lifecycle.start();
+    await lifecycle.start(signal);
   } catch (error) {
+    throwIfAborted(signal);
     appendLog(`启动失败，自动修复后重试: ${formatError(error)}`);
-    await lifecycle.repair().catch((repairError) => {
+    await lifecycle.repair(signal).catch((repairError) => {
       appendLog(`自动修复失败: ${formatError(repairError)}`);
     });
-    await lifecycle.start();
+    await lifecycle.start(signal);
   }
 }
 
@@ -1391,20 +1455,25 @@ async function stopProxy(): Promise<AppSnapshot> {
   return createSnapshot();
 }
 
-async function repairProxy(): Promise<AppSnapshot> {
+async function repairProxy(signal?: AbortSignal): Promise<AppSnapshot> {
+  throwIfAborted(signal);
   const wasRunning = lifecycle.getStatus() === 'running';
   if (wasRunning) {
     const settings = await settingsStore.read();
     await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
     await trafficReporter.reportPending().catch((error) => appendLog(`流量上报失败: ${formatError(error)}`));
-    await createRuntimeMihomoApi({ secret: settings.controllerSecret }).closeConnections().catch(() => undefined);
+    await createRuntimeMihomoApi({ secret: settings.controllerSecret })
+      .closeConnections()
+      .catch(() => undefined);
   }
   trafficTracker.stop();
-  await lifecycle.repair();
+  await lifecycle.repair(signal);
+  throwIfAborted(signal);
   clearSubscriptionRefreshTimer();
   clearLastError();
   if (wasRunning) {
-    await startLifecycleWithRepairRetry();
+    await startLifecycleWithRepairRetry(signal);
+    throwIfAborted(signal);
     trafficTracker.start();
     trafficReporter.start();
     scheduleNodeHealthCheck(0);
@@ -1507,41 +1576,57 @@ function registerIpc() {
   ipcMain.handle(ipcChannels.showMainWindow, async () => {
     showMainWindow();
   });
-  ipcMain.handle(ipcChannels.start, async () => {
-    return withTrayRefresh(async () => {
-      try {
-        const snapshot = await startProxy();
-        sendSnapshotToWindows(snapshot);
-        return snapshot;
-      } catch (error) {
-        recordError('启动失败', error);
-        throw error;
-      }
-    });
+  ipcMain.handle(ipcChannels.start, async (event, request?: OperationRequest) => {
+    return runCancelableOperation(
+      event.sender.id,
+      request,
+      async (signal) =>
+        withTrayRefresh(async () => {
+          try {
+            const snapshot = await startProxy(signal);
+            sendSnapshotToWindows(snapshot);
+            return snapshot;
+          } catch (error) {
+            recordError('启动失败', error);
+            throw error;
+          }
+        }),
+      () => lifecycle.stop()
+    );
   });
-  ipcMain.handle(ipcChannels.stop, async () => {
-    return withTrayRefresh(async () => {
-      try {
-        const snapshot = await stopProxy();
-        sendSnapshotToWindows(snapshot);
-        return snapshot;
-      } catch (error) {
-        recordError('停止失败', error);
-        throw error;
-      }
-    });
+  ipcMain.handle(ipcChannels.stop, async (event, request?: OperationRequest) => {
+    return runCancelableOperation(event.sender.id, request, async () =>
+      withTrayRefresh(async () => {
+        try {
+          const snapshot = await stopProxy();
+          sendSnapshotToWindows(snapshot);
+          return snapshot;
+        } catch (error) {
+          recordError('停止失败', error);
+          throw error;
+        }
+      })
+    );
   });
-  ipcMain.handle(ipcChannels.repair, async () => {
-    return withTrayRefresh(async () => {
-      try {
-        const snapshot = await repairProxy();
-        sendSnapshotToWindows(snapshot);
-        return snapshot;
-      } catch (error) {
-        recordError('修复失败', error);
-        throw error;
-      }
-    });
+  ipcMain.handle(ipcChannels.repair, async (event, request?: OperationRequest) => {
+    return runCancelableOperation(
+      event.sender.id,
+      request,
+      async (signal) =>
+        withTrayRefresh(async () => {
+          throwIfAborted(signal);
+          try {
+            const snapshot = await repairProxy(signal);
+            throwIfAborted(signal);
+            sendSnapshotToWindows(snapshot);
+            return snapshot;
+          } catch (error) {
+            recordError('修复失败', error);
+            throw error;
+          }
+        }),
+      () => lifecycle.stop()
+    );
   });
   ipcMain.handle(ipcChannels.selectNode, async (_event, name: string) => {
     const settings = await settingsStore.read();
@@ -1559,17 +1644,23 @@ function registerIpc() {
     scheduleNodeHealthCheck(0);
     return createSnapshot();
   });
-  ipcMain.handle(ipcChannels.selectBestAutoNode, async () => {
-    return withTrayRefresh(async () => {
-      try {
-        const snapshot = await selectBestAutoNode();
-        sendSnapshotToWindows(snapshot);
-        return snapshot;
-      } catch (error) {
-        recordError('自动选择节点失败', error);
-        throw error;
-      }
-    });
+  ipcMain.handle(ipcChannels.selectBestAutoNode, async (event, request?: OperationRequest) => {
+    return runCancelableOperation(
+      event.sender.id,
+      request,
+      async (signal) =>
+        withTrayRefresh(async () => {
+          try {
+            const snapshot = await selectBestAutoNode(signal);
+            sendSnapshotToWindows(snapshot);
+            return snapshot;
+          } catch (error) {
+            recordError('自动选择节点失败', error);
+            throw error;
+          }
+        }),
+      () => lifecycle.stop()
+    );
   });
   ipcMain.handle(ipcChannels.selectStrategy, async (_event, strategy) => {
     const snapshot = await selectMihomoStrategy(
@@ -1685,48 +1776,71 @@ function registerIpc() {
       createSnapshot
     });
   });
-  ipcMain.handle(ipcChannels.updateSubscription, async () => {
-    return withTrayRefresh(async () => {
-      await requireTrafficIdentity();
-      const snapshot = await updateSubscriptionNodes({
-        settingsStore,
-        lifecycle,
-        createMihomoApi: createRuntimeMihomoApi,
-        createSnapshot
-      });
-      scheduleSubscriptionRefresh();
-      return snapshot;
-    });
+  ipcMain.handle(ipcChannels.updateSubscription, async (event, request?: OperationRequest) => {
+    return runCancelableOperation(
+      event.sender.id,
+      request,
+      async (signal) =>
+        withTrayRefresh(async () => {
+          throwIfAborted(signal);
+          await requireTrafficIdentity();
+          await updateSubscriptionNodes(
+            {
+              settingsStore,
+              lifecycle,
+              createMihomoApi: createRuntimeMihomoApi,
+              createSnapshot
+            },
+            { signal }
+          );
+          throwIfAborted(signal);
+          subscriptionRevision += 1;
+          scheduleSubscriptionRefresh();
+          return createSnapshot();
+        }),
+      () => lifecycle.stop()
+    );
   });
-  ipcMain.handle(ipcChannels.saveSettings, async (_event, settings) => {
-    return withTrayRefresh(async () => {
-      const snapshot = await saveSubscriptionSettings(
-        {
-          settingsStore,
-          lifecycle,
-          createSnapshot
-        },
-        settings
-      );
-      scheduleSubscriptionRefresh();
-      return snapshot;
-    });
+  ipcMain.handle(ipcChannels.saveSettings, async (event, settings, request?: OperationRequest) => {
+    return runCancelableOperation(
+      event.sender.id,
+      request,
+      async (signal) =>
+        withTrayRefresh(async () => {
+          const snapshot = await saveSubscriptionSettings({ settingsStore, lifecycle, createSnapshot }, settings, {
+            signal
+          });
+          scheduleSubscriptionRefresh();
+          return snapshot;
+        }),
+      () => lifecycle.stop()
+    );
   });
   ipcMain.handle(ipcChannels.registerTrafficIdentity, async (_event, input) => {
     const snapshot = await registerTrafficIdentity(input);
     sendSnapshotToWindows(snapshot);
     return snapshot;
   });
-  ipcMain.handle(ipcChannels.syncRemoteConfig, async () => {
-    return withTrayRefresh(async () => {
-      await requireTrafficIdentity();
-      await syncRemoteConfig({
-        proxyUrl: getRuntimeTrafficProxyUrl(),
-        restartIfRunning: true,
-        throwOnError: true
-      });
-      return createSnapshot();
-    });
+  ipcMain.handle(ipcChannels.syncRemoteConfig, async (event, request?: OperationRequest) => {
+    return runCancelableOperation(
+      event.sender.id,
+      request,
+      async (signal) =>
+        withTrayRefresh(async () => {
+          await requireTrafficIdentity();
+          await syncRemoteConfig({
+            proxyUrl: getRuntimeTrafficProxyUrl(),
+            restartIfRunning: true,
+            throwOnError: true,
+            signal
+          });
+          return createSnapshot();
+        }),
+      () => lifecycle.stop()
+    );
+  });
+  ipcMain.handle(ipcChannels.cancelOperation, (event, requestId: string) => {
+    return ipcOperations.cancel(event.sender.id, requestId);
   });
   ipcMain.handle(ipcChannels.checkForUpdates, async () => {
     return checkForUpdatesNow(true);
@@ -1734,6 +1848,21 @@ function registerIpc() {
   ipcMain.handle(ipcChannels.installUpdate, async () => {
     return installDownloadedUpdate();
   });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error('operation canceled');
+  }
+}
+
+async function runCancelableOperation<T>(
+  senderId: number,
+  request: OperationRequest | undefined,
+  action: (signal: AbortSignal) => Promise<T>,
+  onAbort?: () => Promise<unknown>
+): Promise<T> {
+  return ipcOperations.run(senderId, request, action, onAbort);
 }
 
 function showMainWindow() {
@@ -1849,10 +1978,13 @@ function scheduleSideDockBehavior() {
     return;
   }
 
-  petDockTimer = setTimeout(() => {
-    if (petDockBehavior?.kind !== 'side') return;
-    setPetState(getSideBlinkState(petDockBehavior.side), 900);
-  }, Math.min(petSideBlinkDelayMs, petSideSleepDelayMs - elapsed));
+  petDockTimer = setTimeout(
+    () => {
+      if (petDockBehavior?.kind !== 'side') return;
+      setPetState(getSideBlinkState(petDockBehavior.side), 900);
+    },
+    Math.min(petSideBlinkDelayMs, petSideSleepDelayMs - elapsed)
+  );
 }
 
 function scheduleTopDockBehavior() {
@@ -2302,11 +2434,14 @@ function startPetDrag() {
     const nextCursor = screen.getCursorScreenPoint();
     const area = screen.getDisplayNearestPoint(nextCursor).workArea;
     petWindow.setBounds(
-      clampPetBounds({
-        x: petDragStart.windowX + nextCursor.x - petDragStart.cursorX,
-        y: petDragStart.windowY + nextCursor.y - petDragStart.cursorY,
-        ...petWindowSize
-      }, area),
+      clampPetBounds(
+        {
+          x: petDragStart.windowX + nextCursor.x - petDragStart.cursorX,
+          y: petDragStart.windowY + nextCursor.y - petDragStart.cursorY,
+          ...petWindowSize
+        },
+        area
+      ),
       false
     );
   }, petDragFrameMs);
@@ -2476,10 +2611,13 @@ async function createWindow() {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      sandbox: true
     }
   });
   mainWindow = win;
+  secureRendererNavigation(win);
 
   win.webContents.on('preload-error', (_event, preloadPath, error) => {
     console.error(`preload failed: ${preloadPath}`, error);
@@ -2565,10 +2703,13 @@ async function createPetWindow() {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      sandbox: true
     }
   });
   petWindow = win;
+  secureRendererNavigation(win);
   win.setAlwaysOnTop(true, 'floating');
   setPetMousePassthrough(true, true);
 
@@ -2607,6 +2748,40 @@ async function createPetWindow() {
       query: { view: 'pet' }
     });
   }
+}
+
+function secureRendererNavigation(window: BrowserWindow): void {
+  const senderId = window.webContents.id;
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  window.webContents.session.setPermissionCheckHandler(() => false);
+  window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  window.webContents.once('destroyed', () => {
+    void ipcOperations.cancelSender(senderId);
+  });
+  window.webContents.on('will-navigate', (event, targetUrl) => {
+    const currentUrl = window.webContents.getURL();
+    if (!currentUrl) {
+      event.preventDefault();
+      return;
+    }
+
+    try {
+      const current = new URL(currentUrl);
+      const target = new URL(targetUrl);
+      if (
+        current.protocol === target.protocol &&
+        current.origin === target.origin &&
+        current.pathname === target.pathname
+      ) {
+        return;
+      }
+    } catch {
+      // Invalid navigation targets are never allowed.
+    }
+    event.preventDefault();
+  });
+  window.webContents.on('will-redirect', (event) => event.preventDefault());
 }
 
 async function cleanupBeforeExit() {
@@ -2648,6 +2823,7 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    await systemProxy.restore().catch((error) => appendLog(`恢复遗留系统代理失败: ${formatError(error)}`));
     await allocateRuntimePorts();
     registerIpc();
     setupAutoUpdates();

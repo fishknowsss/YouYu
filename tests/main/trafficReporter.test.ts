@@ -125,7 +125,13 @@ describe('TrafficReporter', () => {
         body: { error: 'unknown device' }
       };
     });
-    const store = new TrafficStore(dir);
+    const store = new TrafficStore(dir, {
+      secretStorage: {
+        isEncryptionAvailable: () => true,
+        encryptString: (value) => Buffer.from(`protected:${value}`, 'utf8'),
+        decryptString: (value) => value.toString('utf8').replace(/^protected:/, '')
+      }
+    });
     const reporter = new TrafficReporter({
       store,
       endpoint,

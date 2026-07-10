@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { readJsonFile, writeJsonFileAtomic } from './jsonFile';
 import type {
   AppSettingsInput,
   FeatureSettings,
@@ -45,57 +45,71 @@ const validSubscriptionRefreshIntervalHours = [0, 6, 12, 24];
 export class SettingsStore {
   private readonly filePath: string;
   private readonly defaultSubscriptionUrl: string;
+  private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly baseDir: string, options: SettingsStoreOptions = {}) {
+  constructor(
+    private readonly baseDir: string,
+    options: SettingsStoreOptions = {}
+  ) {
     this.filePath = join(baseDir, settingsFileName);
     this.defaultSubscriptionUrl = options.defaultSubscriptionUrl?.trim() ?? '';
   }
 
   async read(): Promise<AppSettings> {
-    try {
-      const raw = await readFile(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw) as Partial<AppSettings>;
-      const normalized = this.normalize(parsed);
-      if (this.shouldRewriteNormalizedSettings(parsed, normalized)) {
-        await this.write(normalized);
-      }
-      return normalized;
-    } catch {
-      const defaults = this.createDefaults();
-      await this.write(defaults);
-      return defaults;
-    }
+    return this.enqueue(() => this.readCurrent());
   }
 
   async update(next: AppSettingsInput): Promise<AppSettings> {
-    const current = await this.read();
-    const updated = this.normalize({
-      ...current,
-      ...next,
-      subscriptionUrl:
-        typeof next.subscriptionUrl === 'string' ? next.subscriptionUrl : current.localSubscriptionUrl
+    return this.enqueue(async () => {
+      const current = await this.readCurrent();
+      const updated = this.normalize({
+        ...current,
+        ...next,
+        subscriptionUrl: typeof next.subscriptionUrl === 'string' ? next.subscriptionUrl : current.localSubscriptionUrl
+      });
+      await this.write(updated);
+      return updated;
     });
-    await this.write(updated);
-    return updated;
   }
 
   private async write(settings: AppSettings): Promise<void> {
     const { localSubscriptionUrl: _localSubscriptionUrl, ...persisted } = settings;
-    await mkdir(this.baseDir, { recursive: true });
-    await writeFile(
-      this.filePath,
-      `${JSON.stringify({ ...persisted, subscriptionUrl: settings.localSubscriptionUrl }, null, 2)}\n`,
-      'utf8'
-    );
+    await writeJsonFileAtomic(this.filePath, { ...persisted, subscriptionUrl: settings.localSubscriptionUrl });
+  }
+
+  private async readCurrent(): Promise<AppSettings> {
+    const result = await readJsonFile<Partial<AppSettings>>(this.filePath, {
+      validate: (value) =>
+        Boolean(value) &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        (typeof value.settingsVersion === 'number' ||
+          typeof value.subscriptionUrl === 'string' ||
+          typeof value.controllerSecret === 'string')
+    });
+    if (result.status === 'found') {
+      const normalized = this.normalize(result.value);
+      if (this.shouldRewriteNormalizedSettings(result.value, normalized)) {
+        await this.write(normalized);
+      }
+      return normalized;
+    }
+
+    const defaults = this.createDefaults();
+    await this.write(defaults);
+    return defaults;
+  }
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task, task);
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
   private normalize(value: AppSettingsNormalizerInput): AppSettings {
     const legacyRuleProfile =
-      typeof value.settingsVersion !== 'number' && value.ruleProfile === 'smart'
-        ? 'subscription'
-        : value.ruleProfile;
-    const storedSubscriptionUrl =
-      typeof value.subscriptionUrl === 'string' ? value.subscriptionUrl.trim() : '';
+      typeof value.settingsVersion !== 'number' && value.ruleProfile === 'smart' ? 'subscription' : value.ruleProfile;
+    const storedSubscriptionUrl = typeof value.subscriptionUrl === 'string' ? value.subscriptionUrl.trim() : '';
     const remoteSubscriptionUrl = normalizeSubscriptionUrl(value.remoteSubscriptionUrl);
     const localSubscriptionUrl = this.defaultSubscriptionUrl || storedSubscriptionUrl;
     const resetBundledSelection = this.shouldResetBundledSelection(value, storedSubscriptionUrl);
@@ -117,7 +131,11 @@ export class SettingsStore {
       ruleProfile: validRuleProfiles.includes(legacyRuleProfile as RuleProfile)
         ? (legacyRuleProfile as RuleProfile)
         : 'ruleset',
-      selectedNode: resetBundledSelection ? '' : typeof value.selectedNode === 'string' ? value.selectedNode.trim() : '',
+      selectedNode: resetBundledSelection
+        ? ''
+        : typeof value.selectedNode === 'string'
+          ? value.selectedNode.trim()
+          : '',
       petWindow: normalizePetWindow(value.petWindow),
       systemProxyEnabled: true,
       dnsEnhanced: true,
@@ -125,9 +143,7 @@ export class SettingsStore {
       tunEnabled: typeof value.tunEnabled === 'boolean' ? value.tunEnabled : false,
       strictRouteEnabled: true,
       allowLan: false,
-      subscriptionRefreshIntervalHours: normalizeSubscriptionRefreshInterval(
-        value.subscriptionRefreshIntervalHours
-      )
+      subscriptionRefreshIntervalHours: normalizeSubscriptionRefreshInterval(value.subscriptionRefreshIntervalHours)
     };
   }
 

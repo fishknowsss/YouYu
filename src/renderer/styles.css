@@ -1,8 +1,8 @@
 :root {
   --font-sans:
-    "Segoe UI Variable Text", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC",
-    "Noto Sans CJK SC", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "Cascadia Mono", "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    'Segoe UI Variable Text', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC',
+    'Noto Sans CJK SC', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Cascadia Mono', 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   --ink: #20192a;
   --ink-soft: #4a4255;
   --muted: #70677a;
@@ -24,11 +24,11 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
+  font-feature-settings: 'tnum' 1;
 }
 
 @property --ring-angle {
-  syntax: "<angle>";
+  syntax: '<angle>';
   inherits: false;
   initial-value: 0deg;
 }
@@ -585,17 +585,23 @@ select:focus-visible {
   background:
     linear-gradient(90deg, rgb(143 88 215 / 42%), rgb(143 88 215 / 86%)),
     linear-gradient(110deg, transparent 0 34%, rgb(255 255 255 / 46%) 48%, transparent 62% 100%);
-  background-size: 100% 100%, 180% 100%;
+  background-size:
+    100% 100%,
+    180% 100%;
   animation: update-progress-verify 1200ms ease-in-out infinite;
 }
 
 @keyframes update-progress-verify {
   from {
-    background-position: 0 0, 140% 0;
+    background-position:
+      0 0,
+      140% 0;
   }
 
   to {
-    background-position: 0 0, -40% 0;
+    background-position:
+      0 0,
+      -40% 0;
   }
 }
 
@@ -651,9 +657,7 @@ select:focus-visible {
 }
 
 .easy-power-button:hover .brand-mark-lg {
-  filter:
-    grayscale(0.2) saturate(1) contrast(0.98) opacity(0.86)
-    drop-shadow(0 12px 24px rgb(124 79 180 / 18%))
+  filter: grayscale(0.2) saturate(1) contrast(0.98) opacity(0.86) drop-shadow(0 12px 24px rgb(124 79 180 / 18%))
     drop-shadow(0 0 12px rgb(143 88 215 / 14%));
   transform: translateY(-3px) scale(1.035);
 }
@@ -668,26 +672,20 @@ select:focus-visible {
   height: 188px;
   padding: 0;
   background: transparent;
-  filter:
-    grayscale(1) saturate(0) contrast(0.86) opacity(0.46)
-    drop-shadow(0 10px 20px rgb(64 42 84 / 8%));
+  filter: grayscale(1) saturate(0) contrast(0.86) opacity(0.46) drop-shadow(0 10px 20px rgb(64 42 84 / 8%));
   transition:
     filter 190ms ease,
     transform 190ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .easy-power-button.running .brand-mark-lg {
-  filter:
-    grayscale(0) saturate(1.04) contrast(1) opacity(1)
-    drop-shadow(0 18px 34px rgb(124 79 180 / 16%))
+  filter: grayscale(0) saturate(1.04) contrast(1) opacity(1) drop-shadow(0 18px 34px rgb(124 79 180 / 16%))
     drop-shadow(0 0 18px rgb(59 141 117 / 8%));
   transform: translateY(-2px) scale(1.02);
 }
 
 .easy-power-button.running:hover .brand-mark-lg {
-  filter:
-    grayscale(0) saturate(1.06) contrast(1.01) opacity(1)
-    drop-shadow(0 20px 36px rgb(124 79 180 / 18%))
+  filter: grayscale(0) saturate(1.06) contrast(1.01) opacity(1) drop-shadow(0 20px 36px rgb(124 79 180 / 18%))
     drop-shadow(0 0 20px rgb(59 141 117 / 9%));
   transform: translateY(-3px) scale(1.028);
 }
@@ -695,25 +693,19 @@ select:focus-visible {
 .easy-power-button.running.stopping .brand-mark-lg,
 .easy-power-button.stopping:hover .brand-mark-lg,
 .easy-power-button.stopping .brand-mark-lg {
-  filter:
-    grayscale(0.16) saturate(1.02) contrast(0.98) opacity(0.86)
-    drop-shadow(0 14px 26px rgb(94 76 122 / 12%))
+  filter: grayscale(0.16) saturate(1.02) contrast(0.98) opacity(0.86) drop-shadow(0 14px 26px rgb(94 76 122 / 12%))
     drop-shadow(0 0 10px rgb(143 88 215 / 10%));
   transform: translateY(1px) scale(0.982);
 }
 
 .easy-power-button.starting .brand-mark-lg {
-  filter:
-    grayscale(0.12) saturate(1.08) contrast(0.98) opacity(0.9)
-    drop-shadow(0 18px 34px rgb(143 88 215 / 22%))
+  filter: grayscale(0.12) saturate(1.08) contrast(0.98) opacity(0.9) drop-shadow(0 18px 34px rgb(143 88 215 / 22%))
     drop-shadow(0 0 18px rgb(143 88 215 / 20%));
   transform: translateY(-2px) scale(1.025);
 }
 
 .easy-power-button.failed .brand-mark-lg {
-  filter:
-    grayscale(0.55) saturate(0.76) contrast(0.92) opacity(0.72)
-    drop-shadow(0 10px 20px rgb(64 42 84 / 8%));
+  filter: grayscale(0.55) saturate(0.76) contrast(0.92) opacity(0.72) drop-shadow(0 10px 20px rgb(64 42 84 / 8%));
   transform: translateY(0) scale(1);
 }
 
@@ -763,15 +755,14 @@ select:focus-visible {
   width: 34px;
   height: 34px;
   border-radius: 999px;
-  background:
-    conic-gradient(
-      from var(--ring-angle),
-      rgb(143 88 215 / 78%),
-      rgb(222 210 236 / 30%),
-      rgb(143 88 215 / 68%),
-      rgb(222 210 236 / 38%),
-      rgb(143 88 215 / 78%)
-    );
+  background: conic-gradient(
+    from var(--ring-angle),
+    rgb(143 88 215 / 78%),
+    rgb(222 210 236 / 30%),
+    rgb(143 88 215 / 68%),
+    rgb(222 210 236 / 38%),
+    rgb(143 88 215 / 78%)
+  );
   mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
   opacity: 0;
   pointer-events: none;
@@ -788,23 +779,20 @@ select:focus-visible {
 }
 
 .easy-power-button.stopping .startup-ring {
-  background:
-    conic-gradient(
-      from var(--ring-angle),
-      rgb(112 93 141 / 82%),
-      rgb(222 210 236 / 28%),
-      rgb(143 88 215 / 68%),
-      rgb(222 210 236 / 36%),
-      rgb(112 93 141 / 82%)
-    );
+  background: conic-gradient(
+    from var(--ring-angle),
+    rgb(112 93 141 / 82%),
+    rgb(222 210 236 / 28%),
+    rgb(143 88 215 / 68%),
+    rgb(222 210 236 / 36%),
+    rgb(112 93 141 / 82%)
+  );
   filter: drop-shadow(0 0 8px rgb(143 88 215 / 12%));
   animation: startup-ring-spin 760ms linear infinite;
 }
 
 .easy-power-button:has(.startup-ring.is-starting) .brand-mark-lg {
-  filter:
-    grayscale(0.16) saturate(1.05) contrast(0.98) opacity(0.84)
-    drop-shadow(0 18px 34px rgb(143 88 215 / 20%))
+  filter: grayscale(0.16) saturate(1.05) contrast(0.98) opacity(0.84) drop-shadow(0 18px 34px rgb(143 88 215 / 20%))
     drop-shadow(0 0 18px rgb(143 88 215 / 18%));
 }
 
@@ -1630,15 +1618,14 @@ select:focus-visible {
   height: 18px;
   flex: none;
   border-radius: 999px;
-  background:
-    conic-gradient(
-      from 0deg,
-      rgb(143 88 215 / 88%),
-      rgb(222 210 236 / 24%),
-      rgb(143 88 215 / 74%),
-      rgb(222 210 236 / 32%),
-      rgb(143 88 215 / 88%)
-    );
+  background: conic-gradient(
+    from 0deg,
+    rgb(143 88 215 / 88%),
+    rgb(222 210 236 / 24%),
+    rgb(143 88 215 / 74%),
+    rgb(222 210 236 / 32%),
+    rgb(143 88 215 / 88%)
+  );
   mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
   animation: startup-ring-spin 900ms linear infinite;
 }
@@ -2283,15 +2270,14 @@ select:focus-visible {
   width: 38px;
   height: 38px;
   border-radius: 999px;
-  background:
-    conic-gradient(
-      from 0deg,
-      rgb(143 88 215 / 88%),
-      rgb(222 210 236 / 24%),
-      rgb(143 88 215 / 74%),
-      rgb(222 210 236 / 32%),
-      rgb(143 88 215 / 88%)
-    );
+  background: conic-gradient(
+    from 0deg,
+    rgb(143 88 215 / 88%),
+    rgb(222 210 236 / 24%),
+    rgb(143 88 215 / 74%),
+    rgb(222 210 236 / 32%),
+    rgb(143 88 215 / 88%)
+  );
   mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
   animation: startup-ring-spin 900ms linear infinite;
 }
@@ -2330,6 +2316,20 @@ select:focus-visible {
   color: var(--muted);
   font-size: 14px;
   font-weight: 750;
+}
+
+.registration-form {
+  display: grid;
+  gap: 14px;
+}
+
+.page-loading {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--accent-strong);
+  font-weight: 850;
 }
 
 .field {

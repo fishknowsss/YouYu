@@ -1,11 +1,10 @@
 import { request as httpRequest } from 'node:http';
-import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RemoteControlConfig, RuleProfile, StrategyKey } from '../shared/ipc';
 import { createDeviceAuthHeaders } from './deviceAuth';
 import type { TrafficStore } from './traffic/store';
+import { readJsonFile, writeJsonFileAtomic } from './storage/jsonFile';
 
 type RemoteConfigClientOptions = {
   baseDir: string;
@@ -17,6 +16,7 @@ type RemoteConfigClientOptions = {
 
 type SyncOptions = {
   proxyUrl?: string;
+  signal?: AbortSignal;
 };
 
 type JsonResponse = {
@@ -33,6 +33,8 @@ export class RemoteConfigClient {
   private readonly filePath: string;
   private loaded = false;
   private cached: RemoteControlConfig | undefined;
+  private loadPromise?: Promise<RemoteControlConfig | undefined>;
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: RemoteConfigClientOptions) {
     this.filePath = join(options.baseDir, remoteConfigFileName);
@@ -44,6 +46,15 @@ export class RemoteConfigClient {
   }
 
   async sync(options: SyncOptions = {}): Promise<{ config?: RemoteControlConfig; changed: boolean }> {
+    const run = this.queue.then(
+      () => this.performSync(options),
+      () => this.performSync(options)
+    );
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async performSync(options: SyncOptions): Promise<{ config?: RemoteControlConfig; changed: boolean }> {
     const endpoint = normalizeEndpoint(this.options.endpoint);
     const current = await this.readCached();
     if (!endpoint) {
@@ -69,7 +80,8 @@ export class RemoteConfigClient {
       url.toString(),
       createDeviceAuthHeaders('GET', url.toString(), '', secret),
       options.proxyUrl,
-      this.options.requestTimeoutMs
+      this.options.requestTimeoutMs,
+      options.signal
     );
     if (!response.ok) {
       throw new Error(`remote config failed: ${response.status}`);
@@ -90,19 +102,23 @@ export class RemoteConfigClient {
 
   private async readCached(): Promise<RemoteControlConfig | undefined> {
     if (this.loaded) return this.cached;
-    this.loaded = true;
-    try {
-      const raw = await readFile(this.filePath, 'utf8');
-      this.cached = normalizeRemoteConfig(JSON.parse(raw));
-    } catch {
-      this.cached = undefined;
+    if (!this.loadPromise) {
+      this.loadPromise = (async () => {
+        const result = await readJsonFile<unknown>(this.filePath, {
+          validate: (value) => normalizeRemoteConfig(value) !== undefined
+        });
+        this.cached = result.status === 'found' ? normalizeRemoteConfig(result.value) : undefined;
+        this.loaded = true;
+        return this.cached;
+      })().finally(() => {
+        this.loadPromise = undefined;
+      });
     }
-    return this.cached;
+    return this.loadPromise;
   }
 
   private async writeCached(config: RemoteControlConfig): Promise<void> {
-    await mkdir(this.options.baseDir, { recursive: true });
-    await writeFile(this.filePath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    await writeJsonFileAtomic(this.filePath, config);
     this.loaded = true;
     this.cached = config;
   }
@@ -115,9 +131,8 @@ function normalizeEndpoint(value: string): string {
 function normalizeRemoteConfig(value: unknown): RemoteControlConfig | undefined {
   if (!isRecord(value)) return undefined;
 
-  const version = typeof value.version === 'number' && Number.isFinite(value.version)
-    ? Math.max(1, Math.floor(value.version))
-    : 1;
+  const version =
+    typeof value.version === 'number' && Number.isFinite(value.version) ? Math.max(1, Math.floor(value.version)) : 1;
   const ruleProfile = validRuleProfiles.includes(value.ruleProfile as RuleProfile)
     ? (value.ruleProfile as RuleProfile)
     : undefined;
@@ -164,19 +179,18 @@ function normalizeSubscriptionUrl(value: unknown): string | undefined {
 
 function normalizeTextList(value: unknown, maxLength: number): string[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => normalizeText(item, maxLength))
-    .filter((item): item is string => Boolean(item));
+  return value.map((item) => normalizeText(item, maxLength)).filter((item): item is string => Boolean(item));
 }
 
 async function getJson(
   url: string,
   headers: Record<string, string>,
   proxyUrl?: string,
-  timeoutMs = 12000
+  timeoutMs = 12000,
+  operationSignal?: AbortSignal
 ): Promise<JsonResponse> {
   if (proxyUrl) {
-    return getJsonViaProxy(url, headers, proxyUrl, timeoutMs);
+    return getJsonViaProxy(url, headers, proxyUrl, timeoutMs, operationSignal);
   }
 
   const controller = new AbortController();
@@ -184,7 +198,7 @@ async function getJson(
   try {
     const response = await fetch(url, {
       headers: { accept: 'application/json', ...headers },
-      signal: controller.signal
+      signal: operationSignal ? AbortSignal.any([controller.signal, operationSignal]) : controller.signal
     });
     return {
       ok: response.ok,
@@ -200,12 +214,13 @@ async function getJsonViaProxy(
   url: string,
   headers: Record<string, string>,
   proxyUrl: string,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<JsonResponse> {
   const target = new URL(url);
   const proxy = new URL(proxyUrl);
   if (target.protocol !== 'https:') {
-    return getJsonViaHttpProxy(target, proxy, headers, timeoutMs);
+    return getJsonViaHttpProxy(target, proxy, headers, timeoutMs, signal);
   }
 
   return new Promise((resolve, reject) => {
@@ -216,6 +231,10 @@ async function getJsonViaProxy(
       path: `${target.hostname}:${target.port || 443}`,
       timeout: timeoutMs
     });
+    const abort = () =>
+      connectReq.destroy(signal?.reason instanceof Error ? signal.reason : new Error('operation canceled'));
+    signal?.throwIfAborted();
+    signal?.addEventListener('abort', abort, { once: true });
 
     connectReq.on('connect', (res, socket) => {
       if ((res.statusCode ?? 0) < 200 || (res.statusCode ?? 0) >= 300) {
@@ -249,6 +268,7 @@ async function getJsonViaProxy(
     });
     connectReq.on('timeout', () => connectReq.destroy(new Error('remote config proxy connect timed out')));
     connectReq.on('error', reject);
+    connectReq.on('close', () => signal?.removeEventListener('abort', abort));
     connectReq.end();
   });
 }
@@ -257,7 +277,8 @@ async function getJsonViaHttpProxy(
   target: URL,
   proxy: URL,
   authHeaders: Record<string, string>,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<JsonResponse> {
   return new Promise((resolve, reject) => {
     const req = httpRequest(
@@ -284,8 +305,12 @@ async function getJsonViaHttpProxy(
         });
       }
     );
+    const abort = () => req.destroy(signal?.reason instanceof Error ? signal.reason : new Error('operation canceled'));
+    signal?.throwIfAborted();
+    signal?.addEventListener('abort', abort, { once: true });
     req.on('timeout', () => req.destroy(new Error('remote config request timed out')));
     req.on('error', reject);
+    req.on('close', () => signal?.removeEventListener('abort', abort));
     req.end();
   });
 }

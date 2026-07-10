@@ -1,12 +1,13 @@
 # YouYu
 
 [![Release](https://img.shields.io/github/v/release/fishknowsss/YouYu?display_name=tag&label=release)](https://github.com/fishknowsss/YouYu/releases/latest)
+[![Validate](https://github.com/fishknowsss/YouYu/actions/workflows/validate.yml/badge.svg)](https://github.com/fishknowsss/YouYu/actions/workflows/validate.yml)
 [![Build Windows](https://github.com/fishknowsss/YouYu/actions/workflows/build-windows.yml/badge.svg)](https://github.com/fishknowsss/YouYu/actions/workflows/build-windows.yml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4)](https://github.com/fishknowsss/YouYu/releases/latest)
 
 YouYu 是一款面向 Windows x64 的代理桌面客户端。应用基于 Electron、React、TypeScript 和 Vite 构建，内置 Mihomo 运行时，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新和桌宠交互。
 
-当前发布版本为 `1.4.9`。安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)。
+当前发布版本为 `1.5.0`。安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)。
 
 ## 界面预览
 
@@ -111,11 +112,11 @@ YouYu 是一款面向 Windows x64 的代理桌面客户端。应用基于 Electr
 ## 安装与使用
 
 1. 从 [最新 Release](https://github.com/fishknowsss/YouYu/releases/latest) 下载对应的 Windows x64 安装包。
-2. 运行安装程序。YouYu 会请求管理员权限，用于管理系统代理、TUN 和网络修复操作。
+2. 运行安装程序并完成管理员授权。安装后的 YouYu 默认以普通用户权限运行；启用 TUN 或执行网络修复时会再次按需请求授权。
 3. 首次打开后完成使用登记，并在设置页填写订阅地址。
 4. 保存设置，启动代理；需要精细控制时进入专业模式选择节点或规则。
 
-NSIS 安装程序使用固定的当前用户安装位置，并创建桌面与开始菜单快捷方式。
+NSIS 安装程序按计算机安装到受管理员权限保护的位置，并创建桌面与开始菜单快捷方式。安装或更新时会请求一次管理员授权，应用日常运行仍使用普通用户权限。
 
 ## 安装包与更新通道
 
@@ -172,6 +173,11 @@ npm run dev:ui
 ```powershell
 npm run typecheck
 npm test
+npm run lint
+npm run format:check
+npm run test:worker
+npm run typecheck:worker
+npm run build:worker
 npm run build
 ```
 
@@ -215,10 +221,12 @@ docs/screenshots/            900×600 演示截图
 
 ## CI 与发布
 
-`.github/workflows/build-windows.yml` 在 `main`、`vc` 推送或手动触发时执行：
+`.github/workflows/validate.yml` 在 `main`、`vc` 推送及 Pull Request 中执行类型检查、测试、Worker 校验、lint、格式检查和生产构建。
+
+`.github/workflows/build-windows.yml` 只在 `v*` 标签或手动触发时生成 Windows 安装包；标签构建会先校验标签名与 `package.json` 版本一致：
 
 1. 使用 Node.js 24 和 Python 3 安装依赖。
-2. 运行测试与 TypeScript 类型检查。
+2. 运行桌面端与 Worker 测试、类型检查、lint、格式和 Worker dry-run 构建。
 3. 生成三通道公开 Windows 更新资产，失败时最多重试三次。
 4. 对打包输出执行冒烟检查。
 5. 上传 9 个安装与更新资产，Actions artifact 保留 3 天。
