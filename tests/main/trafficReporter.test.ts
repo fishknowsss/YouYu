@@ -292,11 +292,16 @@ describe('TrafficReporter', () => {
   it('shares one in-flight report between concurrent callers', async () => {
     let reportCount = 0;
     let releaseResponse: (() => void) | undefined;
+    let markRequestStarted: (() => void) | undefined;
     const responseGate = new Promise<void>((resolve) => {
       releaseResponse = resolve;
     });
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
     const endpoint = await startJsonServer(async () => {
       reportCount += 1;
+      markRequestStarted?.();
       await responseGate;
       return { status: 200, body: { ok: true, traffic: { totalUpload: 10, totalDownload: 20 } } };
     });
@@ -308,7 +313,7 @@ describe('TrafficReporter', () => {
 
     const first = reporter.reportPending();
     const second = reporter.reportPending();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await requestStarted;
     expect(reportCount).toBe(1);
     releaseResponse?.();
     await Promise.all([first, second]);
