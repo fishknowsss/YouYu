@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import type { AppSnapshot, MihomoMode, StrategyKey } from '../../shared/ipc';
 import type { UsageMode } from '../components/AppShell';
 import { BrandMark } from '../components/BrandMark';
@@ -78,6 +79,14 @@ function EasyHome(props: HomeProps) {
             <span className={`startup-ring ${starting ? 'is-starting' : ''}`} aria-hidden="true" />
           </button>
         </div>
+        {isActionErrorMessage(props.message) && (
+          <aside className="easy-error-notice" role="alert">
+            <strong>{props.message}</strong>
+            <button disabled={props.busy} onClick={props.onRepair}>
+              修复
+            </button>
+          </aside>
+        )}
         <EasyUpdateNotice snapshot={props.snapshot} busy={props.busy} onInstallUpdate={props.onInstallUpdate} />
       </section>
     </div>
@@ -144,7 +153,16 @@ function AdvancedHome(props: HomeProps) {
   const statusLabel = getStatusLabel(props.snapshot.status);
   const mostUsedNode = props.snapshot.traffic.nodeUsage.mostUsed;
   const longestUsedNode = props.snapshot.traffic.nodeUsage.longestUsed;
-  const logLines = props.snapshot.diagnostics.logs.slice(-7);
+  const diagnosticsLogs = props.snapshot.diagnostics.logs;
+  const logLines = diagnosticsLogs.slice(-7);
+  const diagnosticsLogRef = useRef<HTMLDivElement>(null);
+  const diagnosticMessage = props.message || props.snapshot.diagnostics.lastError;
+
+  useEffect(() => {
+    const diagnosticsLog = diagnosticsLogRef.current;
+    if (!diagnosticsLog) return;
+    diagnosticsLog.scrollTop = diagnosticsLog.scrollHeight;
+  }, [diagnosticsLogs]);
 
   return (
     <div className="workspace advanced-workspace">
@@ -238,10 +256,17 @@ function AdvancedHome(props: HomeProps) {
             <h2>诊断</h2>
             <span>{props.snapshot.diagnostics.logs.length} 条</span>
           </div>
-          {props.snapshot.diagnostics.lastError && (
-            <p className="diagnostics-error">{props.snapshot.diagnostics.lastError}</p>
+          {diagnosticMessage && (
+            <div className="diagnostics-status" aria-live="polite">
+              <p className={isActionErrorMessage(diagnosticMessage) ? 'diagnostics-error' : ''}>{diagnosticMessage}</p>
+              {isActionErrorMessage(diagnosticMessage) && (
+                <button className="diagnostics-repair" disabled={props.busy} onClick={props.onRepair}>
+                  修复
+                </button>
+              )}
+            </div>
           )}
-          <div className="diagnostics-log">
+          <div className="diagnostics-log" ref={diagnosticsLogRef}>
             {logLines.length ? (
               logLines.map((line, index) => <span key={`${index}-${line}`}>{line}</span>)
             ) : (
@@ -380,4 +405,8 @@ function getAvailabilityToneClass(availability: AppSnapshot['nodeHealth']['avail
   if (availability.tone === 'warning') return 'is-warning';
   if (availability.tone === 'danger') return 'is-danger';
   return 'is-muted';
+}
+
+function isActionErrorMessage(message: string): boolean {
+  return /失败|超时|错误|不可用|未加载|先/.test(message);
 }

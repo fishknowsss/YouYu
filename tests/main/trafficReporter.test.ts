@@ -250,6 +250,70 @@ describe('TrafficReporter', () => {
       }
     });
   });
+
+  it('reuses a persisted report id until the pending traffic is acknowledged', async () => {
+    const reportIds: unknown[] = [];
+    let attempts = 0;
+    const endpoint = await startJsonServer(async (body) => {
+      attempts += 1;
+      reportIds.push(body.reportId);
+      if (attempts === 1) return { status: 500, body: { error: 'response lost' } };
+      return {
+        status: 200,
+        body: { ok: true, traffic: { totalUpload: 100, totalDownload: 200 } }
+      };
+    });
+    const store = new TrafficStore(dir);
+    await store.createDeviceSeed();
+    await store.registerIdentity({
+      userId: 'user_1',
+      deviceId: 'device_1',
+      name: 'Alice',
+      deviceName: 'DESKTOP'
+    });
+    await store.addTraffic(100, 200);
+
+    const firstReporter = new TrafficReporter({ store, endpoint, appVersion: '1.5.1' });
+    await expect(firstReporter.reportPending()).rejects.toThrow('traffic report failed: 500');
+    const retryReporter = new TrafficReporter({
+      store: new TrafficStore(dir),
+      endpoint,
+      appVersion: '1.5.1'
+    });
+    await retryReporter.reportPending();
+
+    expect(reportIds).toHaveLength(2);
+    expect(reportIds[1]).toBe(reportIds[0]);
+    await expect(store.getSnapshot()).resolves.toMatchObject({
+      stats: { pendingUpload: 0, pendingDownload: 0, reportStatus: 'synced' }
+    });
+  });
+
+  it('shares one in-flight report between concurrent callers', async () => {
+    let reportCount = 0;
+    let releaseResponse: (() => void) | undefined;
+    const responseGate = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+    const endpoint = await startJsonServer(async () => {
+      reportCount += 1;
+      await responseGate;
+      return { status: 200, body: { ok: true, traffic: { totalUpload: 10, totalDownload: 20 } } };
+    });
+    const store = new TrafficStore(dir);
+    await store.createDeviceSeed();
+    await store.registerIdentity({ userId: 'u', deviceId: 'd', name: 'A', deviceName: 'PC' });
+    await store.addTraffic(10, 20);
+    const reporter = new TrafficReporter({ store, endpoint, appVersion: '1.5.1' });
+
+    const first = reporter.reportPending();
+    const second = reporter.reportPending();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(reportCount).toBe(1);
+    releaseResponse?.();
+    await Promise.all([first, second]);
+    expect(reportCount).toBe(1);
+  });
 });
 
 async function startJsonServer(

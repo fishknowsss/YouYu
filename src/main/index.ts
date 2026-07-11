@@ -760,10 +760,14 @@ lifecycle = createLifecycleController({
   mihomo: mihomoRuntime,
   onStatusChange: (status) => {
     if (status === 'running') {
+      trafficTracker.start();
+      trafficReporter.start();
       clearRuntimeRecoveryTimer();
       runtimeRecoveryFailures = 0;
       startNodeHealthMonitor();
     } else {
+      trafficTracker.stop();
+      trafficReporter.stop();
       stopNodeHealthMonitor();
     }
     if (status === 'failed') {
@@ -2822,26 +2826,33 @@ if (!gotSingleInstanceLock) {
     showMainWindow();
   });
 
-  app.whenReady().then(async () => {
-    await systemProxy.restore().catch((error) => appendLog(`恢复遗留系统代理失败: ${formatError(error)}`));
-    await allocateRuntimePorts();
-    registerIpc();
-    setupAutoUpdates();
-    createTray();
-    void migrateLegacyLaunchAtLogin();
-    void createWindow();
-    startRemoteConfigPolling();
-    void refreshTrafficTotalsFromServer();
-    if (petFeatureEnabled) {
-      void createPetWindow();
-    }
-
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        void createWindow();
+  app
+    .whenReady()
+    .then(async () => {
+      await systemProxy.restore().catch((error) => appendLog(`恢复遗留系统代理失败: ${formatError(error)}`));
+      await allocateRuntimePorts();
+      registerIpc();
+      setupAutoUpdates();
+      createTray();
+      void migrateLegacyLaunchAtLogin();
+      void createWindow().catch((error) => recordError('创建主窗口失败', error));
+      startRemoteConfigPolling();
+      void refreshTrafficTotalsFromServer();
+      if (petFeatureEnabled) {
+        void createPetWindow().catch((error) => recordError('创建桌宠窗口失败', error));
       }
+
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) {
+          void createWindow().catch((error) => recordError('创建主窗口失败', error));
+        }
+      });
+    })
+    .catch((error) => {
+      console.error('application initialization failed', error);
+      isQuitting = true;
+      app.quit();
     });
-  });
 }
 
 app.on('window-all-closed', () => {

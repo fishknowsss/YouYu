@@ -183,4 +183,41 @@ describe('createLifecycleController', () => {
     expect(controller.getStatus()).toBe('failed');
     expect(onStatusChange).toHaveBeenLastCalledWith('failed');
   });
+
+  it('does not report stopped when cleanup fails', async () => {
+    const onStatusChange = vi.fn();
+    const controller = createLifecycleController({
+      proxy: {
+        enable: vi.fn(async () => undefined),
+        restore: vi.fn(async () => {
+          throw new Error('proxy restore failed');
+        }),
+        repair: vi.fn(async () => undefined)
+      },
+      mihomo: {
+        start: vi.fn(async () => undefined),
+        stop: vi.fn(async () => undefined)
+      },
+      onStatusChange
+    });
+
+    await controller.start();
+    await expect(controller.stop()).rejects.toThrow('proxy restore failed');
+    expect(controller.getStatus()).toBe('failed');
+    expect(onStatusChange).toHaveBeenLastCalledWith('failed');
+  });
+
+  it('does not start a replacement runtime when restart cleanup fails', async () => {
+    const start = vi.fn(async () => undefined);
+    const restore = vi.fn<() => Promise<void>>().mockRejectedValueOnce(new Error('proxy restore failed'));
+    const controller = createLifecycleController({
+      proxy: { enable: vi.fn(async () => undefined), restore, repair: vi.fn(async () => undefined) },
+      mihomo: { start, stop: vi.fn(async () => undefined) }
+    });
+
+    await controller.start();
+    await expect(controller.restart()).rejects.toThrow('proxy restore failed');
+    expect(start).toHaveBeenCalledOnce();
+    expect(controller.getStatus()).toBe('failed');
+  });
 });

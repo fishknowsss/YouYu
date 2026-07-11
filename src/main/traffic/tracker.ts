@@ -19,6 +19,8 @@ export class TrafficTracker {
   private lastSampleAt = 0;
   private lastNode: string | undefined;
   private excludedConnections = new Map<string, { upload: number; download: number }>();
+  private sampling: Promise<void> | undefined;
+  private generation = 0;
 
   constructor(private readonly options: TrafficTrackerOptions) {}
 
@@ -31,6 +33,7 @@ export class TrafficTracker {
   }
 
   stop() {
+    this.generation += 1;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
@@ -47,6 +50,18 @@ export class TrafficTracker {
   }
 
   private async sample() {
+    if (this.sampling) return this.sampling;
+    const generation = this.generation;
+    const sampling = this.sampleOnce(generation);
+    this.sampling = sampling;
+    try {
+      await sampling;
+    } finally {
+      if (this.sampling === sampling) this.sampling = undefined;
+    }
+  }
+
+  private async sampleOnce(generation: number) {
     if (!this.options.isRunning()) {
       this.lastUpload = 0;
       this.lastDownload = 0;
@@ -61,6 +76,7 @@ export class TrafficTracker {
       this.options.readRuntimeStats(),
       this.options.readCurrentNode?.().catch(() => undefined)
     ]);
+    if (generation !== this.generation || !this.options.isRunning()) return;
     const uploadDelta =
       this.lastUpload > 0 && stats.uploadTotal >= this.lastUpload ? stats.uploadTotal - this.lastUpload : 0;
     const downloadDelta =

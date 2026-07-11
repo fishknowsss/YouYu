@@ -118,7 +118,19 @@ export function App() {
   const [switchingNode, setSwitchingNode] = useState('');
   const [snapshotLoaded, setSnapshotLoaded] = useState(false);
   const [advancedUnlockClicks, setAdvancedUnlockClicks] = useState(0);
+  const snapshotRef = useRef(snapshot);
+  const snapshotGenerationRef = useRef(0);
+  const nodeSelectionGenerationRef = useRef(0);
   const registered = Boolean(snapshot.trafficIdentity);
+
+  function commitSnapshot(next: AppSnapshot, expectedGeneration?: number): boolean {
+    if (expectedGeneration !== undefined && snapshotGenerationRef.current !== expectedGeneration) return false;
+    snapshotGenerationRef.current += 1;
+    snapshotRef.current = next;
+    setSnapshot(next);
+    setSnapshotLoaded(true);
+    return true;
+  }
 
   useEffect(() => {
     void runAction((api) => api.getSnapshot(), '');
@@ -128,6 +140,8 @@ export function App() {
 
   useEffect(() => {
     const dispose = window.youyu?.onSnapshotUpdated((next) => {
+      snapshotGenerationRef.current += 1;
+      snapshotRef.current = next;
       setSnapshot(next);
       setSnapshotLoaded(true);
     });
@@ -202,30 +216,26 @@ export function App() {
     }
 
     const request = cancellable ? createOperationRequest() : undefined;
+    const snapshotGeneration = snapshotGenerationRef.current;
     setBusy(true);
     setBusyLabel(workingMessage);
     setMessage('');
     messageSink?.('');
     try {
       const actionPromise = action(api, request);
-      const next =
-        cancellable || onTimeout
-          ? await withTimeout(actionPromise, timeoutMs, timeoutLabel, () => {
-              if (request) void api.cancelOperation(request.requestId).catch(() => false);
-              onTimeout?.(api);
-            })
-          : await actionPromise;
-      setSnapshot(next);
-      setSnapshotLoaded(true);
+      const next = await withTimeout(actionPromise, timeoutMs, timeoutLabel, () => {
+        if (request) void api.cancelOperation(request.requestId).catch(() => false);
+        onTimeout?.(api);
+      });
+      commitSnapshot(next, snapshotGeneration);
       setMessage(doneMessage);
       messageSink?.(doneMessage);
     } catch (error) {
       if (error instanceof ActionTimeoutError && request) {
         await api.cancelOperation(request.requestId).catch(() => false);
       }
-      const next = await api.getSnapshot().catch(() => snapshot);
-      setSnapshot(next);
-      setSnapshotLoaded(true);
+      const next = await api.getSnapshot().catch(() => snapshotRef.current);
+      commitSnapshot(next, snapshotGeneration);
       const errorMessage = getActionErrorMessage(error);
       setMessage(errorMessage);
       messageSink?.(errorMessage);
@@ -253,6 +263,7 @@ export function App() {
     setMessage('');
     const requestTracker = createOperationRequestTracker();
     const quickStartController = new AbortController();
+    const snapshotGeneration = snapshotGenerationRef.current;
     try {
       const saveRequest = requestTracker.next();
       await withTimeout(
@@ -282,17 +293,15 @@ export function App() {
           void api.cancelNodeTests().catch(() => undefined);
         }
       );
-      setSnapshot(next);
-      setSnapshotLoaded(true);
+      commitSnapshot(next, snapshotGeneration);
       setMessage('已启动');
     } catch (error) {
       if (error instanceof ActionTimeoutError && requestTracker.current) {
         await api.cancelOperation(requestTracker.current.requestId).catch(() => false);
         await api.cancelNodeTests().catch(() => undefined);
       }
-      const next = await api.getSnapshot().catch(() => snapshot);
-      setSnapshot(next);
-      setSnapshotLoaded(true);
+      const next = await api.getSnapshot().catch(() => snapshotRef.current);
+      commitSnapshot(next, snapshotGeneration);
       setMessage(getActionErrorMessage(error));
     } finally {
       setBusy(false);
@@ -326,8 +335,7 @@ export function App() {
     setMessage('停止中');
     try {
       const next = await api.cancelNodeTests();
-      setSnapshot(next);
-      setSnapshotLoaded(true);
+      commitSnapshot(next);
       setMessage('已停止');
     } catch (error) {
       setMessage(getActionErrorMessage(error));
@@ -346,22 +354,23 @@ export function App() {
       return;
     }
 
+    const selectionGeneration = ++nodeSelectionGenerationRef.current;
     setSwitchingNode(name);
     setMessage('');
     try {
       const next = await api.selectNode(name);
-      setSnapshot(next);
-      setSnapshotLoaded(true);
+      if (selectionGeneration !== nodeSelectionGenerationRef.current) return;
+      commitSnapshot(next);
       const activeNode = next.nodes.find((node) => node.active)?.name || next.currentNode;
       const selected = activeNode === name || next.currentNode === name;
       setMessage(selected ? '已切换' : activeNode ? `已切至${activeNode}` : '切换失败');
     } catch (error) {
-      const next = await api.getSnapshot().catch(() => snapshot);
-      setSnapshot(next);
-      setSnapshotLoaded(true);
+      if (selectionGeneration !== nodeSelectionGenerationRef.current) return;
+      const next = await api.getSnapshot().catch(() => snapshotRef.current);
+      commitSnapshot(next);
       setMessage(getActionErrorMessage(error));
     } finally {
-      setSwitchingNode('');
+      if (selectionGeneration === nodeSelectionGenerationRef.current) setSwitchingNode('');
     }
   }
 

@@ -84,6 +84,7 @@ export function createMihomoApiClient(options: {
   secret: string;
   controllerPort?: number;
   fetcher?: Fetcher;
+  requestTimeoutMs?: number;
 }): MihomoApiClient {
   const fetcher = options.fetcher ?? fetch;
   const controllerUrl = `http://127.0.0.1:${options.controllerPort ?? 9090}`;
@@ -100,7 +101,9 @@ export function createMihomoApiClient(options: {
   }
 
   async function request(path: string, init?: RequestInit): Promise<Response> {
-    const response = await fetcher(`${controllerUrl}${path}`, init);
+    const timeoutSignal = AbortSignal.timeout(options.requestTimeoutMs ?? 5000);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+    const response = await fetcher(`${controllerUrl}${path}`, { ...init, signal });
     if (!response.ok) {
       throw new Error(`mihomo api failed: ${response.status}`);
     }

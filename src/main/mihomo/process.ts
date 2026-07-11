@@ -80,6 +80,7 @@ async function waitForController(secret: string, port: number, signal?: AbortSig
     signal?.throwIfAborted();
     try {
       const response = await fetch(`http://127.0.0.1:${port}/version`, {
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(1000)]) : AbortSignal.timeout(1000),
         headers: {
           Authorization: `Bearer ${secret}`
         }
@@ -98,8 +99,11 @@ function isControllerNotReadyError(error: unknown): boolean {
 }
 
 async function requestController(port: number, secret: string, path: string, init?: RequestInit): Promise<Response> {
+  const timeoutSignal = AbortSignal.timeout(5000);
+  const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
   const response = await fetch(`http://127.0.0.1:${port}${path}`, {
     ...init,
+    signal,
     headers: {
       Authorization: `Bearer ${secret}`,
       ...init?.headers

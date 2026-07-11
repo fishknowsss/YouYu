@@ -1,5 +1,4 @@
 import { hostname } from 'node:os';
-import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
@@ -36,6 +35,7 @@ type TrafficReportResponse = {
 
 export class TrafficReporter {
   private timer: ReturnType<typeof setInterval> | undefined;
+  private reporting: Promise<void> | undefined;
 
   constructor(private readonly options: TrafficReporterOptions) {}
 
@@ -105,6 +105,17 @@ export class TrafficReporter {
   }
 
   async reportPending() {
+    if (this.reporting) return this.reporting;
+    const reporting = this.reportPendingOnce();
+    this.reporting = reporting;
+    try {
+      await reporting;
+    } finally {
+      if (this.reporting === reporting) this.reporting = undefined;
+    }
+  }
+
+  private async reportPendingOnce() {
     const endpoint = normalizeEndpoint(this.options.endpoint);
     const { identity, stats } = await this.options.store.getSnapshot();
     if (!endpoint) {
@@ -114,16 +125,17 @@ export class TrafficReporter {
     if (identity?.verificationStatus === 'pending') return;
     if (!identity) return;
 
-    const upload = stats.pendingUpload;
-    const download = stats.pendingDownload;
+    const report = await this.options.store.getOrCreatePendingReport(stats.pendingUpload, stats.pendingDownload);
+    const upload = report.upload;
+    const download = report.download;
     const body = {
-      reportId: randomUUID(),
+      reportId: report.id,
       userId: identity.userId,
       deviceId: identity.deviceId,
       uploadDelta: upload,
       downloadDelta: download,
       appVersion: this.options.appVersion,
-      reportedAt: new Date().toISOString()
+      reportedAt: report.reportedAt
     };
     const secret = await this.options.store.getDeviceSecret();
     if (!secret) {
@@ -146,7 +158,7 @@ export class TrafficReporter {
       throw new Error(message);
     }
 
-    await this.options.store.markReported(upload, download);
+    await this.options.store.markReported(upload, download, new Date(), report.id);
     await this.options.store.markServerTotals((response.body as TrafficReportResponse).traffic ?? {});
   }
 }

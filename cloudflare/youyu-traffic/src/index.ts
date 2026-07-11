@@ -182,13 +182,21 @@ async function activate(request: Request, env: Env): Promise<Response> {
   if (!expectedPassphrase) {
     throw new HttpError(503, 'registration disabled');
   }
-  const rateLimitKey = `activate:${getClientIp(request)}:${normalizedName || 'unknown'}`;
-  await assertRateLimit(env, rateLimitKey, 8, 15 * 60 * 1000);
+  const clientIp = getClientIp(request);
+  const rateLimitKey = `activate:${clientIp}:${normalizedName || 'unknown'}`;
+  const ipRateLimitKey = `activate:${clientIp}`;
+  await Promise.all([
+    assertRateLimit(env, rateLimitKey, 8, 15 * 60 * 1000),
+    assertRateLimit(env, ipRateLimitKey, 24, 15 * 60 * 1000)
+  ]);
   if (passphrase !== expectedPassphrase) {
-    await recordRateLimitFailure(env, rateLimitKey, 15 * 60 * 1000);
+    await Promise.all([
+      recordRateLimitFailure(env, rateLimitKey, 15 * 60 * 1000),
+      recordRateLimitFailure(env, ipRateLimitKey, 15 * 60 * 1000)
+    ]);
     throw new HttpError(403, 'invalid passphrase');
   }
-  await clearRateLimit(env, rateLimitKey);
+  await Promise.all([clearRateLimit(env, rateLimitKey), clearRateLimit(env, ipRateLimitKey)]);
 
   await env.DB.prepare(
     'INSERT OR IGNORE INTO users (id, name, normalized_name, status, created_at) VALUES (?, ?, ?, ?, ?)'
@@ -1312,7 +1320,10 @@ function normalizeRemoteConfigRow(row: RemoteConfigRow): RemoteControlConfig {
   };
 }
 
-function normalizeRemoteConfigInput(input: RemoteConfigInput, fallback: RemoteControlConfig): RemoteControlConfig {
+export function normalizeRemoteConfigInput(
+  input: RemoteConfigInput,
+  fallback: RemoteControlConfig
+): RemoteControlConfig {
   const ruleProfile =
     normalizeChoice(input.ruleProfile, ['ruleset', 'smart', 'global', 'subscription']) ?? fallback.ruleProfile;
   const preferredStrategy =
@@ -1334,10 +1345,13 @@ function normalizeRemoteConfigInput(input: RemoteConfigInput, fallback: RemoteCo
     enabled: typeof input.enabled === 'boolean' ? input.enabled : fallback.enabled,
     subscriptionUrl,
     ruleProfile,
-    preferredNode: normalizeText(input.preferredNode, 120) ?? undefined,
+    preferredNode:
+      typeof input.preferredNode === 'undefined'
+        ? fallback.preferredNode
+        : (normalizeText(input.preferredNode, 120) ?? undefined),
     preferredStrategy,
-    directRules: parseRuleList(input.directRules),
-    proxyRules: parseRuleList(input.proxyRules),
+    directRules: typeof input.directRules === 'undefined' ? fallback.directRules : parseRuleList(input.directRules),
+    proxyRules: typeof input.proxyRules === 'undefined' ? fallback.proxyRules : parseRuleList(input.proxyRules),
     anomalyThresholdBytes: threshold,
     updatedAt: fallback.updatedAt
   };
@@ -1496,20 +1510,15 @@ async function assertRateLimit(env: Env, key: string, maxAttempts: number, _wind
 
 async function recordRateLimitFailure(env: Env, key: string, windowMs: number): Promise<void> {
   const now = Date.now();
-  const row = await env.DB.prepare('SELECT attempts, reset_at AS resetAt FROM rate_limits WHERE key = ?')
-    .bind(key)
-    .first<{ attempts: number; resetAt: number }>();
-  const attempts = row && row.resetAt > now ? row.attempts + 1 : 1;
-  const resetAt = row && row.resetAt > now ? row.resetAt : now + windowMs;
   await env.DB.prepare(
     `INSERT INTO rate_limits (key, attempts, reset_at, updated_at)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(key) DO UPDATE SET
-       attempts = excluded.attempts,
-       reset_at = excluded.reset_at,
+       attempts = CASE WHEN rate_limits.reset_at > ? THEN rate_limits.attempts + 1 ELSE 1 END,
+       reset_at = CASE WHEN rate_limits.reset_at > ? THEN rate_limits.reset_at ELSE excluded.reset_at END,
        updated_at = excluded.updated_at`
   )
-    .bind(key, attempts, resetAt, new Date(now).toISOString())
+    .bind(key, 1, now + windowMs, new Date(now).toISOString(), now, now)
     .run();
 }
 

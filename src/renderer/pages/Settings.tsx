@@ -283,7 +283,7 @@ function formatUpdateFailure(message: string | undefined): string {
   if (message.includes('404')) return '失败：GitHub Release 未发布或资源不存在';
   if (message.includes('ENOTFOUND') || message.includes('EAI_AGAIN')) return '失败：无法连接 GitHub';
   if (message.includes('net::ERR_INTERNET_DISCONNECTED')) return '失败：网络未连接';
-  return `失败：${message}`;
+  return '失败：请稍后重试';
 }
 
 function getDisplayUpdateProgress(update: AppSnapshot['update']): number {

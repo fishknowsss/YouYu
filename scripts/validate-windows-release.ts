@@ -1,5 +1,8 @@
 import { access, readFile, readdir, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
+import { parse } from 'yaml';
 
 const root = process.cwd();
 const releaseDir = join(root, 'release');
@@ -27,6 +30,27 @@ const trafficApiUrlPath = join(releaseDir, 'win-unpacked', 'resources', 'traffic
 await access(expectedInstallerPath);
 await access(expectedBlockmapPath);
 await access(expectedUpdateMetadataPath);
+
+const updateMetadata = parse(await readFile(expectedUpdateMetadataPath, 'utf8')) as {
+  version?: unknown;
+  path?: unknown;
+  sha512?: unknown;
+  files?: Array<{ url?: unknown; sha512?: unknown }>;
+};
+if (updateMetadata.version !== packageJson.version) {
+  throw new Error(`${expectedUpdateMetadataName} has unexpected version: ${String(updateMetadata.version)}`);
+}
+if (updateMetadata.path !== expectedInstallerName) {
+  throw new Error(`${expectedUpdateMetadataName} points to unexpected installer: ${String(updateMetadata.path)}`);
+}
+const metadataFile = updateMetadata.files?.find((entry) => entry.url === expectedInstallerName);
+if (!metadataFile || typeof metadataFile.sha512 !== 'string' || typeof updateMetadata.sha512 !== 'string') {
+  throw new Error(`${expectedUpdateMetadataName} is missing installer checksums`);
+}
+const installerSha512 = await hashFileSha512(expectedInstallerPath);
+if (metadataFile.sha512 !== installerSha512 || updateMetadata.sha512 !== installerSha512) {
+  throw new Error(`${expectedUpdateMetadataName} installer checksum does not match ${expectedInstallerName}`);
+}
 
 const entries = await readdir(releaseDir, { withFileTypes: true });
 const exeEntries = entries
@@ -81,3 +105,9 @@ if (noPetBuild) {
 }
 
 console.log(`validated Windows x64 installer: ${expectedInstallerName}`);
+
+async function hashFileSha512(path: string): Promise<string> {
+  const hash = createHash('sha512');
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest('base64');
+}

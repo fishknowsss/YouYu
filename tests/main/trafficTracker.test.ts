@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { TrafficTracker } from '../../src/main/traffic/tracker';
 import type { TrafficStore } from '../../src/main/traffic/store';
 import type { RuntimeStats } from '../../src/shared/ipc';
@@ -98,5 +98,28 @@ describe('TrafficTracker', () => {
       { upload: 50, download: 400, nodeName: 'Node A' },
       { upload: 30, download: 200, nodeName: 'Node B' }
     ]);
+  });
+
+  it('shares an in-flight sample and ignores it after stop', async () => {
+    let resolveStats: ((stats: RuntimeStats) => void) | undefined;
+    const stats = new Promise<RuntimeStats>((resolve) => {
+      resolveStats = resolve;
+    });
+    const addTraffic = vi.fn(async () => undefined);
+    let running = true;
+    const tracker = new TrafficTracker({
+      store: { addTraffic } as unknown as TrafficStore,
+      isRunning: () => running,
+      readRuntimeStats: vi.fn(() => stats)
+    });
+
+    const first = tracker.flush();
+    const second = tracker.flush();
+    running = false;
+    tracker.stop();
+    resolveStats?.({ activeConnections: 0, uploadTotal: 100, downloadTotal: 200 });
+    await Promise.all([first, second]);
+
+    expect(addTraffic).not.toHaveBeenCalled();
   });
 });

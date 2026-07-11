@@ -31,12 +31,20 @@ type TrafficFile = {
   serverSyncedAt?: string;
   pendingUpload: number;
   pendingDownload: number;
+  pendingReport?: PendingTrafficReport;
   daily: Record<string, TrafficDay>;
   nodeUsage: Record<string, TrafficNodeUsage>;
   lastUpdatedAt?: string;
   lastReportedAt?: string;
   reportStatus?: PersistentTrafficStats['reportStatus'];
   reportError?: string;
+};
+
+export type PendingTrafficReport = {
+  id: string;
+  upload: number;
+  download: number;
+  reportedAt: string;
 };
 
 type TrafficRegistrationSecret = {
@@ -61,7 +69,7 @@ type TrafficStoreOptions = {
 };
 
 const trafficFileName = 'traffic.json';
-const currentVersion = 2;
+const currentVersion = 3;
 
 export class TrafficStore {
   private readonly filePath: string;
@@ -193,6 +201,7 @@ export class TrafficStore {
         ...current,
         identity: registered,
         ...getServerTotalState(current, sameIdentity),
+        pendingReport: sameIdentity ? current.pendingReport : undefined,
         pendingRegistration: registered.verificationStatus === 'pending' ? current.pendingRegistration : undefined,
         reportStatus: current.pendingUpload || current.pendingDownload ? 'pending' : 'idle',
         reportError: undefined
@@ -225,6 +234,7 @@ export class TrafficStore {
           name,
           encryptedPassphrase: this.encryptPassphrase(passphrase)
         },
+        pendingReport: undefined,
         reportStatus: 'pending',
         reportError: 'traffic activation pending'
       });
@@ -288,6 +298,7 @@ export class TrafficStore {
         ...current,
         identity: undefined,
         pendingRegistration: undefined,
+        pendingReport: undefined,
         ...getServerTotalState(current, false),
         reportStatus: message ? 'failed' : 'idle',
         reportError: message
@@ -305,9 +316,26 @@ export class TrafficStore {
     });
   }
 
-  async markReported(upload: number, download: number, reportedAt = new Date()): Promise<void> {
+  async getOrCreatePendingReport(upload: number, download: number, now = new Date()): Promise<PendingTrafficReport> {
+    return this.enqueue(async () => {
+      const current = await this.read();
+      if (current.pendingReport) return current.pendingReport;
+
+      const pendingReport: PendingTrafficReport = {
+        id: randomUUID(),
+        upload: normalizeBytes(upload),
+        download: normalizeBytes(download),
+        reportedAt: now.toISOString()
+      };
+      await this.write({ ...current, pendingReport });
+      return pendingReport;
+    });
+  }
+
+  async markReported(upload: number, download: number, reportedAt = new Date(), reportId?: string): Promise<void> {
     await this.enqueue(async () => {
       const current = await this.read();
+      if (reportId && current.pendingReport?.id !== reportId) return;
       const pendingUpload = Math.max(0, current.pendingUpload - normalizeBytes(upload));
       const pendingDownload = Math.max(0, current.pendingDownload - normalizeBytes(download));
       const lastReportedAt = reportedAt.toISOString();
@@ -315,6 +343,7 @@ export class TrafficStore {
         ...current,
         pendingUpload,
         pendingDownload,
+        pendingReport: undefined,
         lastReportedAt,
         identity: current.identity ? { ...current.identity, lastReportedAt } : undefined,
         reportStatus: pendingUpload || pendingDownload ? 'pending' : 'synced',
@@ -464,6 +493,7 @@ export class TrafficStore {
       serverSyncedAt: typeof value.serverSyncedAt === 'string' ? value.serverSyncedAt : undefined,
       pendingUpload: normalizeBytes(value.pendingUpload),
       pendingDownload: normalizeBytes(value.pendingDownload),
+      pendingReport: normalizePendingReport(value.pendingReport),
       daily: normalizeDaily(value.daily),
       nodeUsage: normalizeNodeUsage(value.nodeUsage),
       lastUpdatedAt: typeof value.lastUpdatedAt === 'string' ? value.lastUpdatedAt : undefined,
@@ -560,6 +590,20 @@ function normalizePendingRegistration(value: unknown): StoredTrafficRegistration
     name,
     encryptedPassphrase: encryptedPassphrase || undefined,
     passphrase: encryptedPassphrase ? undefined : passphrase
+  };
+}
+
+function normalizePendingReport(value: unknown): PendingTrafficReport | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const report = value as Partial<PendingTrafficReport>;
+  const id = typeof report.id === 'string' ? report.id.trim() : '';
+  const reportedAt = typeof report.reportedAt === 'string' ? report.reportedAt : '';
+  if (!id || !Number.isFinite(Date.parse(reportedAt))) return undefined;
+  return {
+    id,
+    upload: normalizeBytes(report.upload),
+    download: normalizeBytes(report.download),
+    reportedAt
   };
 }
 

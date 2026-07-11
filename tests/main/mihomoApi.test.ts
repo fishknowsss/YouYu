@@ -3,6 +3,18 @@ import { createMihomoApiClient } from '../../src/main/mihomo/api';
 import { strategyTargets } from '../../src/main/mihomo/config';
 
 describe('createMihomoApiClient', () => {
+  it('times out a stalled controller request', async () => {
+    const client = createMihomoApiClient({
+      secret: 'secret',
+      requestTimeoutMs: 10,
+      fetcher: async (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+        })
+    });
+
+    await expect(client.listNodes()).rejects.toMatchObject({ name: 'TimeoutError' });
+  });
   it('reads nodes from the real mihomo proxies response', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({
@@ -52,14 +64,17 @@ describe('createMihomoApiClient', () => {
 
     await api.selectNode('日本 01');
 
-    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer secret',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name: '日本 01' })
-    });
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: '日本 01' })
+      })
+    );
   });
 
   it('reads nodes from nested strategy groups', async () => {
@@ -382,22 +397,28 @@ describe('createMihomoApiClient', () => {
 
     await api.selectNode('node-b');
 
-    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Auto', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer secret',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name: 'node-b' })
-    });
-    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Main', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer secret',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name: 'Auto' })
-    });
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/Auto',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: 'node-b' })
+      })
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/Main',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: 'Auto' })
+      })
+    );
   });
 
   it('moves the top selector away from DIRECT when selecting a nested node', async () => {
@@ -432,22 +453,28 @@ describe('createMihomoApiClient', () => {
     await expect(api.getCurrentNode()).resolves.toBe('DIRECT');
     await api.selectNode('node-b');
 
-    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Auto', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer secret',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name: 'node-b' })
-    });
-    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Main', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer secret',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name: 'Auto' })
-    });
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/Auto',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: 'node-b' })
+      })
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/Main',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: 'Auto' })
+      })
+    );
   });
 
   it('selects a node through multi-level airport groups in stable top-level order', async () => {
@@ -496,30 +523,39 @@ describe('createMihomoApiClient', () => {
 
     await api.selectNode('node-target');
 
-    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Auto%20JP', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer secret',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name: 'node-target' })
-    });
-    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Region%20JP', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer secret',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name: 'Auto JP' })
-    });
-    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/proxies/Main', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer secret',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name: 'Region JP' })
-    });
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/Auto%20JP',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: 'node-target' })
+      })
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/Region%20JP',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: 'Auto JP' })
+      })
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/proxies/Main',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer secret',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: 'Region JP' })
+      })
+    );
   });
 
   it('syncs subscription policy groups when selecting a node', async () => {
@@ -1082,17 +1118,23 @@ describe('createMihomoApiClient', () => {
 
     await api.updateProvider();
 
-    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/providers/proxies/airport', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer secret'
-      }
-    });
-    expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:9090/providers/proxies/backup', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer secret'
-      }
-    });
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/providers/proxies/airport',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer secret'
+        }
+      })
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/providers/proxies/backup',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer secret'
+        }
+      })
+    );
   });
 });

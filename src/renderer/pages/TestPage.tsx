@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AppSnapshot,
   ConnectivityCategory,
@@ -59,42 +59,63 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
   const [results, setResults] = useState<TestResults>(() => getCachedResults(cacheKey));
   const [activeKey, setActiveKey] = useState<ConnectivityServiceKey>(() => getCachedActiveKey(cacheKey));
   const [busyAll, setBusyAll] = useState(false);
+  const activeRef = useRef(true);
+  const runGenerationRef = useRef(0);
   const apiReady = Boolean(window.youyu);
   const proxyReady = snapshot.status === 'running';
   const rows = useMemo(() => services.map((service) => results[service.key]), [results]);
   const active = results[activeKey];
   const summary = getSummary(rows);
 
+  useEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      runGenerationRef.current += 1;
+      setCachedResults(cacheKey, markAllTesting(getCachedResults(cacheKey), false));
+    };
+  }, [cacheKey]);
+
   async function testOne(key: ConnectivityServiceKey) {
     const api = window.youyu;
     if (!api || !proxyReady) return;
 
+    const runGeneration = ++runGenerationRef.current;
     selectActiveKey(key);
-    commitResults((current) => ({
-      ...current,
-      [key]: {
-        ...current[key],
-        testing: true
-      }
-    }));
-    try {
-      const result = await api.testConnectivity(key);
-      commitResults((current) => ({
-        ...current,
-        [key]: result
-      }));
-    } catch (error) {
-      commitResults((current) => ({
+    commitResults(
+      (current) => ({
         ...current,
         [key]: {
           ...current[key],
-          status: 'failed',
-          statusText: '失败',
-          checkedAt: new Date().toISOString(),
-          testing: false,
-          error: error instanceof Error ? error.message : String(error)
+          testing: true
         }
-      }));
+      }),
+      runGeneration
+    );
+    try {
+      const result = await api.testConnectivity(key);
+      commitResults(
+        (current) => ({
+          ...current,
+          [key]: result
+        }),
+        runGeneration
+      );
+    } catch (error) {
+      commitResults(
+        (current) => ({
+          ...current,
+          [key]: {
+            ...current[key],
+            status: 'failed',
+            statusText: '失败',
+            checkedAt: new Date().toISOString(),
+            testing: false,
+            error: error instanceof Error ? error.message : String(error)
+          }
+        }),
+        runGeneration
+      );
     }
   }
 
@@ -102,14 +123,15 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
     const api = window.youyu;
     if (!api || !proxyReady) return;
 
+    const runGeneration = ++runGenerationRef.current;
     setBusyAll(true);
-    commitResults((current) => markAllTesting(current, true));
+    commitResults((current) => markAllTesting(current, true), runGeneration);
     selectActiveKey('steam');
     try {
-      await testConnectivityQueue(api);
+      await testConnectivityQueue(api, runGeneration);
     } finally {
-      setBusyAll(false);
-      commitResults((current) => markAllTesting(current, false));
+      if (activeRef.current && runGenerationRef.current === runGeneration) setBusyAll(false);
+      commitResults((current) => markAllTesting(current, false), runGeneration);
     }
   }
 
@@ -118,30 +140,40 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
     setActiveKey(key);
   }
 
-  function commitResults(updater: (current: TestResults) => TestResults) {
+  function commitResults(updater: (current: TestResults) => TestResults, runGeneration?: number) {
+    if (!activeRef.current || (runGeneration !== undefined && runGenerationRef.current !== runGeneration)) return;
     const next = updater(getCachedResults(cacheKey));
     setCachedResults(cacheKey, next);
     setResults(next);
   }
 
-  async function testConnectivityQueue(api: ConnectivityApi) {
+  async function testConnectivityQueue(api: ConnectivityApi, runGeneration: number) {
     const queue = [...services];
     const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
       while (queue.length) {
+        if (!activeRef.current || runGenerationRef.current !== runGeneration) return;
         const service = queue.shift();
         if (!service) continue;
 
         try {
           const result = await api.testConnectivity(service.key);
-          commitResults((current) => ({
-            ...current,
-            [service.key]: result
-          }));
+          if (!activeRef.current || runGenerationRef.current !== runGeneration) return;
+          commitResults(
+            (current) => ({
+              ...current,
+              [service.key]: result
+            }),
+            runGeneration
+          );
         } catch (error) {
-          commitResults((current) => ({
-            ...current,
-            [service.key]: createFailedResult(current[service.key], error)
-          }));
+          if (!activeRef.current || runGenerationRef.current !== runGeneration) return;
+          commitResults(
+            (current) => ({
+              ...current,
+              [service.key]: createFailedResult(current[service.key], error)
+            }),
+            runGeneration
+          );
         }
       }
     });

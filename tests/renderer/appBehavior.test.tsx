@@ -14,6 +14,7 @@ import {
 } from '../../src/renderer/App';
 import type { AppSnapshot } from '../../src/shared/ipc';
 import { AppShell } from '../../src/renderer/components/AppShell';
+import { Home } from '../../src/renderer/pages/Home';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -137,5 +138,68 @@ describe('RegistrationGate', () => {
     const shell = container.querySelector('.app-shell');
     expect(shell?.hasAttribute('inert')).toBe(true);
     expect(shell?.getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
+describe('advanced home diagnostics', () => {
+  it('keeps the diagnostics viewport on the latest log entry', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    const snapshot = {
+      status: 'running',
+      currentNode: '自动选择',
+      traffic: {
+        todayUpload: 0,
+        todayDownload: 0,
+        totalUpload: 0,
+        totalDownload: 0,
+        nodeUsage: {}
+      },
+      diagnostics: {
+        logs: ['日志 1', '日志 2', '日志 3', '日志 4', '日志 5', '日志 6', '重复日志']
+      },
+      strategy: 'auto',
+      mode: 'rule',
+      nodeHealth: {
+        delayStatus: 'untested',
+        availability: { status: 'untested', totalCount: 10 }
+      }
+    } as AppSnapshot;
+    const props = {
+      usageMode: 'advanced' as const,
+      snapshot,
+      busy: false,
+      busyLabel: '',
+      message: '',
+      onQuickStart: vi.fn(),
+      onStart: vi.fn(),
+      onStop: vi.fn(),
+      onRepair: vi.fn(),
+      onModeChange: vi.fn(),
+      onStrategyChange: vi.fn(),
+      onOpenNodes: vi.fn(),
+      onUsageModeChange: vi.fn(),
+      onInstallUpdate: vi.fn()
+    };
+
+    await act(async () => root?.render(<Home {...props} />));
+    const log = container.querySelector<HTMLDivElement>('.diagnostics-log')!;
+    Object.defineProperty(log, 'scrollHeight', { configurable: true, value: 240 });
+
+    await act(async () =>
+      root?.render(
+        <Home
+          {...props}
+          snapshot={{
+            ...snapshot,
+            diagnostics: { logs: [...snapshot.diagnostics.logs, '重复日志'] }
+          }}
+        />
+      )
+    );
+
+    expect(log.scrollTop).toBe(240);
+    expect(log.lastElementChild?.textContent).toBe('重复日志');
   });
 });

@@ -72,12 +72,12 @@ export function createLifecycleController(deps: {
     if (reconcileStatus() === 'stopped') return;
 
     const results = await Promise.allSettled([deps.proxy.restore(), deps.mihomo.stop()]);
-    setStatus('stopped');
-
     const failure = results.find((result) => result.status === 'rejected');
     if (failure?.status === 'rejected') {
+      setStatus('failed');
       throw failure.reason;
     }
+    setStatus('stopped');
   }
 
   return {
@@ -100,7 +100,12 @@ export function createLifecycleController(deps: {
           return;
         }
 
-        await Promise.allSettled([deps.proxy.restore(), deps.mihomo.stop()]);
+        const cleanupResults = await Promise.allSettled([deps.proxy.restore(), deps.mihomo.stop()]);
+        const cleanupFailure = cleanupResults.find((result) => result.status === 'rejected');
+        if (cleanupFailure?.status === 'rejected') {
+          setStatus('failed');
+          throw cleanupFailure.reason;
+        }
         try {
           signal?.throwIfAborted();
           await deps.mihomo.start(signal);
@@ -116,12 +121,12 @@ export function createLifecycleController(deps: {
       await enqueue(async () => {
         signal?.throwIfAborted();
         const results = await Promise.allSettled([deps.mihomo.stop(), deps.proxy.repair(signal)]);
-        setStatus('stopped');
-
         const failure = results.find((result) => result.status === 'rejected');
         if (failure?.status === 'rejected') {
+          setStatus('failed');
           throw failure.reason;
         }
+        setStatus('stopped');
       });
     }
   };
