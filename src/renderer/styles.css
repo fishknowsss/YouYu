@@ -619,6 +619,17 @@ select:focus-visible {
   transition: width 180ms ease;
 }
 
+.easy-update-transfer {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .easy-update-progress.is-verifying span,
 .update-progress.is-verifying span {
   width: 100% !important;
@@ -1995,7 +2006,7 @@ select:focus-visible {
   height: 100%;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(52px, 1fr)) 44px 44px;
+  grid-template-rows: repeat(4, minmax(0, 1fr));
   gap: 7px 10px;
   overflow: hidden;
 }
@@ -2548,6 +2559,18 @@ select:focus-visible {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.update-copy em {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .update-row.is-busy .update-copy strong {

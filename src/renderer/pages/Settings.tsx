@@ -217,19 +217,28 @@ function UpdatePanel({
   const update = snapshot.update;
   const ready = update.status === 'downloaded';
   const downloading = update.status === 'downloading';
-  const verifying = downloading && typeof update.percent === 'number' && update.percent >= 99;
-  const waiting = update.status === 'checking' || update.status === 'downloading' || update.status === 'available';
+  const verifying = update.downloadPhase === 'verifying';
+  const fullPackage = update.downloadPhase === 'full-download';
+  const waiting =
+    update.status === 'checking' ||
+    update.status === 'downloading' ||
+    update.status === 'available' ||
+    update.status === 'installing';
   const buttonLabel = ready
     ? '安装'
     : downloading
       ? verifying
         ? '校验中'
-        : '下载中'
+        : fullPackage
+          ? '完整包'
+          : '下载中'
       : update.status === 'checking'
         ? '检查中'
         : update.status === 'available'
           ? '准备中'
-          : '检查';
+          : update.status === 'installing'
+            ? '安装中'
+            : '检查';
   const progress = getDisplayUpdateProgress(update);
 
   const statusText = formatUpdateStatus(update);
@@ -243,6 +252,7 @@ function UpdatePanel({
       <div className="update-copy">
         <span>软件更新</span>
         <strong title={statusText}>{statusText}</strong>
+        {downloading && <em>{formatUpdateTransfer(update)}</em>}
       </div>
       {downloading && (
         <div className={`update-progress ${verifying ? 'is-verifying' : ''}`} aria-hidden="true">
@@ -264,16 +274,38 @@ function formatUpdateStatus(update: AppSnapshot['update']): string {
   if (update.status === 'checking') return '检查中';
   if (update.status === 'available') return update.availableVersion ? `发现 ${update.availableVersion}` : '发现更新';
   if (update.status === 'downloading') {
-    if (typeof update.percent !== 'number') return '下载中';
-    if (update.percent >= 99) return '校验中';
-    return `下载 ${Math.max(0, Math.min(100, Math.round(update.percent)))}%`;
+    const version = update.availableVersion ? ` ${update.availableVersion}` : '';
+    if (update.downloadPhase === 'verifying') return `正在校验更新包${version}`;
+    const label = update.downloadPhase === 'full-download' ? '正在下载完整更新包' : '正在下载更新包';
+    return typeof update.percent === 'number'
+      ? `${label}${version} ${Math.max(0, Math.min(100, Math.round(update.percent)))}%`
+      : `${label}${version}`;
   }
   if (update.status === 'downloaded') {
     return update.downloadedVersion ? `已下载 ${update.downloadedVersion}` : '已下载';
   }
   if (update.status === 'not-available') return update.message || '已是最新';
   if (update.status === 'failed') return formatUpdateFailure(update.message);
+  if (update.status === 'installing') return '正在启动安装器';
   return '待检查';
+}
+
+function formatUpdateTransfer(update: AppSnapshot['update']): string {
+  if (update.downloadPhase === 'verifying') return '下载完成，正在检查文件完整性';
+  if (typeof update.transferredBytes !== 'number' || typeof update.totalBytes !== 'number' || update.totalBytes <= 0) {
+    return typeof update.percent === 'number' ? `${Math.round(update.percent)}%` : '准备下载';
+  }
+  const speed =
+    typeof update.bytesPerSecond === 'number' && update.bytesPerSecond > 0
+      ? ` · ${formatBytes(update.bytesPerSecond)}/s`
+      : '';
+  return `${formatBytes(update.transferredBytes)} / ${formatBytes(update.totalBytes)}${speed}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 function formatUpdateFailure(message: string | undefined): string {

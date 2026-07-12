@@ -55,6 +55,7 @@ import {
   type StrategyGroup,
   type StrategyKey
 } from '../shared/ipc';
+import { getUpdateDownloadPhase, normalizeUpdateBytes } from '../shared/updateProgress';
 
 declare const __YOUYU_DISABLE_PET__: boolean;
 declare const __YOUYU_BUILD_CHANNEL__: string;
@@ -62,6 +63,7 @@ declare const __YOUYU_BUILD_CHANNEL__: string;
 const appId = 'studio.youyu.proxy';
 const isDev = !app.isPackaged;
 const startHidden = process.argv.includes('--hidden') || process.argv.includes('--startup');
+const shutdownForInstall = process.argv.includes('--shutdown-for-install');
 const startupTaskName = 'YouYu';
 const execFileAsync = promisify(execFile);
 let mainWindow: BrowserWindow | null = null;
@@ -555,9 +557,19 @@ function setupAutoUpdates() {
     });
   });
   autoUpdater.on('download-progress', (progress) => {
+    const percent = normalizeUpdatePercent(progress.percent);
+    const downloadPhase = getUpdateDownloadPhase({
+      previousPercent: updateSnapshot.percent,
+      previousPhase: updateSnapshot.downloadPhase,
+      percent
+    });
     setUpdateSnapshot({
       status: 'downloading',
-      percent: normalizeUpdatePercent(progress.percent)
+      percent,
+      downloadPhase,
+      transferredBytes: normalizeUpdateBytes(progress.transferred),
+      totalBytes: normalizeUpdateBytes(progress.total),
+      bytesPerSecond: normalizeUpdateBytes(progress.bytesPerSecond)
     });
   });
   autoUpdater.on('update-downloaded', (info) => {
@@ -599,6 +611,12 @@ function setUpdateSnapshot(next: Partial<AppUpdateSnapshot>) {
   }
   if (merged.status !== 'downloading' && merged.status !== 'downloaded') {
     delete merged.percent;
+  }
+  if (merged.status !== 'downloading') {
+    delete merged.downloadPhase;
+    delete merged.transferredBytes;
+    delete merged.totalBytes;
+    delete merged.bytesPerSecond;
   }
   if (!['available', 'downloading', 'downloaded', 'not-available'].includes(merged.status)) {
     delete merged.availableVersion;
@@ -670,11 +688,22 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
     throw new Error('update not downloaded');
   }
 
-  const snapshot = await createSnapshot();
   await prepareForUpdateInstall();
+  const snapshot = await createSnapshot();
+  setUpdateSnapshot({ status: 'installing' });
   cleanupFinished = true;
   isQuitting = true;
-  autoUpdater.quitAndInstall(false, true);
+  try {
+    autoUpdater.quitAndInstall(false, true);
+  } catch (error) {
+    cleanupFinished = false;
+    isQuitting = false;
+    setUpdateSnapshot({
+      status: 'downloaded',
+      message: `启动安装器失败: ${formatError(error)}`
+    });
+    throw error;
+  }
   return snapshot;
 }
 
@@ -684,7 +713,7 @@ async function prepareForUpdateInstall(): Promise<void> {
   trafficTracker.stop();
   trafficReporter.stop();
   if (lifecycle.getStatus() !== 'stopped') {
-    await lifecycle.stop().catch((error) => appendLog(`更新前停止代理失败: ${formatError(error)}`));
+    await lifecycle.stop();
   }
 }
 
@@ -2819,10 +2848,15 @@ async function cleanupBeforeExit() {
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
-if (!gotSingleInstanceLock) {
+if (!gotSingleInstanceLock || shutdownForInstall) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, commandLine) => {
+    if (commandLine.includes('--shutdown-for-install')) {
+      isQuitting = true;
+      void cleanupBeforeExit();
+      return;
+    }
     showMainWindow();
   });
 

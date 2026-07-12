@@ -82,7 +82,7 @@ Function YouYuCloseRunningAppBeforeInstall
   StrCpy $YouYuClosedRunningApp "0"
 
   RetryCloseYouYu:
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "if (Get-Process -Name YouYu -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Get-Process -Name YouYu -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`
     Pop $0
     ${If} $0 != 0
       Return
@@ -90,24 +90,46 @@ Function YouYuCloseRunningAppBeforeInstall
 
     StrCpy $YouYuClosedRunningApp "1"
     DetailPrint "Closing running YouYu before update."
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "(Get-Process -Name YouYu -ErrorAction SilentlyContinue) | ForEach-Object { if ($$_.MainWindowHandle -ne 0) { [void]$$_.CloseMainWindow() } }"`
-    Pop $0
-    Sleep 2000
+    IfFileExists "$INSTDIR\YouYu.exe" 0 +4
+      nsExec::Exec `"$INSTDIR\YouYu.exe" --shutdown-for-install`
+      Pop $0
+      Sleep 4500
 
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "if (Get-Process -Name YouYu -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Get-Process -Name YouYu -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`
+    Pop $0
+    ${If} $0 != 0
+      Goto YouYuCloseFinished
+    ${EndIf}
+
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "(Get-Process -Name YouYu -ErrorAction SilentlyContinue) | ForEach-Object { if ($$_.MainWindowHandle -ne 0) { [void]$$_.CloseMainWindow() } }"`
+    Pop $0
+    Sleep 1000
+
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Get-Process -Name YouYu -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`
     Pop $0
     ${If} $0 == 0
-      nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Name YouYu -ErrorAction SilentlyContinue | Stop-Process -Force"`
+      Call YouYuRestoreOwnedProxyBeforeForceClose
+      nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "Get-Process -Name YouYu -ErrorAction SilentlyContinue | Stop-Process -Force"`
       Pop $0
       Sleep 1200
     ${EndIf}
 
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "if (Get-Process -Name YouYu -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "if (Get-Process -Name YouYu -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"`
     Pop $0
     ${If} $0 == 0
+      IfSilent YouYuCloseFailedSilent
       MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "YouYu 正在运行，安装程序无法关闭它。请手动退出后重试。" /SD IDRETRY IDRETRY RetryCloseYouYu
       Quit
     ${EndIf}
+  YouYuCloseFailedSilent:
+    Quit
+  YouYuCloseFinished:
+FunctionEnd
+
+Function YouYuRestoreOwnedProxyBeforeForceClose
+  DetailPrint "Restoring YouYu-managed system proxy before force close."
+  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "$$ErrorActionPreference='Stop'; $$path=Join-Path $$env:APPDATA 'YouYu\system-proxy-ownership.json'; if(-not(Test-Path -LiteralPath $$path)){exit 0}; try{$$state=Get-Content -Raw -LiteralPath $$path | ConvertFrom-Json}catch{exit 0}; if($$state.version -notin @(1,2) -or $$null -eq $$state.previous -or $$null -eq $$state.applied){exit 0}; $$fields=if($$state.version -eq 1){@{enabled=$$true;server=$$true;override=$$true}}else{$$state.appliedFields}; foreach($$field in @('enabled','server','override')){if($$null -eq $$fields.$$field -or $$null -eq $$state.previous.$$field -or $$null -eq $$state.applied.$$field){exit 0}; if($$field -eq 'enabled'){if($$fields.$$field -isnot [bool] -or $$state.previous.$$field -isnot [bool] -or $$state.applied.$$field -isnot [bool]){exit 0}}else{if($$fields.$$field -isnot [bool] -or $$state.previous.$$field -isnot [string] -or $$state.applied.$$field -isnot [string]){exit 0}}}; $$settings=Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'; $$current=@{enabled=([int]$$settings.ProxyEnable -eq 1);server=if($$null -eq $$settings.ProxyServer){''}else{[string]$$settings.ProxyServer};override=if($$null -eq $$settings.ProxyOverride){''}else{[string]$$settings.ProxyOverride}}; $$restore=$$false; foreach($$field in @('enabled','server','override')){if(-not $$fields.$$field){continue}; if($$current.$$field -ne $$state.applied.$$field -and $$current.$$field -ne $$state.previous.$$field){exit 0}; if($$current.$$field -eq $$state.applied.$$field){$$restore=$$true}}; if(-not $$restore){exit 0}; if($$fields.server){if([string]::IsNullOrEmpty([string]$$state.previous.server)){Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyServer -ErrorAction SilentlyContinue}else{Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyServer -Value ([string]$$state.previous.server)}}; if($$fields.override){if([string]::IsNullOrEmpty([string]$$state.previous.override)){Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyOverride -ErrorAction SilentlyContinue}else{Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyOverride -Value ([string]$$state.previous.override)}}; if($$fields.enabled){Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable -Type DWord -Value ([int][bool]$$state.previous.enabled)}; Remove-Item -LiteralPath $$path -Force -ErrorAction Stop; $$src=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('dXNpbmcgU3lzdGVtOyB1c2luZyBTeXN0ZW0uUnVudGltZS5JbnRlcm9wU2VydmljZXM7IG5hbWVzcGFjZSBZb3VZdSB7IHB1YmxpYyBzdGF0aWMgY2xhc3MgV2luSW5ldCB7IFtEbGxJbXBvcnQoIndpbmluZXQuZGxsIiwgU2V0TGFzdEVycm9yPXRydWUpXSBwdWJsaWMgc3RhdGljIGV4dGVybiBib29sIEludGVybmV0U2V0T3B0aW9uKEludFB0ciBoSW50ZXJuZXQsIGludCBkd09wdGlvbiwgSW50UHRyIGxwQnVmZmVyLCBpbnQgZHdCdWZmZXJMZW5ndGgpOyB9IH0=')); Add-Type -TypeDefinition $$src -ErrorAction Stop; [void][YouYu.WinInet]::InternetSetOption([IntPtr]::Zero,39,[IntPtr]::Zero,0); [void][YouYu.WinInet]::InternetSetOption([IntPtr]::Zero,37,[IntPtr]::Zero,0)"`
+  Pop $0
 FunctionEnd
 
 Function YouYuDetectUpdateInstall

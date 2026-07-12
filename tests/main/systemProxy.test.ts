@@ -234,6 +234,36 @@ describe('createSystemProxyAdapter', () => {
     }
   });
 
+  it('does not leave a YouYu proxy behind when installation closes Mihomo', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const proxyState = {
+      enabled: false,
+      server: 'external:8080',
+      override: 'external.local;<local>'
+    };
+    const runCommand = createMutableProxyCommands(proxyState);
+    const mihomo = { running: true };
+
+    try {
+      const runningApp = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await runningApp.enable();
+      mihomo.running = false;
+
+      const installerFallback = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await installerFallback.restore();
+
+      expect(mihomo.running).toBe(false);
+      expect(proxyState).toEqual({
+        enabled: false,
+        server: 'external:8080',
+        override: 'external.local;<local>'
+      });
+      expect(proxyState).not.toMatchObject({ enabled: true, server: '127.0.0.1:7890' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('does not overwrite a proxy that the user changed after a crash', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
     const proxyState = {

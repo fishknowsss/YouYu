@@ -109,21 +109,24 @@ function EasyUpdateNotice({
   const downloaded = update.status === 'downloaded';
   const downloading = update.status === 'downloading';
   const version = update.downloadedVersion || update.availableVersion;
-  const verifying = update.status === 'downloading' && typeof update.percent === 'number' && update.percent >= 99;
+  const verifying = update.downloadPhase === 'verifying';
+  const downloadingFullPackage = update.downloadPhase === 'full-download';
   const text = downloaded
     ? `已下载 ${version ?? '新版本'}`
     : downloading
       ? verifying
-        ? '校验中'
+        ? '校验更新包'
         : version
-          ? `下载中 ${version}`
-          : '下载中'
+          ? `${downloadingFullPackage ? '下载完整包' : '下载更新'} ${version}`
+          : downloadingFullPackage
+            ? '下载完整包'
+            : '下载更新'
       : version
         ? `发现 ${version}`
         : '发现更新';
   const progress = getDisplayUpdateProgress(update);
   const noticeClass = downloaded ? 'is-ready' : downloading ? 'is-downloading' : 'is-available';
-  const stateLabel = verifying ? '校验中' : downloading ? '下载中' : '准备中';
+  const stateLabel = verifying ? '校验中' : downloadingFullPackage ? '完整包' : downloading ? '下载中' : '准备中';
 
   return (
     <aside className={`easy-update-notice ${noticeClass}`} aria-live="polite">
@@ -132,9 +135,12 @@ function EasyUpdateNotice({
         <strong>{text}</strong>
       </div>
       {downloading && (
-        <div className={`easy-update-progress ${verifying ? 'is-verifying' : ''}`} aria-hidden="true">
-          <span style={{ width: `${progress}%` }} />
-        </div>
+        <>
+          <div className={`easy-update-progress ${verifying ? 'is-verifying' : ''}`} aria-hidden="true">
+            <span style={{ width: `${progress}%` }} />
+          </div>
+          <span className="easy-update-transfer">{formatUpdateTransfer(update)}</span>
+        </>
       )}
       {downloaded ? (
         <button className="wide-button" disabled={busy} onClick={onInstallUpdate}>
@@ -390,6 +396,14 @@ function formatAvailability(availability: AppSnapshot['nodeHealth']['availabilit
 function getDisplayUpdateProgress(update: AppSnapshot['update']): number {
   if (typeof update.percent !== 'number') return 0;
   return Math.max(0, Math.min(100, Math.round(update.percent)));
+}
+
+function formatUpdateTransfer(update: AppSnapshot['update']): string {
+  if (update.downloadPhase === 'verifying') return '下载完成，正在校验';
+  if (typeof update.transferredBytes !== 'number' || typeof update.totalBytes !== 'number' || update.totalBytes <= 0) {
+    return typeof update.percent === 'number' ? `${Math.round(update.percent)}%` : '准备下载';
+  }
+  return `${formatBytes(update.transferredBytes)} / ${formatBytes(update.totalBytes)}`;
 }
 
 function getDelayToneClass(delay: number | undefined, status: AppSnapshot['nodeHealth']['delayStatus']): string {

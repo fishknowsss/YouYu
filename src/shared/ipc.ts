@@ -199,7 +199,9 @@ export type AppDiagnostics = {
 };
 
 export type AppUpdateStatus =
-  'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'failed';
+  'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'not-available' | 'failed';
+
+export type AppUpdateDownloadPhase = 'downloading' | 'full-download' | 'verifying';
 
 export type AppUpdateSnapshot = {
   currentVersion: string;
@@ -209,6 +211,10 @@ export type AppUpdateSnapshot = {
   availableVersion?: string;
   downloadedVersion?: string;
   percent?: number;
+  downloadPhase?: AppUpdateDownloadPhase;
+  transferredBytes?: number;
+  totalBytes?: number;
+  bytesPerSecond?: number;
   checkedAt?: string;
   message?: string;
 };
