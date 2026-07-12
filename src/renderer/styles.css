@@ -2240,6 +2240,9 @@ select:focus-visible {
 }
 
 .settings-panel {
+  --settings-row-height: 64px;
+  --settings-control-height: 46px;
+  --settings-action-width: 130px;
   align-self: stretch;
   display: grid;
   min-height: 0;
@@ -2253,9 +2256,12 @@ select:focus-visible {
   height: 100%;
   display: grid;
   grid-template-columns: 1fr;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(var(--settings-row-height), auto) auto minmax(0, 1fr) minmax(
+      var(--settings-row-height),
+      auto
+    );
   align-items: start;
-  row-gap: 18px;
+  row-gap: 16px;
 }
 
 .settings-controls-grid {
@@ -2263,11 +2269,11 @@ select:focus-visible {
   grid-row: 2;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(292px, 1fr) 204px 130px;
-  grid-template-rows: repeat(3, 66px) auto;
+  grid-template-columns: minmax(292px, 1fr) 204px var(--settings-action-width);
+  grid-template-rows: repeat(3, var(--settings-row-height)) auto;
   align-items: end;
-  column-gap: 26px;
-  row-gap: 10px;
+  column-gap: 24px;
+  row-gap: 8px;
 }
 
 .field-wide {
@@ -2281,13 +2287,13 @@ select:focus-visible {
 }
 
 .settings-control-field {
-  height: 66px;
+  height: var(--settings-row-height);
   align-content: end;
 }
 
 .settings-panel .field input,
 .settings-panel .field select {
-  height: 48px;
+  height: var(--settings-control-height);
   padding: 0 42px 0 14px;
   font-size: 18px;
   font-weight: 850;
@@ -2298,13 +2304,13 @@ select:focus-visible {
 }
 
 .settings-save-button {
-  height: 48px;
+  height: var(--settings-control-height);
 }
 
 .settings-control-button,
 .settings-save-button {
   width: 100%;
-  height: 48px;
+  height: var(--settings-control-height);
   font-size: 18px;
 }
 
@@ -2424,6 +2430,15 @@ select:focus-visible {
   font-size: 12px;
 }
 
+.settings-panel .field > span {
+  line-height: 14px;
+}
+
+.settings-panel .settings-subscription-field,
+.settings-panel .settings-control-field {
+  gap: 4px;
+}
+
 .field select {
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1.5 1.75L6 6.25l4.5-4.5' fill='none' stroke='%234A4255' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -2435,7 +2450,7 @@ select:focus-visible {
 .network-route-toggle,
 .network-status-item {
   min-width: 0;
-  height: 48px;
+  height: var(--settings-control-height);
   display: flex;
   align-items: center;
   border-radius: 8px;
@@ -2520,18 +2535,19 @@ select:focus-visible {
   grid-row: 4;
   align-self: end;
   min-width: 0;
-  min-height: 48px;
+  min-height: var(--settings-row-height);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px;
+  grid-template-columns: minmax(0, 1fr) var(--settings-action-width);
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   border-radius: 8px;
-  padding: 0 12px;
+  padding: 8px 0 8px 12px;
   background: var(--accent-tint);
 }
 
 .update-row.is-downloading {
-  grid-template-columns: minmax(0, 1fr) minmax(110px, 128px) 96px;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 128px) var(--settings-action-width);
+  gap: 12px;
 }
 
 .update-copy {
@@ -2602,7 +2618,7 @@ select:focus-visible {
 .update-row button {
   grid-column: 2;
   width: 100%;
-  height: 34px;
+  height: var(--settings-control-height);
 }
 
 .update-row.is-downloading button {
