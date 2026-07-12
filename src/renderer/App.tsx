@@ -245,6 +245,14 @@ export function App() {
     }
   }
 
+  function handleInstallUpdate() {
+    void runAction((api) => api.installUpdate(), '', {
+      workingMessage: '安装中',
+      timeoutLabel: '安装更新',
+      messageSink: setSettingsMessage
+    });
+  }
+
   async function quickStart(subscriptionUrl: string) {
     const api = window.youyu;
     if (!api) {
@@ -432,9 +440,7 @@ export function App() {
             onStrategyChange={(strategy) => runAction((api) => api.selectStrategy(strategy), '已切换')}
             onOpenNodes={() => setPage('nodes')}
             onUsageModeChange={changeUsageMode}
-            onInstallUpdate={() =>
-              runAction((api) => api.installUpdate(), '', { workingMessage: '安装中', timeoutLabel: '安装更新' })
-            }
+            onInstallUpdate={handleInstallUpdate}
           />
         )}
         {page === 'nodes' && (
@@ -508,13 +514,7 @@ export function App() {
                 messageSink: setSettingsMessage
               })
             }
-            onInstallUpdate={() =>
-              runAction((api) => api.installUpdate(), '', {
-                workingMessage: '安装中',
-                timeoutLabel: '安装更新',
-                messageSink: setSettingsMessage
-              })
-            }
+            onInstallUpdate={handleInstallUpdate}
           />
         )}
       </AppShell>

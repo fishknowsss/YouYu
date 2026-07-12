@@ -56,6 +56,7 @@ import {
   type StrategyKey
 } from '../shared/ipc';
 import { getUpdateDownloadPhase, normalizeUpdateBytes } from '../shared/updateProgress';
+import { deferUpdateInstallerLaunch } from './updateInstallHandoff';
 
 declare const __YOUYU_DISABLE_PET__: boolean;
 declare const __YOUYU_BUILD_CHANNEL__: string;
@@ -119,6 +120,8 @@ let remoteConfigSyncRunning = false;
 let updateCheckTimer: ReturnType<typeof setTimeout> | undefined;
 let updateCheckRunning = false;
 let autoUpdatesConfigured = false;
+let updateInstallerLaunchPending = false;
+let updateInstallerLaunchFailed = false;
 let trafficSnapshotBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
 let trafficSnapshotBroadcastRunning = false;
 let lastTrafficSnapshotBroadcastAt = 0;
@@ -589,6 +592,10 @@ function setupAutoUpdates() {
     });
   });
   autoUpdater.on('error', (error) => {
+    if (updateInstallerLaunchPending) {
+      recoverFromUpdateInstallerLaunchFailure(error);
+      return;
+    }
     setUpdateFailure(error);
   });
 
@@ -693,18 +700,23 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
   setUpdateSnapshot({ status: 'installing' });
   cleanupFinished = true;
   isQuitting = true;
-  try {
-    autoUpdater.quitAndInstall(false, true);
-  } catch (error) {
-    cleanupFinished = false;
-    isQuitting = false;
-    setUpdateSnapshot({
-      status: 'downloaded',
-      message: `启动安装器失败: ${formatError(error)}`
-    });
-    throw error;
-  }
+  updateInstallerLaunchPending = true;
+  updateInstallerLaunchFailed = false;
+  deferUpdateInstallerLaunch({
+    launch: () => autoUpdater.quitAndInstall(false, true),
+    onError: recoverFromUpdateInstallerLaunchFailure
+  });
   return snapshot;
+}
+
+function recoverFromUpdateInstallerLaunchFailure(error: unknown) {
+  const message = `启动安装器失败: ${formatError(error)}`;
+  updateInstallerLaunchPending = false;
+  updateInstallerLaunchFailed = true;
+  cleanupFinished = false;
+  isQuitting = false;
+  appendLog(message);
+  setUpdateSnapshot({ status: 'downloaded', message });
 }
 
 async function prepareForUpdateInstall(): Promise<void> {
@@ -2896,6 +2908,15 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
+  if (updateInstallerLaunchFailed) {
+    event.preventDefault();
+    updateInstallerLaunchFailed = false;
+    updateInstallerLaunchPending = false;
+    cleanupFinished = false;
+    isQuitting = false;
+    showMainWindow();
+    return;
+  }
   isQuitting = true;
   if (!cleanupFinished) {
     event.preventDefault();
