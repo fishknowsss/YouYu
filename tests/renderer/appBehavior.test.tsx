@@ -184,6 +184,8 @@ describe('advanced home diagnostics', () => {
     };
 
     await act(async () => root?.render(<Home {...props} />));
+    expect(container.querySelector('.mode-strip button[aria-pressed="true"]')?.textContent).toBe('规则');
+    expect(container.querySelector('.node-mode-toggle button[aria-pressed="true"]')?.textContent).toBe('自动');
     const log = container.querySelector<HTMLDivElement>('.diagnostics-log')!;
     Object.defineProperty(log, 'scrollHeight', { configurable: true, value: 240 });
 

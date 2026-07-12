@@ -192,6 +192,7 @@ function AdvancedHome(props: HomeProps) {
             <div className="node-mode-toggle" aria-label="节点方式">
               <button
                 className={props.snapshot.strategy === 'manual' ? 'active' : ''}
+                aria-pressed={props.snapshot.strategy === 'manual'}
                 disabled={props.busy}
                 onClick={props.onOpenNodes}
               >
@@ -199,6 +200,7 @@ function AdvancedHome(props: HomeProps) {
               </button>
               <button
                 className={props.snapshot.strategy !== 'manual' ? 'active' : ''}
+                aria-pressed={props.snapshot.strategy !== 'manual'}
                 disabled={props.busy}
                 onClick={() => props.onStrategyChange('auto')}
               >
@@ -220,6 +222,7 @@ function AdvancedHome(props: HomeProps) {
               <button
                 key={mode.key}
                 className={props.snapshot.mode === mode.key ? 'active' : ''}
+                aria-pressed={props.snapshot.mode === mode.key}
                 disabled={props.busy}
                 onClick={() => props.onModeChange(mode.key)}
               >
