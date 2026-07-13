@@ -18,13 +18,27 @@ npx wrangler secret put ADMIN_TOKEN
 npx wrangler deploy
 ```
 
-Existing D1 databases should apply the migrations they have not run yet, in order:
+For an existing D1 database, inspect the schema and migration plan first:
 
 ```powershell
-npx wrangler d1 execute youyu_traffic --remote --file=./migrations/2026-07-03-add-remote-subscription-url.sql
-npx wrangler d1 execute youyu_traffic --remote --file=./migrations/2026-07-08-security-and-idempotency.sql
-npx wrangler d1 execute youyu_traffic --remote --file=./migrations/2026-07-11-retention-cleanup.sql
+node migrations/apply.mjs --remote --check
+node migrations/apply.mjs --remote --dry-run
 ```
+
+`--check` is read-only and exits with an error when any required Worker table, column, index, primary key, or unique
+constraint is missing.
+`--dry-run` prints the planned work without changing D1 schema or data. After reviewing the plan, apply it explicitly:
+
+```powershell
+node migrations/apply.mjs --remote --apply
+```
+
+Use `--local` instead of `--remote` for the local Wrangler database. The runner uses Wrangler's D1 commands, adds
+`subscription_url` only when an existing table is missing it, applies the idempotent table/index migrations, and
+validates the complete Worker schema. It refuses to write when the base `users`, `devices`, or `traffic_daily` schema
+is incomplete or when a critical primary-key/unique constraint has drifted; initialize that database with `schema.sql`
+first. Re-running it preserves existing subscription values.
+It does not deploy the Worker.
 
 Use your own private value for `REGISTRATION_PASSPHRASE`.
 
@@ -55,6 +69,8 @@ Authorization: Bearer <ADMIN_TOKEN>
 ```
 
 `POST /api/admin/config` and per-user config accept `subscriptionUrl`. Leave it empty to avoid a remote subscription override.
+Config request bodies are limited to 64 KiB. `directRules` and `proxyRules` accept at most 256 entries of 160 characters
+each; invalid recognized fields are rejected instead of being silently ignored.
 
 ```http
 GET /api/admin/users/<userId>/config

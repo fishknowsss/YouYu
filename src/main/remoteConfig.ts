@@ -1,4 +1,5 @@
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type IncomingMessage } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import { join } from 'node:path';
 import type { RemoteControlConfig, RuleProfile, StrategyKey } from '../shared/ipc';
@@ -25,6 +26,23 @@ type JsonResponse = {
   body: unknown;
 };
 
+type RemoteConfigIdentity = {
+  userId: string;
+  deviceId: string;
+};
+
+type RemoteConfigCache = {
+  schemaVersion: 1;
+  identity: RemoteConfigIdentity;
+  config: RemoteControlConfig;
+};
+
+export type ActiveRemoteConfigSnapshot = {
+  binding?: string;
+  revision: string;
+  config?: RemoteControlConfig;
+};
+
 const remoteConfigFileName = 'remote-config.json';
 const validRuleProfiles: RuleProfile[] = ['ruleset', 'smart', 'global', 'subscription'];
 const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-balance', 'direct'];
@@ -32,8 +50,8 @@ const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-bala
 export class RemoteConfigClient {
   private readonly filePath: string;
   private loaded = false;
-  private cached: RemoteControlConfig | undefined;
-  private loadPromise?: Promise<RemoteControlConfig | undefined>;
+  private cached: RemoteConfigCache | undefined;
+  private loadPromise?: Promise<RemoteConfigCache | undefined>;
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: RemoteConfigClientOptions) {
@@ -41,8 +59,23 @@ export class RemoteConfigClient {
   }
 
   async getActiveConfig(): Promise<RemoteControlConfig | undefined> {
-    const config = await this.readCached();
-    return config?.enabled ? config : undefined;
+    return (await this.getActiveConfigSnapshot()).config;
+  }
+
+  async getActiveConfigSnapshot(): Promise<ActiveRemoteConfigSnapshot> {
+    const cached = await this.readCached();
+    const identity = await this.getCurrentIdentity();
+    const config = configForIdentity(cached, identity);
+    return {
+      binding: identityBinding(identity),
+      revision: JSON.stringify(config ?? null),
+      config: config?.enabled ? config : undefined
+    };
+  }
+
+  async isActiveConfigSnapshotCurrent(snapshot: ActiveRemoteConfigSnapshot): Promise<boolean> {
+    const current = await this.getActiveConfigSnapshot();
+    return current.binding === snapshot.binding && current.revision === snapshot.revision;
   }
 
   async sync(options: SyncOptions = {}): Promise<{ config?: RemoteControlConfig; changed: boolean }> {
@@ -56,19 +89,22 @@ export class RemoteConfigClient {
 
   private async performSync(options: SyncOptions): Promise<{ config?: RemoteControlConfig; changed: boolean }> {
     const endpoint = normalizeEndpoint(this.options.endpoint);
-    const current = await this.readCached();
+    const cached = await this.readCached();
+    const identity = await this.getCurrentIdentity();
+    const current = configForIdentity(cached, identity);
+    if (!identity) {
+      return { config: undefined, changed: false };
+    }
     if (!endpoint) {
       return { config: current?.enabled ? current : undefined, changed: false };
     }
 
-    const { identity } = await this.options.store.getSnapshot();
-    if (!identity || identity.verificationStatus === 'pending') {
-      return { config: current?.enabled ? current : undefined, changed: false };
-    }
+    const requestedUserId = identity.userId;
+    const requestedDeviceId = identity.deviceId;
 
     const url = new URL(`${endpoint}/api/config`);
-    url.searchParams.set('userId', identity.userId);
-    url.searchParams.set('deviceId', identity.deviceId);
+    url.searchParams.set('userId', requestedUserId);
+    url.searchParams.set('deviceId', requestedDeviceId);
     url.searchParams.set('appVersion', this.options.appVersion);
 
     const secret = await this.options.store.getDeviceSecret();
@@ -92,22 +128,39 @@ export class RemoteConfigClient {
     if (!next) {
       throw new Error('remote config response invalid');
     }
+    const latestIdentity = await this.getCurrentIdentity();
+    if (!sameIdentity(latestIdentity, identity)) {
+      const latestConfig = configForIdentity(cached, latestIdentity);
+      return { config: latestConfig?.enabled ? latestConfig : undefined, changed: false };
+    }
 
-    await this.writeCached(next);
+    await this.writeCached(next, identity);
+    const committedIdentity = await this.getCurrentIdentity();
+    if (!sameIdentity(committedIdentity, identity)) {
+      const committedConfig = configForIdentity(this.cached, committedIdentity);
+      return { config: committedConfig?.enabled ? committedConfig : undefined, changed: false };
+    }
     return {
       config: next.enabled ? next : undefined,
       changed: JSON.stringify(current ?? null) !== JSON.stringify(next)
     };
   }
 
-  private async readCached(): Promise<RemoteControlConfig | undefined> {
+  private async getCurrentIdentity(): Promise<RemoteConfigIdentity | undefined> {
+    const { identity } = await this.options.store.getSnapshot();
+    if (!identity || identity.verificationStatus === 'pending') return undefined;
+    return { userId: identity.userId, deviceId: identity.deviceId };
+  }
+
+  private async readCached(): Promise<RemoteConfigCache | undefined> {
     if (this.loaded) return this.cached;
     if (!this.loadPromise) {
       this.loadPromise = (async () => {
         const result = await readJsonFile<unknown>(this.filePath, {
-          validate: (value) => normalizeRemoteConfig(value) !== undefined
+          preserveInvalid: false,
+          validate: (value) => normalizeRemoteConfigCache(value) !== undefined
         });
-        this.cached = result.status === 'found' ? normalizeRemoteConfig(result.value) : undefined;
+        this.cached = result.status === 'found' ? normalizeRemoteConfigCache(result.value) : undefined;
         this.loaded = true;
         return this.cached;
       })().finally(() => {
@@ -117,10 +170,15 @@ export class RemoteConfigClient {
     return this.loadPromise;
   }
 
-  private async writeCached(config: RemoteControlConfig): Promise<void> {
-    await writeJsonFileAtomic(this.filePath, config);
+  private async writeCached(config: RemoteControlConfig, identity: RemoteConfigIdentity): Promise<void> {
+    const cached: RemoteConfigCache = {
+      schemaVersion: 1,
+      identity,
+      config
+    };
+    await writeJsonFileAtomic(this.filePath, cached);
     this.loaded = true;
-    this.cached = config;
+    this.cached = cached;
   }
 }
 
@@ -128,36 +186,87 @@ function normalizeEndpoint(value: string): string {
   return value.trim().replace(/\/+$/, '');
 }
 
-function normalizeRemoteConfig(value: unknown): RemoteControlConfig | undefined {
-  if (!isRecord(value)) return undefined;
+function normalizeRemoteConfigCache(value: unknown): RemoteConfigCache | undefined {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.identity)) return undefined;
+  const userId = normalizeText(value.identity.userId, 160);
+  const deviceId = normalizeText(value.identity.deviceId, 160);
+  const config = normalizeRemoteConfig(value.config);
+  if (!userId || !deviceId || !config) return undefined;
+  return {
+    schemaVersion: 1,
+    identity: { userId, deviceId },
+    config
+  };
+}
 
-  const version =
-    typeof value.version === 'number' && Number.isFinite(value.version) ? Math.max(1, Math.floor(value.version)) : 1;
-  const ruleProfile = validRuleProfiles.includes(value.ruleProfile as RuleProfile)
-    ? (value.ruleProfile as RuleProfile)
-    : undefined;
-  const preferredStrategy = validStrategies.includes(value.preferredStrategy as StrategyKey)
-    ? (value.preferredStrategy as StrategyKey)
-    : undefined;
+function configForIdentity(
+  cached: RemoteConfigCache | undefined,
+  identity: RemoteConfigIdentity | undefined
+): RemoteControlConfig | undefined {
+  return cached && sameIdentity(cached.identity, identity) ? cached.config : undefined;
+}
+
+function sameIdentity(left: RemoteConfigIdentity | undefined, right: RemoteConfigIdentity | undefined): boolean {
+  return Boolean(left && right && left.userId === right.userId && left.deviceId === right.deviceId);
+}
+
+function identityBinding(identity: RemoteConfigIdentity | undefined): string | undefined {
+  return identity ? JSON.stringify([identity.userId, identity.deviceId]) : undefined;
+}
+
+function normalizeRemoteConfig(value: unknown): RemoteControlConfig | undefined {
+  if (!isRemoteConfigPayload(value)) return undefined;
+
+  const version = Math.floor(value.version);
+  const ruleProfile = value.ruleProfile;
+  const preferredStrategy = value.preferredStrategy;
   const anomalyThresholdBytes =
-    typeof value.anomalyThresholdBytes === 'number' &&
-    Number.isFinite(value.anomalyThresholdBytes) &&
-    value.anomalyThresholdBytes > 0
-      ? Math.floor(value.anomalyThresholdBytes)
-      : undefined;
+    typeof value.anomalyThresholdBytes === 'number' ? Math.floor(value.anomalyThresholdBytes) : undefined;
 
   return {
     version,
-    enabled: value.enabled !== false,
+    enabled: value.enabled,
     subscriptionUrl: normalizeSubscriptionUrl(value.subscriptionUrl),
     ruleProfile,
     preferredNode: normalizeText(value.preferredNode, 120),
     preferredStrategy,
-    directRules: normalizeTextList(value.directRules, 120),
-    proxyRules: normalizeTextList(value.proxyRules, 120),
+    directRules: normalizeTextList(value.directRules, 160),
+    proxyRules: normalizeTextList(value.proxyRules, 160),
     anomalyThresholdBytes,
     updatedAt: normalizeText(value.updatedAt, 40)
   };
+}
+
+function isRemoteConfigPayload(value: unknown): value is RemoteControlConfig {
+  if (!isRecord(value)) return false;
+  if (typeof value.version !== 'number' || !Number.isFinite(value.version) || value.version < 1) return false;
+  if (typeof value.enabled !== 'boolean') return false;
+  if (!isTextList(value.directRules) || !isTextList(value.proxyRules)) return false;
+  if (typeof value.subscriptionUrl !== 'undefined' && !normalizeSubscriptionUrl(value.subscriptionUrl)) return false;
+  if (typeof value.ruleProfile !== 'undefined' && !validRuleProfiles.includes(value.ruleProfile as RuleProfile)) {
+    return false;
+  }
+  if (typeof value.preferredNode !== 'undefined' && typeof value.preferredNode !== 'string') return false;
+  if (
+    typeof value.preferredStrategy !== 'undefined' &&
+    !validStrategies.includes(value.preferredStrategy as StrategyKey)
+  ) {
+    return false;
+  }
+  if (
+    typeof value.anomalyThresholdBytes !== 'undefined' &&
+    (typeof value.anomalyThresholdBytes !== 'number' ||
+      !Number.isFinite(value.anomalyThresholdBytes) ||
+      value.anomalyThresholdBytes <= 0)
+  ) {
+    return false;
+  }
+  if (typeof value.updatedAt !== 'undefined' && typeof value.updatedAt !== 'string') return false;
+  return true;
+}
+
+function isTextList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
 function normalizeText(value: unknown, maxLength: number): string | undefined {
@@ -224,6 +333,22 @@ async function getJsonViaProxy(
   }
 
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    let settled = false;
+    let tunneledRequest: ReturnType<typeof httpsRequest> | undefined;
+    const cleanup = () => signal?.removeEventListener('abort', abort);
+    const resolveOnce = (response: JsonResponse) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(response);
+    };
+    const rejectOnce = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
     const connectReq = httpRequest({
       host: proxy.hostname,
       port: Number(proxy.port || 80),
@@ -231,44 +356,56 @@ async function getJsonViaProxy(
       path: `${target.hostname}:${target.port || 443}`,
       timeout: timeoutMs
     });
-    const abort = () =>
-      connectReq.destroy(signal?.reason instanceof Error ? signal.reason : new Error('operation canceled'));
-    signal?.throwIfAborted();
+    const abort = () => {
+      const error = signal?.reason instanceof Error ? signal.reason : new Error('operation canceled');
+      connectReq.destroy(error);
+      tunneledRequest?.destroy(error);
+      rejectOnce(error);
+    };
     signal?.addEventListener('abort', abort, { once: true });
 
-    connectReq.on('connect', (res, socket) => {
+    connectReq.once('connect', (res, socket, head) => {
       if ((res.statusCode ?? 0) < 200 || (res.statusCode ?? 0) >= 300) {
         socket.destroy();
-        reject(new Error(`remote config proxy connect failed: ${res.statusCode ?? 0}`));
+        rejectOnce(new Error(`remote config proxy connect failed: ${res.statusCode ?? 0}`));
         return;
       }
+      if (head.length > 0) socket.unshift(head);
 
-      const tlsSocket = tlsConnect({
-        socket,
-        servername: target.hostname
-      });
-      const chunks: Buffer[] = [];
-      tlsSocket.setTimeout(timeoutMs, () => tlsSocket.destroy(new Error('remote config request timed out')));
-      tlsSocket.on('secureConnect', () => {
-        tlsSocket.write(
-          [
-            `GET ${target.pathname}${target.search} HTTP/1.1`,
-            `Host: ${target.host}`,
-            'Accept: application/json',
-            ...formatHeaderLines(headers),
-            'Connection: close',
-            '',
-            ''
-          ].join('\r\n')
-        );
-      });
-      tlsSocket.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-      tlsSocket.on('end', () => resolve(parseHttpResponse(Buffer.concat(chunks).toString('utf8'))));
-      tlsSocket.on('error', reject);
+      tunneledRequest = httpsRequest(
+        {
+          hostname: target.hostname,
+          port: Number(target.port || 443),
+          method: 'GET',
+          path: `${target.pathname}${target.search}`,
+          headers: {
+            accept: 'application/json',
+            'accept-encoding': 'identity',
+            ...headers
+          },
+          createConnection: () => tlsConnect({ socket, servername: target.hostname })
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+          response.once('error', rejectOnce);
+          response.once('end', () => {
+            resolveOnce({
+              ok: (response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300,
+              status: response.statusCode ?? 0,
+              body: parseJson(Buffer.concat(chunks).toString('utf8'))
+            });
+          });
+        }
+      );
+      tunneledRequest.setTimeout(timeoutMs, () =>
+        tunneledRequest?.destroy(new Error('remote config request timed out'))
+      );
+      tunneledRequest.once('error', rejectOnce);
+      tunneledRequest.end();
     });
     connectReq.on('timeout', () => connectReq.destroy(new Error('remote config proxy connect timed out')));
-    connectReq.on('error', reject);
-    connectReq.on('close', () => signal?.removeEventListener('abort', abort));
+    connectReq.once('error', rejectOnce);
     connectReq.end();
   });
 }
@@ -281,7 +418,29 @@ async function getJsonViaHttpProxy(
   signal?: AbortSignal
 ): Promise<JsonResponse> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest(
+    signal?.throwIfAborted();
+    let req: ReturnType<typeof httpRequest> | undefined;
+    let response: IncomingMessage | undefined;
+    let settled = false;
+
+    const cleanupAbort = () => signal?.removeEventListener('abort', abort);
+    const resolveOnce = (value: JsonResponse) => {
+      if (settled) return;
+      settled = true;
+      cleanupAbort();
+      resolve(value);
+    };
+    const rejectOnce = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanupAbort();
+      response?.destroy();
+      req?.destroy();
+      reject(error);
+    };
+    const abort = () => rejectOnce(signal?.reason instanceof Error ? signal.reason : new Error('operation canceled'));
+
+    req = httpRequest(
       {
         host: proxy.hostname,
         port: Number(proxy.port || 80),
@@ -294,39 +453,66 @@ async function getJsonViaHttpProxy(
         }
       },
       (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-        res.on('end', () => {
-          resolve({
-            ok: (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300,
-            status: res.statusCode ?? 0,
-            body: parseJson(Buffer.concat(chunks).toString('utf8'))
-          });
-        });
+        response = res;
+        consumeProxyJsonResponse(res, resolveOnce, rejectOnce);
       }
     );
-    const abort = () => req.destroy(signal?.reason instanceof Error ? signal.reason : new Error('operation canceled'));
-    signal?.throwIfAborted();
+
+    const currentRequest = req;
+    const onRequestError = (error: Error) => rejectOnce(error);
     signal?.addEventListener('abort', abort, { once: true });
-    req.on('timeout', () => req.destroy(new Error('remote config request timed out')));
-    req.on('error', reject);
-    req.on('close', () => signal?.removeEventListener('abort', abort));
-    req.end();
+    currentRequest.on('timeout', () => currentRequest.destroy(new Error('remote config request timed out')));
+    currentRequest.on('error', onRequestError);
+    currentRequest.once('close', () => {
+      cleanupAbort();
+      currentRequest.removeListener('error', onRequestError);
+    });
+    currentRequest.end();
   });
 }
 
-function formatHeaderLines(headers: Record<string, string>): string[] {
-  return Object.entries(headers).map(([name, value]) => `${name}: ${value}`);
-}
+function consumeProxyJsonResponse(
+  response: IncomingMessage,
+  resolveOnce: (response: JsonResponse) => void,
+  rejectOnce: (error: unknown) => void
+): void {
+  const chunks: Buffer[] = [];
 
-function parseHttpResponse(raw: string): JsonResponse {
-  const [head, ...bodyParts] = raw.split('\r\n\r\n');
-  const status = Number(head.match(/^HTTP\/\d(?:\.\d)?\s+(\d+)/)?.[1] ?? 0);
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    body: parseJson(bodyParts.join('\r\n\r\n'))
+  const cleanupReadableListeners = () => {
+    response.removeListener('data', onData);
+    response.removeListener('end', onEnd);
+    response.removeListener('aborted', onAborted);
   };
+  const cleanupAllListeners = () => {
+    cleanupReadableListeners();
+    response.removeListener('error', onError);
+    response.removeListener('close', onClose);
+  };
+  const fail = (cause?: unknown) => {
+    cleanupReadableListeners();
+    rejectOnce(new Error('remote config response aborted', cause === undefined ? undefined : { cause }));
+  };
+  const onData = (chunk: Buffer | string) => chunks.push(Buffer.from(chunk));
+  const onEnd = () => {
+    cleanupReadableListeners();
+    resolveOnce({
+      ok: (response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300,
+      status: response.statusCode ?? 0,
+      body: parseJson(Buffer.concat(chunks).toString('utf8'))
+    });
+  };
+  const onAborted = () => fail();
+  const onError = (error: Error) => fail(error);
+  const onClose = () => {
+    if (!response.complete) fail();
+    cleanupAllListeners();
+  };
+
+  response.on('data', onData);
+  response.on('end', onEnd);
+  response.on('aborted', onAborted);
+  response.on('error', onError);
+  response.on('close', onClose);
 }
 
 function parseJson(text: string): unknown {

@@ -35,6 +35,9 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: Validate repository hygiene
+        run: npm run validate:repo
+
       - name: Install
         run: npm ci
 

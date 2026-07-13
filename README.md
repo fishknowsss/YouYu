@@ -8,14 +8,15 @@
 
 YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新和桌宠交互。
 
-当前发布版本为 [`1.5.6`](https://github.com/fishknowsss/YouYu/releases/tag/v1.5.6)。安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)。
+当前源码与最新公开发布版本为 [`1.5.9`](https://github.com/fishknowsss/YouYu/releases/tag/v1.5.9)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)，本次完整说明见 [v1.5.9 发布说明](docs/releases/v1.5.9.md)。
 
-## 1.5.6 当前状态
+## 1.5.9 发布重点
 
-- 设置页按订阅、三行控制和软件更新组成五行布局，在 `900×600` 默认窗口中保持统一的行高与操作列。
-- 专业首页保留运行数据和实时诊断；测试页可在默认窗口中完整显示 16 项检测。
-- 覆盖安装会先清理 YouYu 设置的系统代理；应用内安装会先完成主进程清理与交接，启动安装器失败时保留更新包以便重试。
-- 更新下载会显示差分包、完整包回退和校验状态，标准版、内部通道版与无桌宠版继续使用独立更新元数据。
+- 代理启停、后台刷新、健康检查和退出清理统一遵循运行意图；停止后不会被旧任务重新拉起，清理失败时可安全恢复。
+- 流量身份、远程配置缓存和远程订阅按用户与设备隔离；设备失效后会清除远程订阅并停止代理。
+- 覆盖安装只处理当前安装路径中的 YouYu 进程；强制关闭前会校验并恢复 YouYu 实际接管的系统代理。
+- Worker 加强登记幂等、原子限流、请求上限和数据库约束预检；CI 会拒绝 Wrangler 状态、私有订阅和本地缓存进入仓库。
+- 本次版本没有调整前端界面或交互；升级后原有使用方式保持不变。
 
 ## 界面预览
 
@@ -151,6 +152,8 @@ NSIS 安装程序按计算机安装到受管理员权限保护的位置，并创
 - 如果真实订阅 token 曾进入公开提交、Actions artifact 或 Release，应按已泄露处理并立即更换。
 - 流量登记使用设备身份与签名请求；远端同步失败时，本地统计与待上报增量仍会保留。
 
+安全问题请按 [安全策略](SECURITY.md) 私下报告，不要在公开 Issue 中提交订阅、令牌、设备密钥、日志或其他敏感信息。
+
 应用运行数据保存在 Electron 的用户数据目录中，主要包括设置、流量统计和节点健康缓存。卸载或手动清理数据前，应先确认是否需要保留这些本地记录。
 
 ## 本地开发
@@ -181,6 +184,7 @@ npm run dev:ui
 提交应用代码前至少执行：
 
 ```powershell
+npm run validate:repo
 npm run typecheck
 npm test
 npm run lint
@@ -215,6 +219,8 @@ npm run smoke
 
 完整版本递增、打包、归档、提交、标签、Release 上传和远端更新元数据检查流程见 [docs/release-packaging.md](docs/release-packaging.md)。
 
+仓库敏感历史清理、凭据处置和后续防回归流程见 [docs/security-history-cleanup.md](docs/security-history-cleanup.md)。
+
 ## 项目结构
 
 ```text
@@ -231,7 +237,7 @@ docs/screenshots/            900×600 演示截图
 
 ## CI 与发布
 
-`.github/workflows/validate.yml` 在 `main`、`vc` 推送及 Pull Request 中执行类型检查、测试、Worker 校验、lint、格式检查和生产构建。
+`.github/workflows/validate.yml` 在 `main` 推送及 Pull Request 中执行仓库卫生检查、类型检查、测试、Worker 校验、lint、格式检查和生产构建。
 
 `.github/workflows/build-windows.yml` 只在 `v*` 标签或手动触发时生成 Windows 安装包；标签构建会先校验标签名与 `package.json` 版本一致：
 

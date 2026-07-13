@@ -1,7 +1,9 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { MihomoRuntime } from '../lifecycle';
+import type { ActiveRemoteConfigSnapshot } from '../remoteConfig';
 import type { AppSettings } from '../storage/settings';
 import type { RemoteControlConfig } from '../../shared/ipc';
 import { buildMihomoConfig, isBlockedSelectableNodeName, strategyTargets } from './config';
@@ -13,6 +15,15 @@ type SpawnedProcess = {
   stderr?: NodeJS.ReadableStream | null;
   kill: () => unknown;
   killed: boolean;
+};
+
+type SpawnedProcessExit =
+  { kind: 'exit'; code: number | null; signal: NodeJS.Signals | null } | { kind: 'error'; error: Error };
+
+type TrackedProcess = {
+  process: SpawnedProcess;
+  exited: boolean;
+  exitPromise: Promise<SpawnedProcessExit>;
 };
 
 type MihomoProxyItem = {
@@ -37,6 +48,8 @@ export type MihomoRuntimeOptions = {
     | Promise<{ mixedPort: number; controllerPort: number; dnsPort?: number }>;
   logLine?: (line: string) => void;
   readRemoteConfig?: () => Promise<RemoteControlConfig | undefined>;
+  readRemoteConfigSnapshot?: () => Promise<ActiveRemoteConfigSnapshot>;
+  isRemoteConfigSnapshotCurrent?: (snapshot: ActiveRemoteConfigSnapshot) => Promise<boolean>;
   spawnProcess?: (binaryPath: string, args: string[]) => SpawnedProcess;
   spawnElevatedProcess?: (binaryPath: string, args: string[]) => SpawnedProcess;
   waitForReady?: (secret: string) => Promise<void>;
@@ -52,7 +65,12 @@ const preferredDefaultNodeKeywordSets = [
   ['台湾', '家宽']
 ];
 const subscriptionUserAgent = 'Clash Verge/2.3.2';
-const subscriptionCacheFileName = 'subscription-cache.yaml';
+const subscriptionCacheFilePrefix = 'subscription-cache';
+
+function subscriptionCacheFileName(url: string): string {
+  const urlHash = createHash('sha256').update(url).digest('hex');
+  return `${subscriptionCacheFilePrefix}-${urlHash}.yaml`;
+}
 
 async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (!signal) {
@@ -404,8 +422,8 @@ async function cacheSubscriptionConfigText(
 }
 
 export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntime {
-  let child: SpawnedProcess | null = null;
-  let stopping = false;
+  let child: TrackedProcess | null = null;
+  const stoppingChildren = new Set<TrackedProcess>();
 
   async function clearGeoDataFiles(workDir: string) {
     await Promise.allSettled(
@@ -415,32 +433,59 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
     );
   }
 
+  async function assertRemoteConfigSnapshotCurrent(
+    snapshot: ActiveRemoteConfigSnapshot | undefined,
+    signal?: AbortSignal
+  ): Promise<void> {
+    signal?.throwIfAborted();
+    if (!snapshot || !options.isRemoteConfigSnapshotCurrent) return;
+    if (!(await options.isRemoteConfigSnapshotCurrent(snapshot))) {
+      throw new Error('remote config changed during mihomo start');
+    }
+    signal?.throwIfAborted();
+  }
+
   async function writeConfig(signal?: AbortSignal) {
     signal?.throwIfAborted();
     const settings = await options.readSettings();
-    if (!settings.subscriptionUrl) {
+    let remoteConfigSnapshot: ActiveRemoteConfigSnapshot | undefined;
+    let remoteConfig: RemoteControlConfig | undefined;
+    try {
+      if (options.readRemoteConfigSnapshot) {
+        remoteConfigSnapshot = await options.readRemoteConfigSnapshot();
+        remoteConfig = remoteConfigSnapshot.config;
+      } else {
+        remoteConfig = await options.readRemoteConfig?.();
+      }
+    } catch (error) {
+      options.logLine?.(`remote config skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const subscriptionUrl =
+      remoteConfig?.enabled && remoteConfig.subscriptionUrl
+        ? remoteConfig.subscriptionUrl
+        : settings.localSubscriptionUrl;
+    if (!subscriptionUrl) {
       throw new Error('missing subscription url');
     }
 
     const workDir = join(options.userDataDir, 'mihomo');
     const configPath = join(workDir, 'config.yaml');
     const ports = (await options.getPorts?.()) ?? { mixedPort: 7890, controllerPort: 9090 };
-    const subscriptionCachePath = join(workDir, subscriptionCacheFileName);
+    const subscriptionCachePath = join(workDir, subscriptionCacheFileName(subscriptionUrl));
     await mkdir(workDir, { recursive: true });
-    const fetchedSubscriptionConfigText = await fetchSubscriptionConfigText(settings.subscriptionUrl, signal);
+    await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
+    const fetchedSubscriptionConfigText = await fetchSubscriptionConfigText(subscriptionUrl, signal);
     signal?.throwIfAborted();
+    await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
     await cacheSubscriptionConfigText(subscriptionCachePath, fetchedSubscriptionConfigText, options.logLine);
     const subscriptionConfigText =
       fetchedSubscriptionConfigText ?? (await readCachedSubscriptionConfigText(subscriptionCachePath, options.logLine));
-    const remoteConfig = await options.readRemoteConfig?.().catch((error) => {
-      options.logLine?.(`remote config skipped: ${error instanceof Error ? error.message : String(error)}`);
-      return undefined;
-    });
     await clearGeoDataFiles(workDir);
+    await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
     await writeFile(
       configPath,
       buildMihomoConfig({
-        subscriptionUrl: settings.subscriptionUrl,
+        subscriptionUrl,
         secret: settings.controllerSecret,
         mode: settings.mode,
         strategy: settings.strategy,
@@ -459,46 +504,49 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
       }),
       'utf8'
     );
+    await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
 
-    return { workDir, configPath, settings, ports, remoteConfig };
+    return { workDir, configPath, settings, ports, remoteConfig, remoteConfigSnapshot };
   }
 
-  async function stopCurrentChild() {
-    const current = child;
-    if (current && !current.killed) {
-      stopping = true;
-      try {
-        await new Promise<void>((resolve, reject) => {
-          let settled = false;
-          const done = (error?: Error) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            if (error) reject(error);
-            else resolve();
-          };
-          const timer = setTimeout(() => done(new Error('mihomo process did not exit after cancellation')), 10_000);
-          current.once('exit', () => done());
-          current.once('error', (error) => done(error));
-          current.kill();
-        });
-      } finally {
-        stopping = false;
+  async function stopCurrentChild(current = child) {
+    if (!current) return;
+
+    stoppingChildren.add(current);
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      if (!current.exited && !current.process.killed) {
+        current.process.kill();
       }
+      const outcome = await Promise.race([
+        current.exitPromise,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('mihomo process did not exit after cancellation')), 10_000);
+        })
+      ]);
+      if (outcome.kind === 'error') throw outcome.error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      stoppingChildren.delete(current);
     }
-    if (!current || child !== current || current.killed) {
+
+    if (child === current && current.exited) {
       child = null;
     }
   }
 
   return {
     isRunning() {
-      return Boolean(child && !child.killed);
+      return Boolean(child && !child.exited);
     },
     async start(signal) {
       if (child) {
-        if (!child.killed) return;
-        throw new Error('previous mihomo process has not exited');
+        if (!child.exited && !child.process.killed) return;
+        if (child.exited) {
+          child = null;
+        } else {
+          throw new Error('previous mihomo process has not exited');
+        }
       }
 
       const maxAttempts = options.waitForReady ? 1 : 3;
@@ -506,7 +554,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         signal?.throwIfAborted();
-        const { workDir, configPath, settings, ports, remoteConfig } = await writeConfig(signal);
+        const { workDir, configPath, settings, ports, remoteConfig, remoteConfigSnapshot } = await writeConfig(signal);
         const startupNode = remoteConfig?.preferredNode ?? settings.selectedNode;
         const startupStrategy = remoteConfig?.preferredNode
           ? 'manual'
@@ -522,9 +570,45 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
               stdio: ['ignore', 'pipe', 'pipe']
             }));
 
-        const current = spawnProcess(options.binaryPath, ['-d', workDir, '-f', configPath]);
+        await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
+        const spawned = spawnProcess(options.binaryPath, ['-d', workDir, '-f', configPath]);
+        let resolveExit: (outcome: SpawnedProcessExit) => void = () => undefined;
+        const current: TrackedProcess = {
+          process: spawned,
+          exited: false,
+          exitPromise: new Promise<SpawnedProcessExit>((resolve) => {
+            resolveExit = resolve;
+          })
+        };
+        let exitSettled = false;
+        let ready = false;
+        const settleExit = (outcome: SpawnedProcessExit) => {
+          if (exitSettled) return;
+          exitSettled = true;
+          current.exited = true;
+          if (child === current) {
+            child = null;
+          }
+          resolveExit(outcome);
+        };
         child = current;
-        const abortCurrent = () => current.kill();
+        spawned.once('error', (error) => {
+          options.logLine?.(`mihomo process error: ${error.message}`);
+          settleExit({ kind: 'error', error });
+        });
+        spawned.once('exit', (code, exitSignal) => {
+          const reason = code == null ? `signal ${exitSignal ?? 'unknown'}` : `exit code ${code.toString()}`;
+          if (ready) {
+            options.logLine?.(`mihomo exited after ready: ${reason}`);
+            if (!stoppingChildren.has(current)) {
+              options.onUnexpectedExit?.(reason);
+            }
+          } else {
+            options.logLine?.(`mihomo exited before ready: ${reason}`);
+          }
+          settleExit({ kind: 'exit', code, signal: exitSignal });
+        });
+        const abortCurrent = () => spawned.kill();
         signal?.addEventListener('abort', abortCurrent, { once: true });
         const recentOutput: string[] = [];
         const rememberOutput = (line: string) => {
@@ -537,7 +621,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
           const detail = recentOutput.length > 0 ? `; recent mihomo output: ${recentOutput.join(' | ')}` : '';
           return new Error(`mihomo exited before controller was ready: ${reason}${detail}`);
         };
-        current.stdout?.on('data', (chunk) => {
+        spawned.stdout?.on('data', (chunk) => {
           String(chunk)
             .split(/\r?\n/)
             .map((line) => line.trim())
@@ -547,7 +631,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
               options.logLine?.(`[mihomo] ${line}`);
             });
         });
-        current.stderr?.on('data', (chunk) => {
+        spawned.stderr?.on('data', (chunk) => {
           String(chunk)
             .split(/\r?\n/)
             .map((line) => line.trim())
@@ -558,32 +642,17 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
             });
         });
 
-        let ready = false;
-        const earlyFailure = new Promise<never>((_resolve, reject) => {
-          current.once('error', (error) => {
-            if (child === current) {
-              child = null;
-            }
-            options.logLine?.(`mihomo process error: ${error.message}`);
-            reject(error);
-          });
-          current.once('exit', (code, signal) => {
-            if (child === current) {
-              child = null;
-            }
-            if (!ready) {
-              const reason = code == null ? `signal ${signal ?? 'unknown'}` : `exit code ${code.toString()}`;
-              options.logLine?.(`mihomo exited before ready: ${reason}`);
-              reject(formatStartupFailure(reason));
-              return;
-            }
+        const earlyFailure: Promise<never> = current.exitPromise.then((outcome) => {
+          if (outcome.kind === 'error') {
+            throw outcome.error;
+          }
 
-            const reason = code == null ? `signal ${signal ?? 'unknown'}` : `exit code ${code.toString()}`;
-            options.logLine?.(`mihomo exited after ready: ${reason}`);
-            if (!stopping) {
-              options.onUnexpectedExit?.(reason);
-            }
-          });
+          const reason =
+            outcome.code == null ? `signal ${outcome.signal ?? 'unknown'}` : `exit code ${outcome.code.toString()}`;
+          if (!ready) {
+            throw formatStartupFailure(reason);
+          }
+          return new Promise<never>(() => undefined);
         });
 
         let abortStartup: () => void = () => undefined;
@@ -609,12 +678,13 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
             earlyFailure,
             aborted
           ]);
+          await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
           ready = true;
           options.logLine?.('mihomo controller ready');
           return;
         } catch (error) {
           lastError = error;
-          await stopCurrentChild();
+          await stopCurrentChild(current);
           if (!isControllerNotReadyError(error) || attempt === maxAttempts) {
             throw error;
           }

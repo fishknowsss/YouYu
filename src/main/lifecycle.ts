@@ -15,10 +15,13 @@ export type LifecycleStatus = 'stopped' | 'running' | 'failed';
 export type LifecycleController = {
   getStatus: () => LifecycleStatus;
   markRuntimeExited?: (reason?: string) => void;
+  suspendStarts: () => void;
+  resumeStarts: () => void;
   start: (signal?: AbortSignal) => Promise<void>;
   stop: () => Promise<void>;
   restart: (signal?: AbortSignal) => Promise<void>;
   repair: (signal?: AbortSignal) => Promise<void>;
+  shutdown: () => Promise<void>;
 };
 
 export function createLifecycleController(deps: {
@@ -28,6 +31,9 @@ export function createLifecycleController(deps: {
 }): LifecycleController {
   let status: LifecycleStatus = 'stopped';
   let operation: Promise<void> = Promise.resolve();
+  let startsSuspended = false;
+  let shuttingDown = false;
+  let shutdownInProgress = false;
 
   function setStatus(next: LifecycleStatus) {
     if (status === next) return;
@@ -48,20 +54,35 @@ export function createLifecycleController(deps: {
     return next;
   }
 
+  function ensureOperationsAllowed() {
+    if (shuttingDown || shutdownInProgress) throw new Error('lifecycle is shutting down');
+    if (startsSuspended) throw new Error('lifecycle starts are suspended');
+  }
+
   async function rollbackFailedStart(error: unknown): Promise<never> {
     setStatus('failed');
-    await Promise.allSettled([deps.proxy.restore(), deps.mihomo.stop()]);
+    try {
+      await deps.proxy.restore();
+    } catch (restoreError) {
+      throw new AggregateError([error, restoreError], 'lifecycle start and proxy rollback failed', {
+        cause: restoreError
+      });
+    }
+    await deps.mihomo.stop().catch(() => undefined);
     throw error;
   }
 
   async function startInternal(signal?: AbortSignal) {
+    ensureOperationsAllowed();
     if (reconcileStatus() === 'running') return;
 
     try {
       signal?.throwIfAborted();
       await deps.mihomo.start(signal);
+      ensureOperationsAllowed();
       signal?.throwIfAborted();
       await deps.proxy.enable(signal);
+      ensureOperationsAllowed();
       setStatus('running');
     } catch (error) {
       await rollbackFailedStart(error);
@@ -71,11 +92,12 @@ export function createLifecycleController(deps: {
   async function stopInternal() {
     if (reconcileStatus() === 'stopped') return;
 
-    const results = await Promise.allSettled([deps.proxy.restore(), deps.mihomo.stop()]);
-    const failure = results.find((result) => result.status === 'rejected');
-    if (failure?.status === 'rejected') {
+    try {
+      await deps.proxy.restore();
+      await deps.mihomo.stop();
+    } catch (error) {
       setStatus('failed');
-      throw failure.reason;
+      throw error;
     }
     setStatus('stopped');
   }
@@ -87,6 +109,12 @@ export function createLifecycleController(deps: {
         setStatus('failed');
       }
     },
+    suspendStarts() {
+      startsSuspended = true;
+    },
+    resumeStarts() {
+      if (!shuttingDown && !shutdownInProgress) startsSuspended = false;
+    },
     async start(signal) {
       await enqueue(() => startInternal(signal));
     },
@@ -95,22 +123,27 @@ export function createLifecycleController(deps: {
     },
     async restart(signal) {
       await enqueue(async () => {
+        ensureOperationsAllowed();
         if (reconcileStatus() !== 'running') {
           await startInternal(signal);
           return;
         }
 
-        const cleanupResults = await Promise.allSettled([deps.proxy.restore(), deps.mihomo.stop()]);
-        const cleanupFailure = cleanupResults.find((result) => result.status === 'rejected');
-        if (cleanupFailure?.status === 'rejected') {
+        try {
+          await deps.proxy.restore();
+          await deps.mihomo.stop();
+        } catch (error) {
           setStatus('failed');
-          throw cleanupFailure.reason;
+          throw error;
         }
         try {
+          ensureOperationsAllowed();
           signal?.throwIfAborted();
           await deps.mihomo.start(signal);
+          ensureOperationsAllowed();
           signal?.throwIfAborted();
           await deps.proxy.enable(signal);
+          ensureOperationsAllowed();
           setStatus('running');
         } catch (error) {
           await rollbackFailedStart(error);
@@ -119,15 +152,30 @@ export function createLifecycleController(deps: {
     },
     async repair(signal) {
       await enqueue(async () => {
+        ensureOperationsAllowed();
         signal?.throwIfAborted();
-        const results = await Promise.allSettled([deps.mihomo.stop(), deps.proxy.repair(signal)]);
-        const failure = results.find((result) => result.status === 'rejected');
-        if (failure?.status === 'rejected') {
+        try {
+          await deps.proxy.repair(signal);
+          await deps.mihomo.stop();
+        } catch (error) {
           setStatus('failed');
-          throw failure.reason;
+          throw error;
         }
         setStatus('stopped');
       });
+    },
+    async shutdown() {
+      shutdownInProgress = true;
+      startsSuspended = true;
+      try {
+        await enqueue(stopInternal);
+        shuttingDown = true;
+      } catch (error) {
+        startsSuspended = false;
+        throw error;
+      } finally {
+        shutdownInProgress = false;
+      }
     }
   };
 }

@@ -1,0 +1,94 @@
+import { readFile } from 'node:fs/promises';
+import { describe, expect, it } from 'vitest';
+
+describe('update and exit lifecycle safety', () => {
+  it('suspends restart work before update preparation begins', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const install = source.slice(
+      source.indexOf('async function installDownloadedUpdate'),
+      source.indexOf('function recoverFromUpdateInstallerLaunchFailure')
+    );
+
+    expect(install.indexOf('updateInstallerLaunchPending = true')).toBeLessThan(
+      install.indexOf('await prepareForUpdateInstall()')
+    );
+    expect(install.indexOf('lifecycle.suspendStarts()')).toBeLessThan(
+      install.indexOf('await prepareForUpdateInstall()')
+    );
+    expect(install.indexOf("setUpdateSnapshot({ status: 'installing' })")).toBeLessThan(
+      install.indexOf('await prepareForUpdateInstall()')
+    );
+  });
+
+  it('resumes lifecycle starts after installer preparation or launch failure', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const recovery = source.slice(
+      source.indexOf('function recoverFromUpdateInstallFailure'),
+      source.indexOf('async function prepareForUpdateInstall')
+    );
+
+    expect(recovery).toContain('lifecycle.resumeStarts()');
+    expect(recovery).toContain('updateInstallerLaunchFailed = beforeQuitWasObserved');
+    expect(recovery).toContain("setUpdateSnapshot({ status: 'downloaded', message })");
+  });
+
+  it('does not launch a deferred installer after recovery cancels that install attempt', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const install = source.slice(
+      source.indexOf('async function installDownloadedUpdate'),
+      source.indexOf('function recoverFromUpdateInstallerLaunchFailure')
+    );
+    const deferredLaunch = install.slice(install.indexOf('deferUpdateInstallerLaunch'));
+
+    expect(deferredLaunch).toContain('!updateInstallerLaunchPending');
+    expect(deferredLaunch).toContain('updateInstallAttempt !== installAttempt');
+    expect(deferredLaunch.indexOf('updateInstallAttempt !== installAttempt')).toBeLessThan(
+      deferredLaunch.indexOf('autoUpdater.quitAndInstall(false, true)')
+    );
+    expect(deferredLaunch.indexOf('updateInstallerLaunchStarted = true')).toBeLessThan(
+      deferredLaunch.indexOf('autoUpdater.quitAndInstall(false, true)')
+    );
+  });
+
+  it('only blocks a follow-up quit when the failed installer attempt already reached before-quit', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const recovery = source.slice(
+      source.indexOf('function recoverFromUpdateInstallFailure'),
+      source.indexOf('async function prepareForUpdateInstall')
+    );
+    const beforeQuit = source.slice(source.indexOf("app.on('before-quit'"));
+
+    expect(recovery).toContain('const beforeQuitWasObserved = updateInstallerBeforeQuitObserved');
+    expect(beforeQuit).toContain('updateInstallerBeforeQuitObserved = true');
+    expect(beforeQuit.indexOf('updateInstallerBeforeQuitObserved = true')).toBeLessThan(
+      beforeQuit.indexOf('if (updateInstallerLaunchFailed)')
+    );
+  });
+
+  it('makes normal application cleanup terminal before exiting', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const cleanup = source.slice(source.indexOf('async function cleanupBeforeExit'));
+
+    expect(cleanup).toContain('lifecycle.suspendStarts()');
+    expect(cleanup).toContain('await lifecycle.shutdown()');
+    expect(cleanup.indexOf('await lifecycle.shutdown()')).toBeLessThan(cleanup.indexOf('app.exit(0)'));
+  });
+
+  it('restores runtime intent and schedules recovery when exit cleanup cannot restore the proxy', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const cleanup = source.slice(
+      source.indexOf('async function cleanupBeforeExit'),
+      source.indexOf('const gotSingleInstanceLock')
+    );
+    const recovery = cleanup.slice(cleanup.indexOf('catch (error)'));
+
+    expect(cleanup).toContain('const shouldRestoreRuntimeIntent = runtimeIntent.capture() !== undefined');
+    expect(recovery).toContain('lifecycle.resumeStarts()');
+    expect(recovery).toContain('scheduleUpdateCheck(updatePeriodicIntervalMs)');
+    expect(recovery).toContain('runtimeIntent.requestStart()');
+    expect(recovery).toContain('startLifecycleWithRepairRetry(undefined, restoredIntentGeneration)');
+    expect(recovery).toContain('scheduleRuntimeRecovery(0)');
+    expect(recovery.indexOf('lifecycle.resumeStarts()')).toBeLessThan(recovery.indexOf('scheduleRuntimeRecovery(0)'));
+    expect(recovery.indexOf('isQuitting = false')).toBeLessThan(recovery.indexOf('scheduleRuntimeRecovery(0)'));
+  });
+});

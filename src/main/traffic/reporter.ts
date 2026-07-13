@@ -1,5 +1,5 @@
 import { hostname } from 'node:os';
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import type { TrafficRegistrationInput } from '../../shared/ipc';
@@ -13,6 +13,7 @@ type TrafficReporterOptions = {
   intervalMs?: number;
   requestTimeoutMs?: number;
   getProxyUrl?: () => string | undefined;
+  onIdentityInvalidated?: () => void | Promise<void>;
   onError?: (error: unknown) => void;
 };
 
@@ -124,8 +125,15 @@ export class TrafficReporter {
     }
     if (identity?.verificationStatus === 'pending') return;
     if (!identity) return;
+    const identityKey = { userId: identity.userId, deviceId: identity.deviceId };
 
-    const report = await this.options.store.getOrCreatePendingReport(stats.pendingUpload, stats.pendingDownload);
+    const report = await this.options.store.getOrCreatePendingReport(
+      stats.pendingUpload,
+      stats.pendingDownload,
+      new Date(),
+      identityKey
+    );
+    if (!report) return;
     const upload = report.upload;
     const download = report.download;
     const body = {
@@ -140,7 +148,7 @@ export class TrafficReporter {
     const secret = await this.options.store.getDeviceSecret();
     if (!secret) {
       const message = 'traffic device secret missing';
-      await this.options.store.markReportFailed(message);
+      await this.options.store.markReportFailedIfCurrent(identityKey, report.id, message);
       throw new Error(message);
     }
 
@@ -153,13 +161,35 @@ export class TrafficReporter {
     );
 
     if (!response.ok) {
-      const message = `traffic report failed: ${response.status}`;
-      await this.options.store.markReportFailed(message);
+      const detail = getResponseError(response.body);
+      const message = `traffic report failed: ${response.status}${detail ? ` ${detail}` : ''}`;
+      if (response.status === 403 && detail.trim().toLowerCase() === 'unknown device') {
+        const cleared = await this.options.store.clearIdentityIfCurrent(identityKey, report.id, message);
+        if (cleared) {
+          try {
+            await this.options.onIdentityInvalidated?.();
+          } catch (error) {
+            try {
+              this.options.onError?.(error);
+            } catch {
+              // Keep the backend rejection as the observable reporting error.
+            }
+          }
+        }
+      } else {
+        await this.options.store.markReportFailedIfCurrent(identityKey, report.id, message);
+      }
       throw new Error(message);
     }
 
-    await this.options.store.markReported(upload, download, new Date(), report.id);
-    await this.options.store.markServerTotals((response.body as TrafficReportResponse).traffic ?? {});
+    const accepted = await this.options.store.markReported(upload, download, new Date(), report.id, identityKey);
+    if (accepted) {
+      await this.options.store.markServerTotals(
+        (response.body as TrafficReportResponse).traffic ?? {},
+        new Date(),
+        identityKey
+      );
+    }
   }
 }
 
@@ -225,7 +255,25 @@ async function postJsonViaProxy(
   }
 
   return new Promise((resolve, reject) => {
-    const req = httpRequest(
+    let req: ClientRequest | undefined;
+    let response: IncomingMessage | undefined;
+    let settled = false;
+
+    const resolveOnce = (value: JsonResponse) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const rejectOnce = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      response?.destroy();
+      req?.destroy();
+      reject(error);
+    };
+    const onRequestError = (error: Error) => rejectOnce(error);
+
+    req = httpRequest(
       {
         protocol: proxy.protocol,
         hostname: proxy.hostname,
@@ -235,21 +283,14 @@ async function postJsonViaProxy(
         headers
       },
       (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-        res.on('end', () => {
-          const raw = Buffer.concat(chunks).toString('utf8');
-          resolve({
-            ok: Boolean(res.statusCode && res.statusCode >= 200 && res.statusCode < 300),
-            status: res.statusCode ?? 0,
-            body: parseJson(raw)
-          });
-        });
+        response = res;
+        consumeJsonResponse(res, resolveOnce, rejectOnce);
       }
     );
 
     req.setTimeout(timeoutMs, () => req.destroy(new Error('traffic request timed out')));
-    req.on('error', reject);
+    req.on('error', onRequestError);
+    req.once('close', () => req?.removeListener('error', onRequestError));
     req.write(body);
     req.end();
   });
@@ -289,39 +330,106 @@ async function postHttpsJsonViaProxy(
     socket,
     servername: target.hostname
   });
-  tlsSocket.setTimeout(timeoutMs, () => tlsSocket.destroy(new Error('traffic request timed out')));
 
   return new Promise((resolve, reject) => {
-    tlsSocket.once('error', reject);
-    tlsSocket.once('secureConnect', () => {
-      const req = httpsRequest(
-        {
-          hostname: target.hostname,
-          port,
-          method: 'POST',
-          path: `${target.pathname}${target.search}`,
-          headers,
-          createConnection: () => tlsSocket
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-          res.on('end', () => {
-            const raw = Buffer.concat(chunks).toString('utf8');
-            resolve({
-              ok: Boolean(res.statusCode && res.statusCode >= 200 && res.statusCode < 300),
-              status: res.statusCode ?? 0,
-              body: parseJson(raw)
-            });
-          });
-        }
-      );
+    let req: ClientRequest | undefined;
+    let response: IncomingMessage | undefined;
+    let settled = false;
 
-      req.once('error', reject);
-      req.write(body);
-      req.end();
+    const resolveOnce = (value: JsonResponse) => {
+      if (settled) return;
+      settled = true;
+      tlsSocket.setTimeout(0);
+      resolve(value);
+    };
+    const rejectOnce = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      response?.destroy();
+      req?.destroy();
+      tlsSocket.destroy();
+      socket.destroy();
+      reject(error);
+    };
+    const onTlsError = (error: Error) => rejectOnce(error);
+
+    tlsSocket.setTimeout(timeoutMs, () => rejectOnce(new Error('traffic request timed out')));
+    tlsSocket.on('error', onTlsError);
+    tlsSocket.once('close', () => tlsSocket.removeListener('error', onTlsError));
+    tlsSocket.once('secureConnect', () => {
+      if (settled) return;
+      try {
+        req = httpsRequest(
+          {
+            hostname: target.hostname,
+            port,
+            method: 'POST',
+            path: `${target.pathname}${target.search}`,
+            headers,
+            createConnection: () => tlsSocket
+          },
+          (res) => {
+            response = res;
+            consumeJsonResponse(res, resolveOnce, rejectOnce);
+          }
+        );
+
+        const currentRequest = req;
+        const onRequestError = (error: Error) => rejectOnce(error);
+        currentRequest.on('error', onRequestError);
+        currentRequest.once('close', () => currentRequest.removeListener('error', onRequestError));
+        currentRequest.write(body);
+        currentRequest.end();
+      } catch (error) {
+        rejectOnce(error);
+      }
     });
   });
+}
+
+function consumeJsonResponse(
+  response: IncomingMessage,
+  resolveOnce: (response: JsonResponse) => void,
+  rejectOnce: (error: unknown) => void
+) {
+  const chunks: Buffer[] = [];
+
+  const cleanupReadableListeners = () => {
+    response.removeListener('data', onData);
+    response.removeListener('end', onEnd);
+    response.removeListener('aborted', onAborted);
+  };
+  const cleanupAllListeners = () => {
+    cleanupReadableListeners();
+    response.removeListener('error', onError);
+    response.removeListener('close', onClose);
+  };
+  const fail = (cause?: unknown) => {
+    cleanupReadableListeners();
+    rejectOnce(new Error('traffic response aborted', cause === undefined ? undefined : { cause }));
+  };
+  const onData = (chunk: Buffer | string) => chunks.push(Buffer.from(chunk));
+  const onEnd = () => {
+    cleanupReadableListeners();
+    const raw = Buffer.concat(chunks).toString('utf8');
+    resolveOnce({
+      ok: Boolean(response.statusCode && response.statusCode >= 200 && response.statusCode < 300),
+      status: response.statusCode ?? 0,
+      body: parseJson(raw)
+    });
+  };
+  const onAborted = () => fail();
+  const onError = (error: Error) => fail(error);
+  const onClose = () => {
+    if (!response.complete) fail();
+    cleanupAllListeners();
+  };
+
+  response.on('data', onData);
+  response.on('end', onEnd);
+  response.on('aborted', onAborted);
+  response.on('error', onError);
+  response.on('close', onClose);
 }
 
 function parseJson(raw: string): unknown {

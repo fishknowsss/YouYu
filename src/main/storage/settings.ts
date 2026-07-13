@@ -153,6 +153,7 @@ export class SettingsStore {
       (typeof parsed.subscriptionUrl === 'string' ? parsed.subscriptionUrl.trim() : '') !==
         normalized.localSubscriptionUrl ||
       normalizeSubscriptionUrl(parsed.remoteSubscriptionUrl) !== normalized.remoteSubscriptionUrl ||
+      parsed.controllerSecret !== normalized.controllerSecret ||
       parsed.strategy !== normalized.strategy ||
       parsed.ruleProfile !== normalized.ruleProfile ||
       parsed.systemProxyEnabled !== normalized.systemProxyEnabled ||

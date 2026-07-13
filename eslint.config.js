@@ -14,8 +14,7 @@ export default tseslint.config(
       '**/release-archive/**',
       'resources/generated/**',
       'src/renderer/assets/pet/**',
-      'cloudflare/youyu-traffic/.wrangler/**',
-      'index.js'
+      'cloudflare/youyu-traffic/.wrangler/**'
     ]
   },
   eslint.configs.recommended,

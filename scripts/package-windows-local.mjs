@@ -1,20 +1,18 @@
 import { spawn } from 'node:child_process';
-import { copyFile, mkdir, readdir, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const root = process.cwd();
 const releaseDir = join(root, 'release');
 const version = (await import('../package.json', { with: { type: 'json' } })).default.version;
-const archive = join(tmpdir(), `youyu-local-${version}`);
 const npmCli = process.env.npm_execpath;
 
 if (!version) {
   throw new Error('Missing package version');
 }
 
-await rm(archive, { recursive: true, force: true });
-await mkdir(archive, { recursive: true });
+const archive = await mkdtemp(join(tmpdir(), `youyu-local-${version}-`));
 
 try {
   await run('npm', ['run', 'dist:win:no']);

@@ -7,10 +7,15 @@ import { readJsonFile, removeJsonFile, writeJsonFileAtomic } from '../storage/js
 const execFileAsync = promisify(execFile);
 const internetSettingsKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
 const refreshInternetSettingsScript = `
+$ErrorActionPreference = 'Stop';
 $signature = '[DllImport("wininet.dll", SetLastError=true)] public static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);';
 $type = Add-Type -MemberDefinition $signature -Name WinInet -Namespace Native -PassThru;
-$type::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0);
-$type::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0);
+$settingsChanged = $type::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0);
+$settingsRefreshed = $type::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0);
+if (-not $settingsChanged -or -not $settingsRefreshed) {
+  $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error();
+  throw "Failed to refresh WinINet proxy settings: $errorCode";
+}
 `;
 
 type PreviousProxyState = {
@@ -122,6 +127,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
   const getProxyServer = options.getProxyServer ?? (() => '127.0.0.1:7890');
   const ownershipFilePath = options.stateDirectory ? join(options.stateDirectory, proxyOwnershipFileName) : undefined;
   let previous: PreviousProxyState | null = null;
+  let activeOwnership: ProxyOwnershipState | null = null;
   let enabledByApp = false;
 
   function reg(args: string[]): Promise<string> {
@@ -291,20 +297,6 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
     );
   }
 
-  async function restorePrevious() {
-    if (!previous) {
-      await setProxy(false, '', '');
-      return;
-    }
-
-    if (previous.enabled && !previous.server) {
-      await setProxy(false, previous.server, previous.override);
-      return;
-    }
-
-    await setProxy(previous.enabled, previous.server, previous.override);
-  }
-
   async function readOwnershipState(): Promise<ProxyOwnershipState | null> {
     if (!ownershipFilePath) return null;
     const result = await readJsonFile<unknown>(ownershipFilePath, {
@@ -328,31 +320,39 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
     await removeJsonFile(ownershipFilePath);
   }
 
-  async function reconcilePersistedOwnership(shouldManage: boolean): Promise<void> {
-    const ownership = await readOwnershipState();
-    if (!ownership) return;
+  function clearInMemoryOwnership(): void {
+    previous = null;
+    activeOwnership = null;
+    enabledByApp = false;
+  }
 
+  async function restoreOwnership(ownership: ProxyOwnershipState): Promise<void> {
     const current = await queryPrevious();
     const appliedFieldNames = (['enabled', 'server', 'override'] as const).filter(
       (field) => ownership.appliedFields[field]
     );
-    const userChangedManagedState = appliedFieldNames.some(
-      (field) => current[field] !== ownership.applied[field] && current[field] !== ownership.previous[field]
-    );
-    if (appliedFieldNames.length === 0 || userChangedManagedState) {
+    const serverWasReplacedByUser =
+      ownership.appliedFields.server &&
+      current.server !== ownership.applied.server &&
+      current.server !== ownership.previous.server;
+    if (appliedFieldNames.length === 0 || serverWasReplacedByUser) {
       await clearOwnershipState();
+      clearInMemoryOwnership();
       return;
     }
 
-    if (ownership.appliedFields.server) await setProxyServer(ownership.previous.server);
-    if (ownership.appliedFields.override) await setProxyOverride(ownership.previous.override);
-    if (ownership.appliedFields.enabled) await setProxyEnabled(ownership.previous.enabled);
+    const restorableFields = appliedFieldNames.filter((field) => current[field] === ownership.applied[field]);
+    if (restorableFields.includes('server')) await setProxyServer(ownership.previous.server);
+    if (restorableFields.includes('override')) await setProxyOverride(ownership.previous.override);
+    if (restorableFields.includes('enabled')) await setProxyEnabled(ownership.previous.enabled);
     await notifySettingsChanged();
     await clearOwnershipState();
-    previous = null;
-    enabledByApp = false;
+    clearInMemoryOwnership();
+  }
 
-    if (!shouldManage) return;
+  async function reconcilePersistedOwnership(): Promise<void> {
+    const ownership = await readOwnershipState();
+    if (ownership) await restoreOwnership(ownership);
   }
 
   return {
@@ -361,7 +361,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
       signal?.throwIfAborted();
       if (enabledByApp) return;
       const shouldManage = await shouldManageProxy();
-      await reconcilePersistedOwnership(shouldManage);
+      await reconcilePersistedOwnership();
       if (!shouldManage) return;
       previous = await queryPrevious();
       const applied: PreviousProxyState = {
@@ -377,6 +377,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
         appliedFields: { server: false, override: false, enabled: false }
       };
       await writeOwnershipState(ownership);
+      activeOwnership = ownership;
       enabledByApp = true;
       try {
         ownership.appliedFields.server = true;
@@ -391,28 +392,24 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
         await notifySettingsChanged();
         await ensureMicrosoftStoreLoopbackExemptions({ strict: Boolean(runElevatedCommand), signal });
       } catch (error) {
-        const restored = await restorePrevious().then(
+        const restored = await restoreOwnership(ownership).then(
           () => true,
           () => false
         );
-        if (restored) {
-          await clearOwnershipState().catch(() => undefined);
+        if (!restored) {
+          clearInMemoryOwnership();
         }
-        previous = null;
-        enabledByApp = false;
         throw error;
       }
     },
     async restore() {
       if (platform !== 'win32') return;
       if (!enabledByApp) {
-        await reconcilePersistedOwnership(false);
+        await reconcilePersistedOwnership();
         return;
       }
-      await restorePrevious();
-      await clearOwnershipState();
-      previous = null;
-      enabledByApp = false;
+      const ownership = activeOwnership ?? (await readOwnershipState());
+      if (ownership) await restoreOwnership(ownership);
     },
     async repair(signal) {
       if (platform !== 'win32') return;
@@ -421,8 +418,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
       if (results[0]?.status === 'fulfilled') {
         await clearOwnershipState();
       }
-      previous = null;
-      enabledByApp = false;
+      clearInMemoryOwnership();
 
       const failure = results.find((result) => result.status === 'rejected');
       if (failure?.status === 'rejected') {

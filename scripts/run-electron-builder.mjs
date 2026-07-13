@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createBuildEnvironment, resolveBuildMode } from './build-mode.mjs';
 
 const builderCli = join(process.cwd(), 'node_modules', 'electron-builder', 'cli.js');
-const internalBuild = process.argv.includes('--internal');
-const noPetBuild = process.argv.includes('--no-pet');
-const publicUpdateBuild = process.argv.includes('--public-update');
+const mode = resolveBuildMode(process.argv.slice(2));
+const { internalBuild, noPetBuild, publicUpdateBuild } = mode;
 const bundledSubscriptionBuild = (internalBuild || noPetBuild) && !publicUpdateBuild;
 const subscriptionSource = bundledSubscriptionBuild
   ? join(process.cwd(), 'resources', 'default-subscription.in.txt')
@@ -32,8 +32,7 @@ async function runBuilder() {
     stdio: 'inherit',
     windowsHide: true,
     env: {
-      ...process.env,
-      YOUYU_DISABLE_PET: noPetBuild ? '1' : process.env.YOUYU_DISABLE_PET,
+      ...createBuildEnvironment(process.env, mode),
       NODE_OPTIONS: nodeOptions
     }
   });

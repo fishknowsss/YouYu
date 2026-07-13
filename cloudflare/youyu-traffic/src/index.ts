@@ -34,7 +34,7 @@ type TrafficSummary = {
 };
 
 type RemoteConfigInput = {
-  enabled?: boolean;
+  enabled?: boolean | null;
   subscriptionUrl?: string | null;
   ruleProfile?: string | null;
   preferredNode?: string | null;
@@ -84,6 +84,14 @@ type RemoteControlConfig = {
 const TRAFFIC_REPORT_RETENTION_DAYS = 90;
 const RETENTION_DELETE_BATCH_SIZE = 500;
 const RETENTION_MAX_REPORT_BATCHES = 20;
+const JSON_REQUEST_MAX_BODY_BYTES = 16 * 1024;
+const ADMIN_CONFIG_MAX_BODY_BYTES = 64 * 1024;
+const ADMIN_RULE_MAX_ITEMS = 256;
+const ADMIN_RULE_MAX_TEXT_LENGTH = 160;
+const ACTIVATION_MAX_NAME_LENGTH = 80;
+const ACTIVATION_MAX_DEVICE_NAME_LENGTH = 120;
+const ACTIVATION_MAX_PLATFORM_LENGTH = 32;
+const ACTIVATION_MAX_APP_VERSION_LENGTH = 64;
 
 export type RetentionCleanupResult = {
   cutoff: string;
@@ -169,15 +177,37 @@ export default {
 };
 
 async function activate(request: Request, env: Env): Promise<Response> {
-  const input = (await request.json()) as ActivateInput;
-  const name = String(input.name ?? '').trim();
+  const input = (await readJsonObjectWithLimit(request, JSON_REQUEST_MAX_BODY_BYTES)) as ActivateInput;
+  const name = typeof input.name === 'string' ? input.name.trim() : '';
+  if (!name) throw new HttpError(400, 'missing name');
+  if (!isBoundedText(name, ACTIVATION_MAX_NAME_LENGTH)) throw new HttpError(400, 'invalid name');
+
   const normalizedName = normalizeName(name);
-  const passphrase = String(input.passphrase ?? '').trim();
-  const deviceSeed = String(input.deviceSeed ?? '').trim();
+  if (!normalizedName) throw new HttpError(400, 'invalid name');
+
+  const passphrase = typeof input.passphrase === 'string' ? input.passphrase.trim() : '';
+  const deviceSeed = typeof input.deviceSeed === 'string' ? input.deviceSeed.trim() : '';
+  if (!deviceSeed) throw new HttpError(400, 'missing device');
+  if (!isUuid(deviceSeed)) throw new HttpError(400, 'invalid device');
+
+  const deviceName = normalizeActivationText(
+    input.deviceName,
+    ACTIVATION_MAX_DEVICE_NAME_LENGTH,
+    'invalid device name'
+  );
+  const platform = normalizeActivationText(input.platform, ACTIVATION_MAX_PLATFORM_LENGTH, 'invalid platform');
+  if (platform && !/^[A-Za-z0-9._-]+$/.test(platform)) throw new HttpError(400, 'invalid platform');
+  const appVersion = normalizeActivationText(
+    input.appVersion,
+    ACTIVATION_MAX_APP_VERSION_LENGTH,
+    'invalid app version'
+  );
+  if (appVersion && !/^[A-Za-z0-9][A-Za-z0-9.+_-]*$/.test(appVersion)) {
+    throw new HttpError(400, 'invalid app version');
+  }
+
   const now = new Date().toISOString();
 
-  if (!name) throw new HttpError(400, 'missing name');
-  if (!deviceSeed) throw new HttpError(400, 'missing device');
   const expectedPassphrase = env.REGISTRATION_PASSPHRASE?.trim();
   if (!expectedPassphrase) {
     throw new HttpError(503, 'registration disabled');
@@ -186,60 +216,61 @@ async function activate(request: Request, env: Env): Promise<Response> {
   const rateLimitKey = `activate:${clientIp}:${normalizedName || 'unknown'}`;
   const ipRateLimitKey = `activate:${clientIp}`;
   await Promise.all([
-    assertRateLimit(env, rateLimitKey, 8, 15 * 60 * 1000),
-    assertRateLimit(env, ipRateLimitKey, 24, 15 * 60 * 1000)
+    consumeRateLimitAttempt(env, rateLimitKey, 8, 15 * 60 * 1000),
+    consumeRateLimitAttempt(env, ipRateLimitKey, 24, 15 * 60 * 1000)
   ]);
   if (passphrase !== expectedPassphrase) {
-    await Promise.all([
-      recordRateLimitFailure(env, rateLimitKey, 15 * 60 * 1000),
-      recordRateLimitFailure(env, ipRateLimitKey, 15 * 60 * 1000)
-    ]);
     throw new HttpError(403, 'invalid passphrase');
   }
   await Promise.all([clearRateLimit(env, rateLimitKey), clearRateLimit(env, ipRateLimitKey)]);
 
-  await env.DB.prepare(
-    'INSERT OR IGNORE INTO users (id, name, normalized_name, status, created_at) VALUES (?, ?, ?, ?, ?)'
+  const proposedUserId = crypto.randomUUID();
+  const proposedDeviceId = crypto.randomUUID();
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO users (id, name, normalized_name, status, created_at)
+       SELECT ?, ?, ?, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM devices WHERE device_seed = ?)`
+    ).bind(proposedUserId, name, normalizedName, 'active', now, deviceSeed),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO devices
+         (id, user_id, device_seed, device_name, platform, app_version, first_seen_at, last_seen_at)
+       SELECT ?, users.id, ?, ?, ?, ?, ?, ?
+       FROM users
+       WHERE users.id = ?`
+    ).bind(proposedDeviceId, deviceSeed, deviceName, platform, appVersion, now, now, proposedUserId),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO devices
+         (id, user_id, device_seed, device_name, platform, app_version, first_seen_at, last_seen_at)
+       SELECT ?, users.id, ?, ?, ?, ?, ?, ?
+       FROM users
+       WHERE users.normalized_name = ?
+         AND NOT EXISTS (SELECT 1 FROM devices WHERE devices.user_id = users.id)
+         AND NOT EXISTS (SELECT 1 FROM devices WHERE devices.device_seed = ?)`
+    ).bind(proposedDeviceId, deviceSeed, deviceName, platform, appVersion, now, now, normalizedName, deviceSeed),
+    env.DB.prepare(
+      `UPDATE devices
+       SET device_name = ?, platform = ?, app_version = ?, last_seen_at = ?
+       WHERE device_seed = ?
+         AND user_id = (SELECT id FROM users WHERE normalized_name = ?)`
+    ).bind(deviceName, platform, appVersion, now, deviceSeed, normalizedName)
+  ]);
+
+  const registration = await env.DB.prepare(
+    `SELECT users.id AS userId, users.name, devices.id AS deviceId
+     FROM users
+     INNER JOIN devices ON devices.user_id = users.id
+     WHERE users.normalized_name = ? AND devices.device_seed = ?`
   )
-    .bind(crypto.randomUUID(), name, normalizedName, 'active', now)
-    .run();
-
-  const user = await env.DB.prepare('SELECT id, name FROM users WHERE normalized_name = ?')
-    .bind(normalizedName)
-    .first<{ id: string; name: string }>();
-  if (!user) throw new HttpError(500, 'user registration failed');
-
-  await env.DB.prepare(
-    `INSERT INTO devices (id, user_id, device_seed, device_name, platform, app_version, first_seen_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(device_seed) DO UPDATE SET
-       user_id = excluded.user_id,
-       device_name = excluded.device_name,
-       platform = excluded.platform,
-       app_version = excluded.app_version,
-       last_seen_at = excluded.last_seen_at`
-  )
-    .bind(
-      crypto.randomUUID(),
-      user.id,
-      deviceSeed,
-      cleanOptional(input.deviceName),
-      cleanOptional(input.platform),
-      cleanOptional(input.appVersion),
-      now,
-      now
-    )
-    .run();
-
-  const device = await env.DB.prepare('SELECT id FROM devices WHERE device_seed = ?')
-    .bind(deviceSeed)
-    .first<{ id: string }>();
-  if (!device) throw new HttpError(500, 'device registration failed');
+    .bind(normalizedName, deviceSeed)
+    .first<{ userId: string; name: string; deviceId: string }>();
+  if (!registration) throw new HttpError(409, 'registration conflict');
 
   return json({
-    userId: user.id,
-    deviceId: device.id,
-    name: user.name
+    userId: registration.userId,
+    deviceId: registration.deviceId,
+    name: registration.name
   });
 }
 
@@ -258,39 +289,69 @@ async function getAdminConfig(env: Env): Promise<Response> {
 }
 
 async function updateAdminConfig(request: Request, env: Env): Promise<Response> {
-  const input = (await request.json()) as RemoteConfigInput;
-  const current = await getGlobalRemoteConfig(env);
-  const next = normalizeRemoteConfigInput(input, current);
-  const now = new Date().toISOString();
+  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as RemoteConfigInput;
+  const assignments: string[] = [];
+  const bindings: unknown[] = [];
+  const assign = (column: string, value: unknown): void => {
+    assignments.push(`${column} = ?`);
+    bindings.push(value);
+  };
 
+  if (hasOwnField(input, 'enabled')) {
+    if (typeof input.enabled !== 'boolean') throw new HttpError(400, 'invalid enabled');
+    assign('enabled', input.enabled ? 1 : 0);
+  }
+  if (hasOwnField(input, 'subscriptionUrl')) {
+    assign('subscription_url', parseNullableSubscriptionUrl(input.subscriptionUrl));
+  }
+  if (hasOwnField(input, 'ruleProfile')) {
+    assign(
+      'rule_profile',
+      parseNullableConfigChoice(
+        input.ruleProfile,
+        ['ruleset', 'smart', 'global', 'subscription'],
+        'invalid rule profile'
+      )
+    );
+  }
+  if (hasOwnField(input, 'preferredNode')) {
+    assign('preferred_node', parseNullableConfigText(input.preferredNode, 120, 'invalid preferred node'));
+  }
+  if (hasOwnField(input, 'preferredStrategy')) {
+    assign(
+      'preferred_strategy',
+      parseNullableConfigChoice(
+        input.preferredStrategy,
+        ['manual', 'auto', 'fallback', 'load-balance', 'direct'],
+        'invalid preferred strategy'
+      )
+    );
+  }
+  if (hasOwnField(input, 'directRules')) {
+    assign('direct_rules', JSON.stringify(parseAdminRuleList(input.directRules)));
+  }
+  if (hasOwnField(input, 'proxyRules')) {
+    assign('proxy_rules', JSON.stringify(parseAdminRuleList(input.proxyRules)));
+  }
+  if (hasOwnField(input, 'anomalyThresholdBytes')) {
+    assign('anomaly_threshold_bytes', parseAnomalyThreshold(input.anomalyThresholdBytes));
+  }
+
+  if (assignments.length === 0) return json({ config: await getGlobalRemoteConfig(env) });
+
+  const now = new Date().toISOString();
   await env.DB.prepare(
-    `INSERT INTO remote_config
+    `INSERT OR IGNORE INTO remote_config
        (id, version, enabled, subscription_url, rule_profile, preferred_node, preferred_strategy, direct_rules, proxy_rules, anomaly_threshold_bytes, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       version = excluded.version,
-       enabled = excluded.enabled,
-       subscription_url = excluded.subscription_url,
-       rule_profile = excluded.rule_profile,
-       preferred_node = excluded.preferred_node,
-       preferred_strategy = excluded.preferred_strategy,
-       direct_rules = excluded.direct_rules,
-       proxy_rules = excluded.proxy_rules,
-       anomaly_threshold_bytes = excluded.anomaly_threshold_bytes,
-       updated_at = excluded.updated_at`
+     VALUES (1, 1, 1, NULL, NULL, NULL, NULL, '[]', '[]', 1073741824, ?)`
   )
-    .bind(
-      current.version + 1,
-      next.enabled ? 1 : 0,
-      next.subscriptionUrl ?? null,
-      next.ruleProfile ?? null,
-      next.preferredNode ?? null,
-      next.preferredStrategy ?? null,
-      JSON.stringify(next.directRules),
-      JSON.stringify(next.proxyRules),
-      next.anomalyThresholdBytes,
-      now
-    )
+    .bind(now)
+    .run();
+
+  assignments.push('version = version + 1', 'updated_at = ?');
+  bindings.push(now);
+  await env.DB.prepare(`UPDATE remote_config SET ${assignments.join(', ')} WHERE id = 1`)
+    .bind(...bindings)
     .run();
 
   return json({ config: await getGlobalRemoteConfig(env) });
@@ -307,36 +368,65 @@ async function getAdminUserConfig(env: Env, userId: string): Promise<Response> {
 
 async function updateAdminUserConfig(request: Request, env: Env, userId: string): Promise<Response> {
   await requireKnownUser(env, userId);
-  const input = (await request.json()) as RemoteConfigInput;
-  const next = normalizeUserRemoteConfigInput(input);
-  const now = new Date().toISOString();
+  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as RemoteConfigInput;
+  const assignments: string[] = [];
+  const bindings: unknown[] = [];
+  const assign = (column: string, value: unknown): void => {
+    assignments.push(`${column} = ?`);
+    bindings.push(value);
+  };
 
-  await env.DB.prepare(
-    `INSERT INTO user_remote_config
-       (user_id, enabled, subscription_url, rule_profile, preferred_node, preferred_strategy, direct_rules, proxy_rules, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(user_id) DO UPDATE SET
-       enabled = excluded.enabled,
-       subscription_url = excluded.subscription_url,
-       rule_profile = excluded.rule_profile,
-       preferred_node = excluded.preferred_node,
-       preferred_strategy = excluded.preferred_strategy,
-       direct_rules = excluded.direct_rules,
-       proxy_rules = excluded.proxy_rules,
-       updated_at = excluded.updated_at`
-  )
-    .bind(
-      userId,
-      typeof next.enabled === 'boolean' ? (next.enabled ? 1 : 0) : null,
-      next.subscriptionUrl ?? null,
-      next.ruleProfile ?? null,
-      next.preferredNode ?? null,
-      next.preferredStrategy ?? null,
-      next.directRules ? JSON.stringify(next.directRules) : null,
-      next.proxyRules ? JSON.stringify(next.proxyRules) : null,
-      now
-    )
-    .run();
+  if (hasOwnField(input, 'enabled')) {
+    if (input.enabled !== null && typeof input.enabled !== 'boolean') throw new HttpError(400, 'invalid enabled');
+    assign('enabled', typeof input.enabled === 'boolean' ? (input.enabled ? 1 : 0) : null);
+  }
+  if (hasOwnField(input, 'subscriptionUrl')) {
+    assign('subscription_url', parseNullableSubscriptionUrl(input.subscriptionUrl));
+  }
+  if (hasOwnField(input, 'ruleProfile')) {
+    assign(
+      'rule_profile',
+      parseNullableConfigChoice(
+        input.ruleProfile,
+        ['ruleset', 'smart', 'global', 'subscription'],
+        'invalid rule profile'
+      )
+    );
+  }
+  if (hasOwnField(input, 'preferredNode')) {
+    assign('preferred_node', parseNullableConfigText(input.preferredNode, 120, 'invalid preferred node'));
+  }
+  if (hasOwnField(input, 'preferredStrategy')) {
+    assign(
+      'preferred_strategy',
+      parseNullableConfigChoice(
+        input.preferredStrategy,
+        ['manual', 'auto', 'fallback', 'load-balance', 'direct'],
+        'invalid preferred strategy'
+      )
+    );
+  }
+  if (hasOwnField(input, 'directRules')) {
+    assign('direct_rules', input.directRules === null ? null : JSON.stringify(parseAdminRuleList(input.directRules)));
+  }
+  if (hasOwnField(input, 'proxyRules')) {
+    assign('proxy_rules', input.proxyRules === null ? null : JSON.stringify(parseAdminRuleList(input.proxyRules)));
+  }
+  if (hasOwnField(input, 'anomalyThresholdBytes')) {
+    throw new HttpError(400, 'invalid anomaly threshold');
+  }
+
+  if (assignments.length > 0) {
+    const now = new Date().toISOString();
+    await env.DB.prepare('INSERT OR IGNORE INTO user_remote_config (user_id, updated_at) VALUES (?, ?)')
+      .bind(userId, now)
+      .run();
+    assignments.push('updated_at = ?');
+    bindings.push(now);
+    await env.DB.prepare(`UPDATE user_remote_config SET ${assignments.join(', ')} WHERE user_id = ?`)
+      .bind(...bindings, userId)
+      .run();
+  }
 
   return json({
     override: await getUserRemoteConfig(env, userId),
@@ -981,7 +1071,7 @@ function adminPageV3(): Response {
 }
 
 async function reportTraffic(request: Request, env: Env): Promise<Response> {
-  const bodyText = await request.text();
+  const bodyText = await readRequestTextWithLimit(request, JSON_REQUEST_MAX_BODY_BYTES);
   const input = safeParseJson(bodyText) as TrafficReportInput;
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'invalid json');
   const reportId = normalizeReportId(input.reportId);
@@ -1320,68 +1410,6 @@ function normalizeRemoteConfigRow(row: RemoteConfigRow): RemoteControlConfig {
   };
 }
 
-export function normalizeRemoteConfigInput(
-  input: RemoteConfigInput,
-  fallback: RemoteControlConfig
-): RemoteControlConfig {
-  const ruleProfile =
-    normalizeChoice(input.ruleProfile, ['ruleset', 'smart', 'global', 'subscription']) ?? fallback.ruleProfile;
-  const preferredStrategy =
-    normalizeChoice(input.preferredStrategy, ['manual', 'auto', 'fallback', 'load-balance', 'direct']) ??
-    fallback.preferredStrategy;
-  const threshold =
-    typeof input.anomalyThresholdBytes === 'number' &&
-    Number.isFinite(input.anomalyThresholdBytes) &&
-    input.anomalyThresholdBytes > 0
-      ? Math.floor(input.anomalyThresholdBytes)
-      : fallback.anomalyThresholdBytes;
-  const subscriptionUrl =
-    typeof input.subscriptionUrl === 'undefined'
-      ? fallback.subscriptionUrl
-      : normalizeSubscriptionUrl(input.subscriptionUrl);
-
-  return {
-    version: fallback.version,
-    enabled: typeof input.enabled === 'boolean' ? input.enabled : fallback.enabled,
-    subscriptionUrl,
-    ruleProfile,
-    preferredNode:
-      typeof input.preferredNode === 'undefined'
-        ? fallback.preferredNode
-        : (normalizeText(input.preferredNode, 120) ?? undefined),
-    preferredStrategy,
-    directRules: typeof input.directRules === 'undefined' ? fallback.directRules : parseRuleList(input.directRules),
-    proxyRules: typeof input.proxyRules === 'undefined' ? fallback.proxyRules : parseRuleList(input.proxyRules),
-    anomalyThresholdBytes: threshold,
-    updatedAt: fallback.updatedAt
-  };
-}
-
-function normalizeUserRemoteConfigInput(input: RemoteConfigInput): Partial<RemoteControlConfig> {
-  return {
-    enabled: typeof input.enabled === 'boolean' ? input.enabled : undefined,
-    subscriptionUrl:
-      input.subscriptionUrl === null || typeof input.subscriptionUrl === 'undefined'
-        ? undefined
-        : normalizeSubscriptionUrl(input.subscriptionUrl),
-    ruleProfile: normalizeChoice(input.ruleProfile, ['ruleset', 'smart', 'global', 'subscription']),
-    preferredNode: normalizeText(input.preferredNode, 120) ?? undefined,
-    preferredStrategy: normalizeChoice(input.preferredStrategy, [
-      'manual',
-      'auto',
-      'fallback',
-      'load-balance',
-      'direct'
-    ]),
-    directRules:
-      input.directRules === null || typeof input.directRules === 'undefined'
-        ? undefined
-        : parseRuleList(input.directRules),
-    proxyRules:
-      input.proxyRules === null || typeof input.proxyRules === 'undefined' ? undefined : parseRuleList(input.proxyRules)
-  };
-}
-
 async function requireKnownUser(env: Env, userId: string): Promise<void> {
   const user = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first<{ id: string }>();
   if (!user) throw new HttpError(404, 'unknown user');
@@ -1451,15 +1479,15 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 async function requireAdmin(request: Request, env: Env): Promise<void> {
-  if (!env.ADMIN_TOKEN) throw new HttpError(403, 'admin disabled');
+  const expectedToken = env.ADMIN_TOKEN?.trim();
+  if (!expectedToken) throw new HttpError(403, 'admin disabled');
   const rateLimitKey = `admin:${getClientIp(request)}`;
-  await assertRateLimit(env, rateLimitKey, 10, 15 * 60 * 1000);
+  await consumeRateLimitAttempt(env, rateLimitKey, 10, 15 * 60 * 1000);
   const token = request.headers
     .get('authorization')
     ?.replace(/^Bearer\s+/i, '')
     .trim();
-  if (!constantTimeEqual(token ?? '', env.ADMIN_TOKEN.trim())) {
-    await recordRateLimitFailure(env, rateLimitKey, 15 * 60 * 1000);
+  if (!constantTimeEqual(token ?? '', expectedToken)) {
     throw new HttpError(403, 'forbidden');
   }
   await clearRateLimit(env, rateLimitKey);
@@ -1483,8 +1511,93 @@ function optionsResponse(): Response {
   });
 }
 
+async function readRequestTextWithLimit(request: Request, maxBytes: number): Promise<string> {
+  const declaredLength = request.headers.get('content-length')?.trim();
+  if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > maxBytes) {
+    await request.body?.cancel('request too large').catch(() => undefined);
+    throw new HttpError(413, 'request too large');
+  }
+
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false });
+  const segments: string[] = [];
+  let receivedBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      receivedBytes += value.byteLength;
+      if (receivedBytes > maxBytes) {
+        await reader.cancel('request too large').catch(() => undefined);
+        throw new HttpError(413, 'request too large');
+      }
+
+      try {
+        segments.push(decoder.decode(value, { stream: true }));
+      } catch {
+        await reader.cancel('invalid utf-8').catch(() => undefined);
+        throw new HttpError(400, 'invalid json');
+      }
+    }
+
+    try {
+      segments.push(decoder.decode());
+    } catch {
+      throw new HttpError(400, 'invalid json');
+    }
+    return segments.join('');
+  } catch (error) {
+    if (!(error instanceof HttpError)) {
+      await reader.cancel().catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function readJsonObjectWithLimit(request: Request, maxBytes: number): Promise<Record<string, unknown>> {
+  const bodyText = await readRequestTextWithLimit(request, maxBytes);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    throw new HttpError(400, 'invalid json');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new HttpError(400, 'invalid json');
+  }
+  return parsed as Record<string, unknown>;
+}
+
 function normalizeName(value: string): string {
   return value.replace(/\s+/g, '').toLowerCase();
+}
+
+function normalizeActivationText(value: unknown, maxLength: number, errorMessage: string): string | null {
+  if (typeof value === 'undefined' || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new HttpError(400, errorMessage);
+  const text = value.trim();
+  if (!text) return null;
+  if (!isBoundedText(text, maxLength)) throw new HttpError(400, errorMessage);
+  return text;
+}
+
+function isBoundedText(value: string, maxLength: number): boolean {
+  return Array.from(value).length <= maxLength && !hasControlCharacters(value);
+}
+
+function hasControlCharacters(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+  });
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function getClientIp(request: Request): string {
@@ -1495,31 +1608,20 @@ function getClientIp(request: Request): string {
   );
 }
 
-async function assertRateLimit(env: Env, key: string, maxAttempts: number, _windowMs: number): Promise<void> {
+async function consumeRateLimitAttempt(env: Env, key: string, maxAttempts: number, windowMs: number): Promise<void> {
   const now = Date.now();
-  const row = await env.DB.prepare('SELECT attempts, reset_at AS resetAt FROM rate_limits WHERE key = ?')
-    .bind(key)
-    .first<{ attempts: number; resetAt: number }>();
-  if (!row) return;
-  if (row.resetAt <= now) {
-    await env.DB.prepare('DELETE FROM rate_limits WHERE key = ?').bind(key).run();
-    return;
-  }
-  if (row.attempts >= maxAttempts) throw new HttpError(429, 'too many attempts');
-}
-
-async function recordRateLimitFailure(env: Env, key: string, windowMs: number): Promise<void> {
-  const now = Date.now();
-  await env.DB.prepare(
+  const row = await env.DB.prepare(
     `INSERT INTO rate_limits (key, attempts, reset_at, updated_at)
-     VALUES (?, ?, ?, ?)
+     VALUES (?, 1, ?, ?)
      ON CONFLICT(key) DO UPDATE SET
-       attempts = CASE WHEN rate_limits.reset_at > ? THEN rate_limits.attempts + 1 ELSE 1 END,
+       attempts = CASE WHEN rate_limits.reset_at > ? THEN MIN(rate_limits.attempts + 1, ?) ELSE 1 END,
        reset_at = CASE WHEN rate_limits.reset_at > ? THEN rate_limits.reset_at ELSE excluded.reset_at END,
-       updated_at = excluded.updated_at`
+       updated_at = excluded.updated_at
+     RETURNING attempts`
   )
-    .bind(key, 1, now + windowMs, new Date(now).toISOString(), now, now)
-    .run();
+    .bind(key, now + windowMs, new Date(now).toISOString(), now, maxAttempts + 1, now)
+    .first<{ attempts: number }>();
+  if (!row || row.attempts > maxAttempts) throw new HttpError(429, 'too many attempts');
 }
 
 async function clearRateLimit(env: Env, key: string): Promise<void> {
@@ -1548,6 +1650,75 @@ function parseRuleList(value: unknown): string[] {
   return raw.map((item) => normalizeText(item, 160)).filter((item): item is string => Boolean(item));
 }
 
+function parseAdminRuleList(value: unknown): string[] {
+  let raw: unknown;
+  if (value === null || value === '') {
+    raw = [];
+  } else if (Array.isArray(value)) {
+    raw = value;
+  } else if (typeof value === 'string') {
+    const text = value.trim();
+    raw = text.startsWith('[') ? safeParseJson(text) : text.split(/\r?\n/);
+  }
+
+  if (!Array.isArray(raw)) throw new HttpError(400, 'invalid rules');
+  if (raw.length > ADMIN_RULE_MAX_ITEMS) throw new HttpError(400, 'too many rules');
+
+  const rules: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') throw new HttpError(400, 'invalid rules');
+    const text = item.trim();
+    if (!text) continue;
+    if (Array.from(text).length > ADMIN_RULE_MAX_TEXT_LENGTH || hasControlCharacters(text)) {
+      throw new HttpError(400, 'invalid rule');
+    }
+    rules.push(text);
+  }
+  return rules;
+}
+
+function parseNullableConfigText(value: unknown, maxLength: number, errorMessage: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string') throw new HttpError(400, errorMessage);
+  const text = value.trim();
+  if (!text) return null;
+  if (Array.from(text).length > maxLength || hasControlCharacters(text)) {
+    throw new HttpError(400, errorMessage);
+  }
+  return text;
+}
+
+function parseNullableConfigChoice(value: unknown, choices: string[], errorMessage: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string') throw new HttpError(400, errorMessage);
+  const text = value.trim();
+  if (!choices.includes(text)) throw new HttpError(400, errorMessage);
+  return text;
+}
+
+function parseNullableSubscriptionUrl(value: unknown): string | null {
+  const text = parseNullableConfigText(value, 2048, 'invalid subscription url');
+  if (!text) return null;
+  try {
+    const url = new URL(text);
+    if (url.protocol !== 'https:') throw new Error('unsupported protocol');
+    return text;
+  } catch {
+    throw new HttpError(400, 'invalid subscription url');
+  }
+}
+
+function parseAnomalyThreshold(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new HttpError(400, 'invalid anomaly threshold');
+  }
+  const threshold = Math.floor(value);
+  if (!Number.isSafeInteger(threshold) || threshold < 1) {
+    throw new HttpError(400, 'invalid anomaly threshold');
+  }
+  return threshold;
+}
+
 function safeParseJson(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -1561,19 +1732,6 @@ function normalizeText(value: unknown, maxLength: number): string | null {
   return text ? text.slice(0, maxLength) : null;
 }
 
-function normalizeSubscriptionUrl(value: unknown): string | undefined {
-  const text = normalizeText(value, 2048);
-  if (!text) return undefined;
-
-  try {
-    const url = new URL(text);
-    if (url.protocol !== 'https:') throw new Error('unsupported protocol');
-    return text;
-  } catch {
-    throw new HttpError(400, 'invalid subscription url');
-  }
-}
-
 function normalizeStoredSubscriptionUrl(value: unknown): string | undefined {
   const text = cleanOptional(value);
   if (!text) return undefined;
@@ -1585,9 +1743,8 @@ function normalizeStoredSubscriptionUrl(value: unknown): string | undefined {
   }
 }
 
-function normalizeChoice(value: unknown, choices: string[]): string | undefined {
-  const text = typeof value === 'string' ? value.trim() : '';
-  return choices.includes(text) ? text : undefined;
+function hasOwnField(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function cleanOptional(value: unknown): string | null {

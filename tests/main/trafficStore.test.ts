@@ -49,6 +49,45 @@ describe('TrafficStore', () => {
     expect(snapshot.stats.pendingDownload).toBe(140);
   });
 
+  it('persists normalized identity fields before concurrent reads return', async () => {
+    await writeFile(
+      join(dir, 'traffic.json'),
+      JSON.stringify({
+        version: 3,
+        deviceSeed: '',
+        identity: {
+          userId: 'u_1',
+          deviceId: 'd_1',
+          name: 'Alice',
+          deviceName: 'DESKTOP',
+          verificationStatus: 'verified'
+        },
+        totalUpload: 0,
+        totalDownload: 0,
+        pendingUpload: 0,
+        pendingDownload: 0,
+        daily: {},
+        nodeUsage: {}
+      })
+    );
+    const store = new TrafficStore(dir);
+
+    const [first, second] = await Promise.all([store.read(), store.read()]);
+    const persisted = JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8')) as {
+      deviceSeed?: string;
+      identity?: { registeredAt?: string };
+    };
+    const reopened = await new TrafficStore(dir).read();
+
+    expect(first.deviceSeed).not.toBe('');
+    expect(second.deviceSeed).toBe(first.deviceSeed);
+    expect(second.identity?.registeredAt).toBe(first.identity?.registeredAt);
+    expect(persisted.deviceSeed).toBe(first.deviceSeed);
+    expect(persisted.identity?.registeredAt).toBe(first.identity?.registeredAt);
+    expect(reopened.deviceSeed).toBe(first.deviceSeed);
+    expect(reopened.identity?.registeredAt).toBe(first.identity?.registeredAt);
+  });
+
   it('uses the local calendar day for today totals', async () => {
     const store = new TrafficStore(dir);
     const localToday = new Date(2026, 4, 10, 0, 30, 0);
@@ -163,6 +202,37 @@ describe('TrafficStore', () => {
     expect(snapshot.stats.totalDownload).toBe(0);
     expect(snapshot.stats.totalSource).toBe('local');
     expect(snapshot.stats.serverSyncedAt).toBeUndefined();
+  });
+
+  it('does not create a pending report for an identity that changed after the snapshot was read', async () => {
+    const store = new TrafficStore(dir);
+    await store.registerIdentity({
+      userId: 'u_1',
+      deviceId: 'd_1',
+      name: 'Alice',
+      deviceName: 'DESKTOP'
+    });
+    await store.addTraffic(100, 200, new Date('2026-05-10T08:00:00.000Z'));
+
+    const stale = await store.getSnapshot();
+    await store.registerIdentity({
+      userId: 'u_2',
+      deviceId: 'd_2',
+      name: 'Bob',
+      deviceName: 'DESKTOP'
+    });
+
+    await expect(
+      store.getOrCreatePendingReport(stale.stats.pendingUpload, stale.stats.pendingDownload, new Date(), {
+        userId: stale.identity!.userId,
+        deviceId: stale.identity!.deviceId
+      })
+    ).resolves.toBeUndefined();
+    await expect(store.getSnapshot()).resolves.toMatchObject({
+      identity: { userId: 'u_2', deviceId: 'd_2' },
+      stats: { pendingUpload: 100, pendingDownload: 200 }
+    });
+    expect((await store.read()).pendingReport).toBeUndefined();
   });
 
   it('can keep a pending local registration until activation succeeds later', async () => {

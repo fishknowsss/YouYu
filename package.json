@@ -1,6 +1,6 @@
 {
   "name": "youyu",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "private": true,
   "author": "118 Studio",
   "description": "YouYu Windows proxy desktop app",
@@ -12,6 +12,7 @@
     "assets": "node scripts/run-brand-assets.mjs",
     "cache:electron:win": "node scripts/cache-electron-win.mjs",
     "clean:release": "node scripts/clean-release.mjs",
+    "validate:repo": "node scripts/validate-repository-hygiene.mjs",
     "test": "vitest run",
     "test:worker": "node --import tsx --test cloudflare/youyu-traffic/test/*.test.mjs",
     "typecheck:worker": "tsc -p cloudflare/youyu-traffic/tsconfig.json",
@@ -37,6 +38,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260710.1",
+    "@electron/get": "2.0.3",
     "@eslint/js": "10.0.1",
     "@types/node": "24.10.2",
     "@types/react": "19.2.7",

@@ -188,6 +188,14 @@ export function createMihomoApiClient(options: {
     return nodeTestStateCache.get(name);
   }
 
+  function restoreTestState(name: string, previous: ProxyNode['testState']): void {
+    if (previous) {
+      nodeTestStateCache.set(name, previous);
+    } else {
+      nodeTestStateCache.delete(name);
+    }
+  }
+
   function normalizeDelay(delay: unknown): number | undefined {
     return typeof delay === 'number' && delay > 0 && delay < delayTestTimeoutMs ? delay : undefined;
   }
@@ -655,40 +663,51 @@ export function createMihomoApiClient(options: {
         return undefined;
       }
 
+      const previousTestState = nodeTestStateCache.get(name);
       nodeTestStateCache.set(name, 'testing');
-      const provider = nodeProviderCache.get(name);
-      const results = await Promise.all(
-        delayTestUrls.map(async (url) => {
-          try {
-            return await requestNodeDelay(name, url, options.signal);
-          } catch (error) {
-            if (isAbortError(error, options.signal)) {
-              throw error;
+      try {
+        const provider = nodeProviderCache.get(name);
+        const results = await Promise.all(
+          delayTestUrls.map(async (url) => {
+            try {
+              return await requestNodeDelay(name, url, options.signal);
+            } catch (error) {
+              if (isAbortError(error, options.signal)) {
+                throw error;
+              }
+              if (provider) {
+                return requestProviderNodeDelay(provider, name, url, options.signal).catch((providerError) => {
+                  if (isAbortError(providerError, options.signal)) {
+                    throw providerError;
+                  }
+                  return undefined;
+                });
+              }
+              return undefined;
             }
-            if (provider) {
-              return requestProviderNodeDelay(provider, name, url, options.signal).catch((providerError) => {
-                if (isAbortError(providerError, options.signal)) {
-                  throw providerError;
-                }
-                return undefined;
-              });
-            }
-            return undefined;
-          }
-        })
-      );
+          })
+        );
 
-      const delays = results.filter((delay): delay is number => typeof delay === 'number');
-      if (!delays.length) {
-        nodeDelayCache.delete(name);
-        nodeTestStateCache.set(name, 'failed');
-        return undefined;
+        const delays = results.filter((delay): delay is number => typeof delay === 'number');
+        if (!delays.length) {
+          nodeDelayCache.delete(name);
+          nodeTestStateCache.set(name, 'failed');
+          return undefined;
+        }
+
+        const delay = Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length);
+        nodeDelayCache.set(name, delay);
+        nodeTestStateCache.set(name, 'tested');
+        return delay;
+      } catch (error) {
+        if (isAbortError(error, options.signal)) {
+          restoreTestState(name, previousTestState);
+        } else {
+          nodeDelayCache.delete(name);
+          nodeTestStateCache.set(name, 'failed');
+        }
+        throw error;
       }
-
-      const delay = Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length);
-      nodeDelayCache.set(name, delay);
-      nodeTestStateCache.set(name, 'tested');
-      return delay;
     },
     async testAllNodes(options = {}) {
       const nodes = await this.listNodes();
@@ -698,16 +717,20 @@ export function createMihomoApiClient(options: {
           const node = queue.shift();
           if (node) {
             let delay: number | undefined;
+            const previousTestState = nodeTestStateCache.get(node.name);
             try {
               nodeTestStateCache.set(node.name, 'testing');
               await options.onNodeTested?.({ ...node, testState: 'testing' });
               delay = await this.testNodeDelay(node.name, { signal: options.signal });
             } catch (error) {
               if (isAbortError(error, options.signal)) {
+                restoreTestState(node.name, previousTestState);
                 throw error;
               }
             } finally {
-              if (!options.signal?.aborted) {
+              if (options.signal?.aborted) {
+                restoreTestState(node.name, previousTestState);
+              } else {
                 await options.onNodeTested?.({
                   ...node,
                   delay,
@@ -718,7 +741,9 @@ export function createMihomoApiClient(options: {
           }
         }
       });
-      await Promise.all(workers);
+      const results = await Promise.allSettled(workers);
+      const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (rejected) throw rejected.reason;
       assertNotAborted(options.signal);
     },
     async selectBestUsableNode(options = {}) {

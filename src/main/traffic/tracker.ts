@@ -83,23 +83,25 @@ export class TrafficTracker {
       this.lastDownload > 0 && stats.downloadTotal >= this.lastDownload ? stats.downloadTotal - this.lastDownload : 0;
     const durationMs = this.lastSampleAt > 0 ? Math.max(0, sampledAt - this.lastSampleAt) : 0;
     const sampledNode = this.lastNode ?? currentNode;
-    const excludedDelta = this.collectExcludedDelta(stats.connections ?? []);
+    const excludedSample = this.collectExcludedDelta(stats.connections ?? []);
 
+    await this.options.store.addTraffic(
+      Math.max(0, uploadDelta - excludedSample.upload),
+      Math.max(0, downloadDelta - excludedSample.download),
+      new Date(sampledAt),
+      { nodeName: sampledNode, durationMs }
+    );
+    if (generation !== this.generation || !this.options.isRunning()) return;
     this.lastUpload = stats.uploadTotal;
     this.lastDownload = stats.downloadTotal;
     this.lastSampleAt = sampledAt;
     this.lastNode = currentNode;
-    await this.options.store.addTraffic(
-      Math.max(0, uploadDelta - excludedDelta.upload),
-      Math.max(0, downloadDelta - excludedDelta.download),
-      new Date(sampledAt),
-      { nodeName: sampledNode, durationMs }
-    );
+    this.excludedConnections = excludedSample.connections;
     this.options.onSample?.();
   }
 
   private collectExcludedDelta(connections: RuntimeConnectionStats[]) {
-    const activeKeys = new Set<string>();
+    const nextConnections = new Map<string, { upload: number; download: number }>();
     let upload = 0;
     let download = 0;
 
@@ -107,29 +109,19 @@ export class TrafficTracker {
       if (!isExcludedConnection(connection)) continue;
 
       const key = getConnectionKey(connection);
-      activeKeys.add(key);
       const currentUpload = normalizeBytes(connection.upload);
       const currentDownload = normalizeBytes(connection.download);
       const previous = this.excludedConnections.get(key);
-      if (previous && currentUpload >= previous.upload) {
-        upload += currentUpload - previous.upload;
-      }
-      if (previous && currentDownload >= previous.download) {
-        download += currentDownload - previous.download;
-      }
-      this.excludedConnections.set(key, {
+      upload += previous && currentUpload >= previous.upload ? currentUpload - previous.upload : currentUpload;
+      download +=
+        previous && currentDownload >= previous.download ? currentDownload - previous.download : currentDownload;
+      nextConnections.set(key, {
         upload: currentUpload,
         download: currentDownload
       });
     }
 
-    for (const key of this.excludedConnections.keys()) {
-      if (!activeKeys.has(key)) {
-        this.excludedConnections.delete(key);
-      }
-    }
-
-    return { upload, download };
+    return { upload, download, connections: nextConnections };
   }
 }
 

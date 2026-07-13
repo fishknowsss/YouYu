@@ -9,11 +9,9 @@ import {
   type Rectangle
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { execFile, execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { promisify } from 'node:util';
 import { createLifecycleController, type MihomoRuntime } from './lifecycle';
 import { IpcOperationRegistry } from './ipcOperations';
 import { connectivityServices, testAllConnectivity, testConnectivity } from './connectivity';
@@ -22,6 +20,7 @@ import { strategyLabels, strategyTargets } from './mihomo/config';
 import { createMihomoRuntime } from './mihomo/process';
 import { createSystemProxyAdapter } from './platform/systemProxy';
 import { runWindowsElevatedProcess, spawnWindowsElevatedMihomo } from './platform/elevatedProcess';
+import { createWindowsStartupTask } from './platform/startupTask';
 import { SettingsStore } from './storage/settings';
 import {
   availabilitySnapshotFromRecord,
@@ -31,9 +30,11 @@ import {
 } from './storage/nodeHealth';
 import { resolveDefaultSubscriptionUrl } from './defaultSubscription';
 import { TrafficReporter } from './traffic/reporter';
+import { createTemporaryRuntimeLeaseManager, createTrafficRegistrationCoordinator } from './traffic/registration';
 import { TrafficStore } from './traffic/store';
 import { TrafficTracker } from './traffic/tracker';
-import { RemoteConfigClient } from './remoteConfig';
+import { RemoteConfigClient, type ActiveRemoteConfigSnapshot } from './remoteConfig';
+import { createRemoteSubscriptionCoordinator } from './remoteSubscription';
 import { calculateMainWindowMetrics } from './windowSizing';
 import {
   closeMihomoConnections,
@@ -58,6 +59,8 @@ import {
 } from '../shared/ipc';
 import { getUpdateDownloadPhase, normalizeUpdateBytes } from '../shared/updateProgress';
 import { deferUpdateInstallerLaunch } from './updateInstallHandoff';
+import { createRuntimeIntentController } from './runtimeIntent';
+import { buildProxyRelaunchArguments, resumeProxyAfterRelaunchArgument } from './appRelaunch';
 
 declare const __YOUYU_DISABLE_PET__: boolean;
 declare const __YOUYU_BUILD_CHANNEL__: string;
@@ -66,8 +69,8 @@ const appId = 'studio.youyu.proxy';
 const isDev = !app.isPackaged;
 const startHidden = process.argv.includes('--hidden') || process.argv.includes('--startup');
 const shutdownForInstall = process.argv.includes('--shutdown-for-install');
-const startupTaskName = 'YouYu';
-const execFileAsync = promisify(execFile);
+const resumeProxyAfterRelaunch = process.argv.includes(resumeProxyAfterRelaunchArgument);
+const windowsStartupTask = createWindowsStartupTask({ executablePath: process.execPath });
 let mainWindow: BrowserWindow | null = null;
 let petWindow: BrowserWindow | null = null;
 const petIpcChannels = new Set<string>([
@@ -123,6 +126,11 @@ let updateCheckRunning = false;
 let autoUpdatesConfigured = false;
 let updateInstallerLaunchPending = false;
 let updateInstallerLaunchFailed = false;
+let updateInstallerLaunchStarted = false;
+let updateInstallerBeforeQuitObserved = false;
+let updateInstallRuntimeWasRunning = false;
+let updateInstallRuntimeIntentGeneration: number | undefined;
+let updateInstallAttempt = 0;
 let trafficSnapshotBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
 let trafficSnapshotBroadcastRunning = false;
 let lastTrafficSnapshotBroadcastAt = 0;
@@ -133,7 +141,8 @@ let updateSnapshot: AppUpdateSnapshot = {
   status: 'idle'
 };
 let nodeHealthTimer: ReturnType<typeof setTimeout> | undefined;
-let nodeHealthCheckRunning = false;
+let nodeHealthCheckOwner: symbol | undefined;
+let nodeHealthGeneration = 0;
 let currentNodeHealthFailures = 0;
 let currentNodeHealthFailureName = '';
 let currentNodeHealth = createEmptyCurrentNodeHealth('', connectivityServices.length);
@@ -160,6 +169,7 @@ let runtimePorts = {
 let activeNodeTestController: AbortController | undefined;
 let subscriptionRevision = 0;
 const ipcOperations = new IpcOperationRegistry((error) => appendLog(`取消操作清理失败: ${formatError(error)}`));
+const runtimeIntent = createRuntimeIntentController();
 let lastError: string | undefined;
 const appLogs: string[] = [];
 const foldedMihomoDialWarnings = new Map<string, { count: number; lastAt: number }>();
@@ -234,12 +244,23 @@ const remoteConfigClient = new RemoteConfigClient({
   appVersion,
   store: trafficStore
 });
+const remoteSubscriptionCoordinator = createRemoteSubscriptionCoordinator({
+  readSettings: () => settingsStore.read(),
+  updateRemoteSubscription: (value) => settingsStore.update({ remoteSubscriptionUrl: value }),
+  isSnapshotCurrent: (snapshot) => remoteConfigClient.isActiveConfigSnapshotCurrent(snapshot),
+  getActiveSnapshot: () => remoteConfigClient.getActiveConfigSnapshot(),
+  onChanged: (url) => {
+    appendLog(url ? '远程订阅已更新' : '远程订阅已清除');
+    scheduleSubscriptionRefresh();
+  }
+});
 const trafficReporter = new TrafficReporter({
   store: trafficStore,
   endpoint: readOptionalText(trafficApiUrlPath),
   appVersion,
   intervalMs: 2 * 60 * 1000,
   getProxyUrl: getRuntimeTrafficProxyUrl,
+  onIdentityInvalidated: handleTrafficIdentityInvalidated,
   onError: (error) => {
     if (!isRecoverableSyncError(error)) {
       appendLog(`流量上报失败: ${formatError(error)}`);
@@ -277,6 +298,8 @@ const mihomoRuntime: MihomoRuntime =
         userDataDir,
         readSettings: () => settingsStore.read(),
         readRemoteConfig: () => remoteConfigClient.getActiveConfig(),
+        readRemoteConfigSnapshot: () => remoteConfigClient.getActiveConfigSnapshot(),
+        isRemoteConfigSnapshotCurrent: (snapshot) => remoteConfigClient.isActiveConfigSnapshotCurrent(snapshot),
         getPorts: allocateRuntimePorts,
         spawnElevatedProcess: (binaryPath, args) => spawnWindowsElevatedMihomo(binaryPath, args),
         logLine: appendLog,
@@ -424,28 +447,57 @@ async function syncRemoteConfig(
     throwOnError?: boolean;
     quiet?: boolean;
     signal?: AbortSignal;
+    intentGeneration?: number;
   } = {}
 ): Promise<boolean> {
+  let subscriptionChanged = false;
+  let restartAttempted = false;
+  const restartIfNeeded = async () => {
+    if (
+      options.restartIfRunning &&
+      lifecycle.getStatus() === 'running' &&
+      options.intentGeneration !== undefined &&
+      runtimeIntent.isCurrent(options.intentGeneration)
+    ) {
+      restartAttempted = true;
+      await restartLifecycleForIntent(options.intentGeneration, options.signal);
+    }
+  };
+
   try {
+    throwIfAborted(options.signal);
+    const cachedSnapshot = await remoteConfigClient.getActiveConfigSnapshot();
+    subscriptionChanged = await applyRemoteSubscription(cachedSnapshot.config, cachedSnapshot);
     throwIfAborted(options.signal);
     const result = await remoteConfigClient.sync({ proxyUrl: options.proxyUrl, signal: options.signal });
     throwIfAborted(options.signal);
-    const subscriptionChanged = await applyRemoteSubscription(result.config);
+    const syncedSnapshot = await remoteConfigClient.getActiveConfigSnapshot();
+    subscriptionChanged = (await applyRemoteSubscription(syncedSnapshot.config, syncedSnapshot)) || subscriptionChanged;
     throwIfAborted(options.signal);
     if (!result.changed && !subscriptionChanged) return false;
 
-    appendLog(`remote config updated: v${result.config?.version ?? 0}`);
-    if (options.restartIfRunning && lifecycle.getStatus() === 'running') {
-      await lifecycle.restart(options.signal);
-    }
+    appendLog(`remote config updated: v${syncedSnapshot.config?.version ?? 0}`);
+    await restartIfNeeded();
     return true;
   } catch (error) {
-    const recoverable = isRecoverableSyncError(error);
-    if (!recoverable || (!options.quiet && options.throwOnError)) {
-      appendLog(`remote config sync failed: ${formatError(error)}`);
+    let reportedError = error;
+    if (subscriptionChanged && !restartAttempted) {
+      try {
+        await restartIfNeeded();
+      } catch (restartError) {
+        reportedError = new AggregateError(
+          [error, restartError],
+          'remote config sync failed after subscription reconciliation',
+          { cause: error }
+        );
+      }
     }
-    if (options.throwOnError) throw error;
-    return false;
+    const recoverable = isRecoverableSyncError(reportedError);
+    if (!recoverable || (!options.quiet && options.throwOnError)) {
+      appendLog(`remote config sync failed: ${formatError(reportedError)}`);
+    }
+    if (options.throwOnError) throw reportedError;
+    return subscriptionChanged;
   }
 }
 
@@ -465,51 +517,25 @@ function stopRemoteConfigPolling() {
 
 async function syncRemoteConfigInBackground(): Promise<void> {
   if (remoteConfigSyncRunning || cleanupStarted || cleanupFinished || isQuitting) return;
+  const intentGeneration = runtimeIntent.capture();
   remoteConfigSyncRunning = true;
   try {
     await syncRemoteConfig({
       proxyUrl: getRuntimeTrafficProxyUrl(),
       restartIfRunning: true,
-      quiet: true
+      quiet: true,
+      intentGeneration
     });
   } finally {
     remoteConfigSyncRunning = false;
   }
 }
 
-async function applyRemoteSubscription(config?: RemoteControlConfig): Promise<boolean> {
-  const nextRemoteSubscriptionUrl = config?.enabled ? (config.subscriptionUrl?.trim() ?? '') : '';
-  const settings = await settingsStore.read();
-  const currentRemoteSubscriptionUrl = settings.remoteSubscriptionUrl ?? '';
-  if (currentRemoteSubscriptionUrl === nextRemoteSubscriptionUrl) {
-    return false;
-  }
-
-  await settingsStore.update({
-    remoteSubscriptionUrl: nextRemoteSubscriptionUrl || null
-  });
-  appendLog(nextRemoteSubscriptionUrl ? '远程订阅已更新' : '远程订阅已清除');
-  scheduleSubscriptionRefresh();
-  return true;
-}
-
-function shouldRetryRegistrationViaProxy(error: unknown): boolean {
-  const message = formatError(error);
-  if (message.includes('traffic endpoint not configured')) return false;
-  if (message.includes('traffic activation failed: 400')) return false;
-  if (message.includes('traffic activation failed: 403')) return false;
-  if (/traffic activation failed: (408|429|5\d\d)/.test(message)) return true;
-  return [
-    'fetch failed',
-    'Failed to fetch',
-    'traffic request timed out',
-    'traffic proxy connect timed out',
-    'ECONNRESET',
-    'ECONNREFUSED',
-    'ETIMEDOUT',
-    'ENOTFOUND',
-    'EAI_AGAIN'
-  ].some((needle) => message.includes(needle));
+async function applyRemoteSubscription(
+  config?: RemoteControlConfig,
+  snapshot?: ActiveRemoteConfigSnapshot
+): Promise<boolean> {
+  return remoteSubscriptionCoordinator.apply(config, snapshot);
 }
 
 function isRecoverableSyncError(error: unknown): boolean {
@@ -526,11 +552,6 @@ function isRecoverableSyncError(error: unknown): boolean {
     'ENOTFOUND',
     'EAI_AGAIN'
   ].some((needle) => message.includes(needle));
-}
-
-function isTrafficActivationAuthFailure(error: unknown): boolean {
-  const message = formatError(error);
-  return message.includes('traffic activation failed: 400') || message.includes('traffic activation failed: 403');
 }
 
 function clearLastError() {
@@ -692,32 +713,81 @@ function setUpdateFailure(error: unknown) {
 }
 
 async function installDownloadedUpdate(): Promise<AppSnapshot> {
-  if (updateSnapshot.status !== 'downloaded') {
+  if (updateSnapshot.status !== 'downloaded' || updateInstallerLaunchPending) {
     throw new Error('update not downloaded');
   }
 
-  await prepareForUpdateInstall();
-  const snapshot = await createSnapshot();
-  setUpdateSnapshot({ status: 'installing' });
-  cleanupFinished = true;
-  isQuitting = true;
   updateInstallerLaunchPending = true;
   updateInstallerLaunchFailed = false;
-  deferUpdateInstallerLaunch({
-    launch: () => autoUpdater.quitAndInstall(false, true),
-    onError: recoverFromUpdateInstallerLaunchFailure
-  });
-  return snapshot;
+  updateInstallerLaunchStarted = false;
+  updateInstallerBeforeQuitObserved = false;
+  updateInstallRuntimeWasRunning = lifecycle.getStatus() === 'running';
+  updateInstallRuntimeIntentGeneration = runtimeIntent.capture();
+  const installAttempt = ++updateInstallAttempt;
+  lifecycle.suspendStarts();
+  setUpdateSnapshot({ status: 'installing' });
+  try {
+    await prepareForUpdateInstall();
+    if (installAttempt !== updateInstallAttempt || !updateInstallerLaunchPending) {
+      throw new Error('update install preparation canceled');
+    }
+    const snapshot = await createSnapshot();
+    cleanupFinished = true;
+    isQuitting = true;
+    deferUpdateInstallerLaunch({
+      launch: () => {
+        if (!updateInstallerLaunchPending || updateInstallAttempt !== installAttempt) {
+          return;
+        }
+        updateInstallerLaunchStarted = true;
+        autoUpdater.quitAndInstall(false, true);
+      },
+      onError: recoverFromUpdateInstallerLaunchFailure
+    });
+    return snapshot;
+  } catch (error) {
+    if (installAttempt === updateInstallAttempt && updateInstallerLaunchPending) {
+      recoverFromUpdateInstallFailure('准备安装失败', error);
+    }
+    throw error;
+  }
 }
 
 function recoverFromUpdateInstallerLaunchFailure(error: unknown) {
-  const message = `启动安装器失败: ${formatError(error)}`;
+  recoverFromUpdateInstallFailure('启动安装器失败', error);
+}
+
+function recoverFromUpdateInstallFailure(prefix: string, error: unknown) {
+  if (!updateInstallerLaunchPending) return;
+  const message = `${prefix}: ${formatError(error)}`;
+  const beforeQuitWasObserved = updateInstallerBeforeQuitObserved;
+  const restartIntentGeneration = updateInstallRuntimeIntentGeneration;
+  const shouldRestartRuntime =
+    updateInstallRuntimeWasRunning &&
+    restartIntentGeneration !== undefined &&
+    runtimeIntent.isCurrent(restartIntentGeneration);
   updateInstallerLaunchPending = false;
-  updateInstallerLaunchFailed = true;
+  updateInstallAttempt += 1;
+  updateInstallerLaunchFailed = beforeQuitWasObserved;
+  updateInstallerLaunchStarted = false;
+  updateInstallerBeforeQuitObserved = false;
+  updateInstallRuntimeWasRunning = false;
+  updateInstallRuntimeIntentGeneration = undefined;
   cleanupFinished = false;
   isQuitting = false;
+  lifecycle.resumeStarts();
   appendLog(message);
   setUpdateSnapshot({ status: 'downloaded', message });
+  startRemoteConfigPolling();
+  if (shouldRestartRuntime && restartIntentGeneration !== undefined) {
+    void startLifecycleWithRepairRetry(undefined, restartIntentGeneration)
+      .then(() => {
+        trafficTracker.start();
+        trafficReporter.start();
+        scheduleNodeHealthCheck(0);
+      })
+      .catch((restartError) => recordError('安装取消后的代理恢复失败', restartError));
+  }
 }
 
 async function prepareForUpdateInstall(): Promise<void> {
@@ -824,6 +894,30 @@ lifecycle = createLifecycleController({
   }
 });
 
+const temporaryRegistrationRuntime = createTemporaryRuntimeLeaseManager({
+  isRuntimeRunning: () => lifecycle.getStatus() === 'running',
+  captureRuntimeIntent: () => runtimeIntent.capture(),
+  startRuntime: (intentGeneration) => startLifecycleWithRepairRetry(undefined, intentGeneration),
+  stopRuntime: () => lifecycle.stop(),
+  log: appendLog
+});
+
+const trafficRegistration = createTrafficRegistrationCoordinator({
+  reporter: trafficReporter,
+  store: trafficStore,
+  hasSubscription: async () => Boolean((await settingsStore.read()).subscriptionUrl.trim()),
+  acquireTemporaryRuntime: temporaryRegistrationRuntime.acquire,
+  stopRuntime: () => lifecycle.stop(),
+  getProxyUrl: getRuntimeTrafficProxyUrl,
+  formatError,
+  log: appendLog
+});
+
+const userRuntimeActions = {
+  start: startLifecycleForUser,
+  restart: restartLifecycleForUser
+};
+
 function clearSubscriptionRefreshTimer() {
   if (subscriptionRefreshTimer) {
     clearTimeout(subscriptionRefreshTimer);
@@ -860,12 +954,18 @@ async function refreshSubscriptionInBackground() {
     scheduleSubscriptionRefresh();
     return;
   }
+  const intentGeneration = runtimeIntent.capture();
+  if (intentGeneration === undefined) {
+    scheduleSubscriptionRefresh();
+    return;
+  }
 
   try {
     appendLog('后台刷新订阅');
     await updateSubscriptionNodes({
       settingsStore,
       lifecycle,
+      runtime: runtimeActionsForIntent(intentGeneration),
       createMihomoApi: createRuntimeMihomoApi,
       createSnapshot
     });
@@ -882,15 +982,23 @@ async function refreshSubscriptionInBackground() {
 }
 
 function startNodeHealthMonitor() {
+  nodeHealthGeneration += 1;
   scheduleNodeHealthCheck(nodeHealthInitialDelayMs);
 }
 
 function stopNodeHealthMonitor() {
+  nodeHealthGeneration += 1;
   if (nodeHealthTimer) {
     clearTimeout(nodeHealthTimer);
     nodeHealthTimer = undefined;
   }
-  nodeHealthCheckRunning = false;
+  if (currentNodeHealth.delayStatus === 'testing') {
+    updateCurrentNodeDelay(currentNodeHealth.nodeName, {
+      delayStatus: 'untested',
+      delay: undefined,
+      delayCheckedAt: undefined
+    });
+  }
 }
 
 function syncCurrentNodeHealthName(nodeName: string) {
@@ -1100,6 +1208,7 @@ function getRuntimeRecoveryDelay(): number {
 
 function scheduleRuntimeRecovery(delayMs = getRuntimeRecoveryDelay()) {
   if (isQuitting || cleanupStarted || cleanupFinished) return;
+  if (runtimeIntent.capture() === undefined) return;
   if (lifecycle.getStatus() === 'stopped') return;
 
   clearRuntimeRecoveryTimer();
@@ -1110,6 +1219,8 @@ function scheduleRuntimeRecovery(delayMs = getRuntimeRecoveryDelay()) {
 }
 
 async function runRuntimeRecovery() {
+  const intentGeneration = runtimeIntent.capture();
+  if (intentGeneration === undefined) return;
   if (runtimeRecoveryRunning || isQuitting || cleanupStarted || cleanupFinished) return;
   if (lifecycle.getStatus() === 'stopped') return;
 
@@ -1117,10 +1228,12 @@ async function runRuntimeRecovery() {
   try {
     appendLog('检测到代理异常，正在自动修复');
     await lifecycle.repair().catch((error) => appendLog(`自动修复准备失败: ${formatError(error)}`));
-    const snapshot = await startProxy();
+    if (!runtimeIntent.isCurrent(intentGeneration)) return;
+    const snapshot = await startProxy(undefined, intentGeneration);
     runtimeRecoveryFailures = 0;
     sendSnapshotToWindows(snapshot);
   } catch (error) {
+    if (!runtimeIntent.isCurrent(intentGeneration)) return;
     runtimeRecoveryFailures += 1;
     recordError('自动恢复失败', error);
     await broadcastSnapshot().catch((broadcastError) => console.error('broadcast snapshot failed', broadcastError));
@@ -1132,35 +1245,48 @@ async function runRuntimeRecovery() {
 }
 
 async function runNodeHealthCheck() {
+  const generation = nodeHealthGeneration;
   const status = lifecycle.getStatus();
   let nextDelayMs = nodeHealthIntervalMs;
   if (status === 'failed') {
     scheduleRuntimeRecovery(nodeHealthRepairDelayMs);
     return;
   }
-  if (nodeHealthCheckRunning || status !== 'running') {
+  if (nodeHealthCheckOwner || status !== 'running') {
     scheduleNodeHealthCheck();
     return;
   }
 
-  nodeHealthCheckRunning = true;
+  const owner = Symbol('node-health-check');
+  nodeHealthCheckOwner = owner;
   try {
-    nextDelayMs = await ensureCurrentNodeUsable();
+    nextDelayMs = await ensureCurrentNodeUsable(generation);
   } catch (error) {
+    if (!isCurrentNodeHealthGeneration(generation)) return;
     appendLog(`节点检查失败: ${formatError(error)}`);
     scheduleRuntimeRecovery(nodeHealthRepairDelayMs);
   } finally {
-    nodeHealthCheckRunning = false;
-    scheduleNodeHealthCheck(nextDelayMs);
+    if (nodeHealthCheckOwner === owner) {
+      nodeHealthCheckOwner = undefined;
+    }
+    if (isCurrentNodeHealthGeneration(generation)) {
+      scheduleNodeHealthCheck(nextDelayMs);
+    }
   }
 }
 
-async function ensureCurrentNodeUsable(): Promise<number> {
+function isCurrentNodeHealthGeneration(generation: number): boolean {
+  return generation === nodeHealthGeneration && lifecycle.getStatus() === 'running' && !isQuitting;
+}
+
+async function ensureCurrentNodeUsable(generation: number): Promise<number> {
   const settings = await settingsStore.read();
+  if (!isCurrentNodeHealthGeneration(generation)) return nodeHealthIntervalMs;
   if (settings.mode === 'direct' || settings.strategy === 'direct') return nodeHealthIntervalMs;
 
   const mihomoApi = createRuntimeMihomoApi({ secret: settings.controllerSecret });
   const currentNode = await mihomoApi.getCurrentNode();
+  if (!isCurrentNodeHealthGeneration(generation)) return nodeHealthIntervalMs;
   if (!currentNode || currentNode === 'DIRECT') return nodeHealthIntervalMs;
 
   const shouldPublishDelay = shouldRefreshCurrentNodeDelay(currentNode);
@@ -1174,6 +1300,7 @@ async function ensureCurrentNodeUsable(): Promise<number> {
   }
 
   const currentDelay = await mihomoApi.testNodeDelay(currentNode).catch(() => undefined);
+  if (!isCurrentNodeHealthGeneration(generation)) return nodeHealthIntervalMs;
   if (typeof currentDelay === 'number') {
     currentNodeHealthFailures = 0;
     currentNodeHealthFailureName = currentNode;
@@ -1212,6 +1339,7 @@ async function ensureCurrentNodeUsable(): Promise<number> {
   const selectedNode = isAutomaticStrategy(settings.strategy)
     ? await mihomoApi.selectBestUsableNodeForStrategy(settings.strategy, { avoidNode: currentNode })
     : await mihomoApi.selectBestUsableNode({ avoidNode: currentNode });
+  if (!isCurrentNodeHealthGeneration(generation)) return nodeHealthIntervalMs;
   if (!selectedNode) {
     throw new Error('没有可用节点');
   }
@@ -1221,7 +1349,9 @@ async function ensureCurrentNodeUsable(): Promise<number> {
       ? { strategy: settings.strategy, selectedNode: null }
       : { strategy: 'manual', selectedNode }
   );
+  if (!isCurrentNodeHealthGeneration(generation)) return nodeHealthIntervalMs;
   await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+  if (!isCurrentNodeHealthGeneration(generation)) return nodeHealthIntervalMs;
   appendLog(`已切换可用节点: ${selectedNode}`);
   currentNodeHealthFailures = 0;
   currentNodeHealthFailureName = selectedNode;
@@ -1404,18 +1534,28 @@ async function withTrayRefresh<T>(task: () => Promise<T>): Promise<T> {
   }
 }
 
-async function startProxy(signal?: AbortSignal): Promise<AppSnapshot> {
+async function startProxy(signal?: AbortSignal, requestedIntentGeneration?: number): Promise<AppSnapshot> {
   throwIfAborted(signal);
+  if (requestedIntentGeneration !== undefined) throwIfRuntimeIntentCanceled(requestedIntentGeneration);
   await requireTrafficIdentity();
+  const intentGeneration = requestedIntentGeneration ?? runtimeIntent.requestStart();
+  throwIfRuntimeIntentCanceled(intentGeneration);
   await syncRemoteConfig({ signal });
   throwIfAborted(signal);
-  await startLifecycleWithRepairRetry(signal);
+  throwIfRuntimeIntentCanceled(intentGeneration);
+  await startLifecycleWithRepairRetry(signal, intentGeneration);
   throwIfAborted(signal);
-  await activatePendingTrafficIdentity().catch((error) => {
-    appendLog(`登记验证暂未完成: ${formatError(error)}`);
+  throwIfRuntimeIntentCanceled(intentGeneration);
+  await trafficRegistration.activatePending();
+  throwIfRuntimeIntentCanceled(intentGeneration);
+  await syncRemoteConfig({
+    proxyUrl: getRuntimeTrafficProxyUrl(),
+    restartIfRunning: true,
+    signal,
+    intentGeneration
   });
-  await syncRemoteConfig({ proxyUrl: getRuntimeTrafficProxyUrl(), restartIfRunning: true, signal });
   throwIfAborted(signal);
+  throwIfRuntimeIntentCanceled(intentGeneration);
   trafficTracker.start();
   trafficReporter.start();
   clearLastError();
@@ -1480,20 +1620,78 @@ async function requireTrafficIdentity(): Promise<void> {
   }
 }
 
-async function startLifecycleWithRepairRetry(signal?: AbortSignal): Promise<void> {
+async function startLifecycleWithRepairRetry(signal?: AbortSignal, intentGeneration?: number): Promise<void> {
+  if (intentGeneration !== undefined) throwIfRuntimeIntentCanceled(intentGeneration);
   try {
     await lifecycle.start(signal);
   } catch (error) {
     throwIfAborted(signal);
+    if (intentGeneration !== undefined) throwIfRuntimeIntentCanceled(intentGeneration);
     appendLog(`启动失败，自动修复后重试: ${formatError(error)}`);
     await lifecycle.repair(signal).catch((repairError) => {
       appendLog(`自动修复失败: ${formatError(repairError)}`);
     });
+    if (intentGeneration !== undefined) throwIfRuntimeIntentCanceled(intentGeneration);
     await lifecycle.start(signal);
   }
+  if (intentGeneration !== undefined) throwIfRuntimeIntentCanceled(intentGeneration);
+}
+
+async function startLifecycleForUser(signal?: AbortSignal): Promise<void> {
+  const intentGeneration = runtimeIntent.requestStart();
+  await startLifecycleWithRepairRetry(signal, intentGeneration);
+}
+
+async function restartLifecycleForUser(signal?: AbortSignal): Promise<void> {
+  const intentGeneration = runtimeIntent.capture();
+  if (intentGeneration === undefined) throw new Error('proxy start canceled');
+  await restartLifecycleForIntent(intentGeneration, signal);
+}
+
+async function restartLifecycleForIntent(intentGeneration: number, signal?: AbortSignal): Promise<void> {
+  throwIfRuntimeIntentCanceled(intentGeneration);
+  try {
+    await lifecycle.restart(signal);
+  } catch (error) {
+    throwIfAborted(signal);
+    throwIfRuntimeIntentCanceled(intentGeneration);
+    appendLog(`重启失败，自动修复后重试: ${formatError(error)}`);
+    await lifecycle.repair(signal).catch((repairError) => {
+      appendLog(`自动修复失败: ${formatError(repairError)}`);
+    });
+    throwIfRuntimeIntentCanceled(intentGeneration);
+    await lifecycle.start(signal);
+  }
+  throwIfRuntimeIntentCanceled(intentGeneration);
+}
+
+function runtimeActionsForIntent(intentGeneration: number) {
+  return {
+    start: (signal?: AbortSignal) => startLifecycleWithRepairRetry(signal, intentGeneration),
+    restart: (signal?: AbortSignal) => restartLifecycleForIntent(intentGeneration, signal)
+  };
+}
+
+async function handleTrafficIdentityInvalidated(): Promise<void> {
+  runtimeIntent.cancel();
+  trafficTracker.stop();
+  trafficReporter.stop();
+  stopNodeHealthMonitor();
+  clearRuntimeRecoveryTimer();
+  clearSubscriptionRefreshTimer();
+  await applyRemoteSubscription(undefined).catch((error) =>
+    appendLog(`traffic identity invalidation subscription cleanup failed: ${formatError(error)}`)
+  );
+
+  await lifecycle
+    .stop()
+    .catch((error) => appendLog(`traffic identity invalidation stop failed: ${formatError(error)}`));
+  await broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
+  refreshTrayMenu();
 }
 
 async function stopProxy(): Promise<AppSnapshot> {
+  runtimeIntent.cancel();
   await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
   await trafficReporter.reportPending().catch((error) => appendLog(`流量上报失败: ${formatError(error)}`));
   trafficTracker.stop();
@@ -1504,6 +1702,7 @@ async function stopProxy(): Promise<AppSnapshot> {
 async function repairProxy(signal?: AbortSignal): Promise<AppSnapshot> {
   throwIfAborted(signal);
   const wasRunning = lifecycle.getStatus() === 'running';
+  const intentGeneration = wasRunning ? (runtimeIntent.capture() ?? runtimeIntent.requestStart()) : undefined;
   if (wasRunning) {
     const settings = await settingsStore.read();
     await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
@@ -1517,8 +1716,8 @@ async function repairProxy(signal?: AbortSignal): Promise<AppSnapshot> {
   throwIfAborted(signal);
   clearSubscriptionRefreshTimer();
   clearLastError();
-  if (wasRunning) {
-    await startLifecycleWithRepairRetry(signal);
+  if (wasRunning && intentGeneration !== undefined) {
+    await startLifecycleWithRepairRetry(signal, intentGeneration);
     throwIfAborted(signal);
     trafficTracker.start();
     trafficReporter.start();
@@ -1528,45 +1727,34 @@ async function repairProxy(signal?: AbortSignal): Promise<AppSnapshot> {
 }
 
 async function registerTrafficIdentity(input: Parameters<TrafficReporter['register']>[0]): Promise<AppSnapshot> {
-  const wasRunning = lifecycle.getStatus() === 'running';
-  let startedForRegistration = false;
+  const previousIdentity = (await trafficStore.getSnapshot()).identity;
+  await trafficRegistration.register(input);
+  const nextIdentity = (await trafficStore.getSnapshot()).identity;
+  const identityChanged =
+    !previousIdentity ||
+    !nextIdentity ||
+    previousIdentity.userId !== nextIdentity.userId ||
+    previousIdentity.deviceId !== nextIdentity.deviceId ||
+    previousIdentity.verificationStatus !== nextIdentity.verificationStatus;
 
-  try {
-    await trafficReporter.register(input, {
-      proxyUrl: wasRunning ? getRuntimeTrafficProxyUrl() : undefined
+  if (identityChanged) {
+    await applyRemoteSubscription(undefined);
+    const activeIntentGeneration = runtimeIntent.capture();
+    if (activeIntentGeneration !== undefined) {
+      const newIntentGeneration = runtimeIntent.requestStart();
+      await syncRemoteConfig({
+        proxyUrl: getRuntimeTrafficProxyUrl()
+      });
+      await restartLifecycleForIntent(newIntentGeneration);
+      trafficTracker.start();
+      trafficReporter.start();
+    }
+  } else if (lifecycle.getStatus() === 'running') {
+    await syncRemoteConfig({
+      proxyUrl: getRuntimeTrafficProxyUrl(),
+      restartIfRunning: true,
+      intentGeneration: runtimeIntent.capture()
     });
-  } catch (error) {
-    const settings = await settingsStore.read();
-    if (!shouldRetryRegistrationViaProxy(error)) {
-      throw error;
-    }
-
-    if (!wasRunning && settings.subscriptionUrl.trim()) {
-      appendLog(`登记直连失败，尝试代理: ${formatError(error)}`);
-      await startLifecycleWithRepairRetry();
-      startedForRegistration = true;
-      try {
-        await trafficReporter.register(input, {
-          proxyUrl: getRuntimeTrafficProxyUrl()
-        });
-      } catch (proxyError) {
-        appendLog(`登记代理重试失败: ${formatError(proxyError)}`);
-        if (isTrafficActivationAuthFailure(proxyError)) {
-          throw proxyError;
-        }
-        await trafficStore.registerPendingIdentity(input);
-      }
-    } else {
-      appendLog(`登记暂存，等待代理可用后重试: ${formatError(error)}`);
-      await trafficStore.registerPendingIdentity(input);
-    }
-  }
-
-  if (startedForRegistration) {
-    await lifecycle.stop().catch((stopError) => appendLog(`登记回滚失败: ${formatError(stopError)}`));
-  }
-  if (lifecycle.getStatus() === 'running') {
-    await syncRemoteConfig({ proxyUrl: getRuntimeTrafficProxyUrl(), restartIfRunning: true });
     trafficTracker.start();
     trafficReporter.start();
   }
@@ -1575,33 +1763,25 @@ async function registerTrafficIdentity(input: Parameters<TrafficReporter['regist
   return createSnapshot();
 }
 
-async function activatePendingTrafficIdentity(): Promise<void> {
-  const pending = await trafficStore.getPendingRegistration();
-  if (!pending) return;
+async function cancelProxyStart(): Promise<void> {
+  runtimeIntent.cancel();
+  await lifecycle.stop();
+}
 
-  try {
-    await trafficReporter.register(pending, {
-      proxyUrl: getRuntimeTrafficProxyUrl()
-    });
-    await syncRemoteConfig({ proxyUrl: getRuntimeTrafficProxyUrl(), restartIfRunning: true });
-    appendLog('待验证登记已完成');
-  } catch (error) {
-    if (isTrafficActivationAuthFailure(error)) {
-      await trafficStore.clearIdentity(formatError(error));
-      throw error;
-    }
-    appendLog(`待验证登记暂未完成: ${formatError(error)}`);
+function throwIfRuntimeIntentCanceled(generation: number): void {
+  if (!runtimeIntent.isCurrent(generation)) {
+    throw new Error('proxy start canceled');
   }
 }
 
 async function restartKernelAndApp(): Promise<AppSnapshot> {
-  await lifecycle.restart();
+  await requireTrafficIdentity();
   clearLastError();
   const snapshot = await createSnapshot();
-  app.relaunch();
-  cleanupFinished = true;
-  isQuitting = true;
-  app.exit(0);
+  await cleanupBeforeExit({
+    relaunchArgs: buildProxyRelaunchArguments(process.argv.slice(1)),
+    throwOnFailure: true
+  });
   return snapshot;
 }
 
@@ -1637,7 +1817,7 @@ function registerIpc() {
             throw error;
           }
         }),
-      () => lifecycle.stop()
+      cancelProxyStart
     );
   });
   ipcMain.handle(ipcChannels.stop, async (event, request?: OperationRequest) => {
@@ -1671,14 +1851,14 @@ function registerIpc() {
             throw error;
           }
         }),
-      () => lifecycle.stop()
+      cancelProxyStart
     );
   });
   ipcMain.handle(ipcChannels.selectNode, async (_event, name: string) => {
     const settings = await settingsStore.read();
     if (lifecycle.getStatus() !== 'running') {
       await requireTrafficIdentity();
-      await startLifecycleWithRepairRetry();
+      await startLifecycleForUser();
     }
     const mihomoApi = createMihomoApiClient({
       secret: settings.controllerSecret,
@@ -1705,7 +1885,7 @@ function registerIpc() {
             throw error;
           }
         }),
-      () => lifecycle.stop()
+      cancelProxyStart
     );
   });
   ipcMain.handle(ipcChannels.selectStrategy, async (_event, strategy) => {
@@ -1713,6 +1893,7 @@ function registerIpc() {
       {
         settingsStore,
         lifecycle,
+        runtime: userRuntimeActions,
         createMihomoApi: createRuntimeMihomoApi,
         createSnapshot
       },
@@ -1740,6 +1921,7 @@ function registerIpc() {
       {
         settingsStore,
         lifecycle,
+        runtime: userRuntimeActions,
         createMihomoApi: createRuntimeMihomoApi,
         createSnapshot
       },
@@ -1764,6 +1946,7 @@ function registerIpc() {
         {
           settingsStore,
           lifecycle,
+          runtime: userRuntimeActions,
           createMihomoApi: createRuntimeMihomoApi,
           createSnapshot
         },
@@ -1834,6 +2017,7 @@ function registerIpc() {
             {
               settingsStore,
               lifecycle,
+              runtime: userRuntimeActions,
               createMihomoApi: createRuntimeMihomoApi,
               createSnapshot
             },
@@ -1844,7 +2028,7 @@ function registerIpc() {
           scheduleSubscriptionRefresh();
           return createSnapshot();
         }),
-      () => lifecycle.stop()
+      cancelProxyStart
     );
   });
   ipcMain.handle(ipcChannels.saveSettings, async (event, settings, request?: OperationRequest) => {
@@ -1853,13 +2037,15 @@ function registerIpc() {
       request,
       async (signal) =>
         withTrayRefresh(async () => {
-          const snapshot = await saveSubscriptionSettings({ settingsStore, lifecycle, createSnapshot }, settings, {
-            signal
-          });
+          const snapshot = await saveSubscriptionSettings(
+            { settingsStore, lifecycle, runtime: userRuntimeActions, createSnapshot },
+            settings,
+            { signal }
+          );
           scheduleSubscriptionRefresh();
           return snapshot;
         }),
-      () => lifecycle.stop()
+      cancelProxyStart
     );
   });
   ipcMain.handle(ipcChannels.registerTrafficIdentity, async (_event, input) => {
@@ -1878,11 +2064,12 @@ function registerIpc() {
             proxyUrl: getRuntimeTrafficProxyUrl(),
             restartIfRunning: true,
             throwOnError: true,
-            signal
+            signal,
+            intentGeneration: runtimeIntent.capture()
           });
           return createSnapshot();
         }),
-      () => lifecycle.stop()
+      cancelProxyStart
     );
   });
   ipcMain.handle(ipcChannels.cancelOperation, (event, requestId: string) => {
@@ -2113,32 +2300,12 @@ function togglePetWindow() {
   showPetWindow();
 }
 
-function querySchtasks(args: string[]): boolean {
-  if (process.platform !== 'win32') return false;
-  try {
-    execFileSync('schtasks.exe', args, { stdio: 'ignore', windowsHide: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function runSchtasks(args: string[]): Promise<boolean> {
-  if (process.platform !== 'win32') return false;
-  try {
-    await execFileAsync('schtasks.exe', args, { windowsHide: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function isLaunchAtLoginEnabled(): boolean {
   if (process.platform !== 'win32') {
     return app.getLoginItemSettings({ path: process.execPath, args: ['--hidden'] }).openAtLogin;
   }
 
-  return querySchtasks(['/Query', '/TN', startupTaskName]);
+  return windowsStartupTask.isEnabled() || isLegacyLaunchAtLoginEnabled();
 }
 
 function clearLegacyLaunchAtLogin() {
@@ -2155,8 +2322,6 @@ function isLegacyLaunchAtLoginEnabled(): boolean {
 }
 
 async function setLaunchAtLogin(enabled: boolean) {
-  clearLegacyLaunchAtLogin();
-
   if (process.platform !== 'win32') {
     app.setLoginItemSettings({
       openAtLogin: enabled,
@@ -2167,28 +2332,8 @@ async function setLaunchAtLogin(enabled: boolean) {
     return;
   }
 
-  if (!enabled) {
-    await runSchtasks(['/Delete', '/TN', startupTaskName, '/F']);
-    return;
-  }
-
-  const taskCommand = `"${process.execPath}" --hidden`;
-  const created = await runSchtasks([
-    '/Create',
-    '/TN',
-    startupTaskName,
-    '/SC',
-    'ONLOGON',
-    '/TR',
-    taskCommand,
-    '/RL',
-    'HIGHEST',
-    '/F'
-  ]);
-
-  if (!created) {
-    throw new Error('无法写入 Windows 计划任务');
-  }
+  await windowsStartupTask.setEnabled(enabled);
+  clearLegacyLaunchAtLogin();
 }
 
 async function toggleLaunchAtLogin(enabled: boolean) {
@@ -2201,14 +2346,14 @@ async function toggleLaunchAtLogin(enabled: boolean) {
   }
 }
 
-async function migrateLegacyLaunchAtLogin() {
+async function reconcileLaunchAtLogin() {
   if (process.platform !== 'win32') return;
-  if (!isLegacyLaunchAtLoginEnabled() || isLaunchAtLoginEnabled()) return;
 
   try {
-    await setLaunchAtLogin(true);
+    await windowsStartupTask.reconcile(isLegacyLaunchAtLoginEnabled());
+    clearLegacyLaunchAtLogin();
   } catch (error) {
-    recordError('迁移开机自启失败', error);
+    recordError('同步开机自启失败', error);
   }
 }
 
@@ -2807,13 +2952,34 @@ function secureRendererNavigation(window: BrowserWindow): void {
   window.webContents.on('will-redirect', (event) => event.preventDefault());
 }
 
-async function cleanupBeforeExit() {
-  if (cleanupStarted) return;
+type ExitCleanupOptions = {
+  relaunchArgs?: string[];
+  throwOnFailure?: boolean;
+};
+
+async function cleanupBeforeExit(options: ExitCleanupOptions = {}): Promise<boolean> {
+  if (cleanupStarted) {
+    if (options.throwOnFailure) throw new Error('application cleanup already in progress');
+    return false;
+  }
+  const shouldRestoreRuntimeIntent = runtimeIntent.capture() !== undefined;
   cleanupStarted = true;
+  isQuitting = true;
+  runtimeIntent.cancel();
+  lifecycle.suspendStarts();
   if (trafficSnapshotBroadcastTimer) {
     clearTimeout(trafficSnapshotBroadcastTimer);
     trafficSnapshotBroadcastTimer = undefined;
   }
+  if (updateCheckTimer) {
+    clearTimeout(updateCheckTimer);
+    updateCheckTimer = undefined;
+  }
+  clearSubscriptionRefreshTimer();
+  stopNodeHealthMonitor();
+  clearRuntimeRecoveryTimer();
+  activeNodeTestController?.abort();
+  activeNodeTestController = undefined;
   stopRemoteConfigPolling();
   if (petFeatureEnabled) {
     stopPetDrag({ settle: false });
@@ -2826,14 +2992,37 @@ async function cleanupBeforeExit() {
     await trafficReporter.reportPending().catch((error) => appendLog(`流量上报失败: ${formatError(error)}`));
     trafficTracker.stop();
     trafficReporter.stop();
-    if (lifecycle.getStatus() !== 'stopped') {
+    if (options.relaunchArgs) {
       await lifecycle.stop();
+      app.relaunch({ args: options.relaunchArgs });
+    } else {
+      await lifecycle.shutdown();
     }
-  } finally {
-    cleanupFinished = true;
-    isQuitting = true;
-    app.exit(0);
+  } catch (error) {
+    cleanupStarted = false;
+    cleanupFinished = false;
+    isQuitting = false;
+    lifecycle.resumeStarts();
+    recordError('退出清理失败', error);
+    startRemoteConfigPolling();
+    scheduleUpdateCheck(updatePeriodicIntervalMs);
+    if (shouldRestoreRuntimeIntent) {
+      const restoredIntentGeneration = runtimeIntent.requestStart();
+      if (lifecycle.getStatus() === 'stopped') {
+        void startLifecycleWithRepairRetry(undefined, restoredIntentGeneration).catch((restartError) =>
+          recordError('退出取消后的代理恢复失败', restartError)
+        );
+      } else {
+        scheduleRuntimeRecovery(0);
+      }
+    }
+    showMainWindow();
+    if (options.throwOnFailure) throw error;
+    return false;
   }
+  cleanupFinished = true;
+  app.exit(0);
+  return true;
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -2857,13 +3046,18 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
       await allocateRuntimePorts();
       registerIpc();
       setupAutoUpdates();
+      await reconcileLaunchAtLogin();
       createTray();
-      void migrateLegacyLaunchAtLogin();
       void createWindow().catch((error) => recordError('创建主窗口失败', error));
       startRemoteConfigPolling();
       void refreshTrafficTotalsFromServer();
       if (petFeatureEnabled) {
         void createPetWindow().catch((error) => recordError('创建桌宠窗口失败', error));
+      }
+      if (resumeProxyAfterRelaunch) {
+        void startProxy()
+          .then((snapshot) => sendSnapshotToWindows(snapshot))
+          .catch((error) => recordError('重启后恢复代理失败', error));
       }
 
       app.on('activate', () => {
@@ -2886,6 +3080,9 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
+  if (updateInstallerLaunchPending && updateInstallerLaunchStarted) {
+    updateInstallerBeforeQuitObserved = true;
+  }
   if (updateInstallerLaunchFailed) {
     event.preventDefault();
     updateInstallerLaunchFailed = false;

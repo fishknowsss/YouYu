@@ -7,6 +7,7 @@ import {
 } from '../../src/main/appActions';
 import type { AppSnapshot } from '../../src/shared/ipc';
 import type { AppSettings } from '../../src/main/storage/settings';
+import type { LifecycleController } from '../../src/main/lifecycle';
 
 function makeSnapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
   return {
@@ -96,15 +97,23 @@ function makeMihomoApi(overrides = {}) {
   };
 }
 
+function makeLifecycle(overrides: Partial<LifecycleController> = {}): LifecycleController {
+  return {
+    getStatus: () => 'running',
+    suspendStarts: vi.fn(),
+    resumeStarts: vi.fn(),
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(async () => undefined),
+    restart: vi.fn(async () => undefined),
+    repair: vi.fn(async () => undefined),
+    shutdown: vi.fn(async () => undefined),
+    ...overrides
+  };
+}
+
 describe('app actions', () => {
   it('starts mihomo before updating nodes when the controller is stopped', async () => {
-    const lifecycle = {
-      getStatus: vi.fn(() => 'stopped' as const),
-      start: vi.fn(async () => undefined),
-      stop: vi.fn(async () => undefined),
-      restart: vi.fn(async () => undefined),
-      repair: vi.fn(async () => undefined)
-    };
+    const lifecycle = makeLifecycle({ getStatus: vi.fn(() => 'stopped' as const) });
     const updateProvider = vi.fn(async () => undefined);
 
     await updateSubscriptionNodes({
@@ -123,13 +132,10 @@ describe('app actions', () => {
 
   it('repairs and retries when starting for an update fails once', async () => {
     const signal = new AbortController().signal;
-    const lifecycle = {
+    const lifecycle = makeLifecycle({
       getStatus: vi.fn(() => 'stopped' as const),
-      start: vi.fn().mockRejectedValueOnce(new Error('startup failed')).mockResolvedValueOnce(undefined),
-      stop: vi.fn(async () => undefined),
-      restart: vi.fn(async () => undefined),
-      repair: vi.fn(async () => undefined)
-    };
+      start: vi.fn().mockRejectedValueOnce(new Error('startup failed')).mockResolvedValueOnce(undefined)
+    });
 
     await updateSubscriptionNodes(
       {
@@ -164,13 +170,7 @@ describe('app actions', () => {
             read: async () => makeSettings(),
             update: vi.fn()
           },
-          lifecycle: {
-            getStatus: () => 'running',
-            start,
-            stop,
-            restart: vi.fn(),
-            repair: vi.fn()
-          },
+          lifecycle: makeLifecycle({ start, stop }),
           createMihomoApi: () => makeMihomoApi({ updateProvider }),
           createSnapshot: async () => makeSnapshot()
         },
@@ -192,13 +192,7 @@ describe('app actions', () => {
         read: async () => makeSettings(),
         update: vi.fn()
       },
-      lifecycle: {
-        getStatus: () => 'running',
-        start,
-        stop,
-        restart: vi.fn(),
-        repair: vi.fn()
-      },
+      lifecycle: makeLifecycle({ start, stop }),
       createMihomoApi: () => makeMihomoApi({ updateProvider }),
       createSnapshot: async () => makeSnapshot()
     });
@@ -220,13 +214,7 @@ describe('app actions', () => {
         read: async () => makeSettings(),
         update: vi.fn()
       },
-      lifecycle: {
-        getStatus: () => 'running',
-        start,
-        stop,
-        restart: vi.fn(),
-        repair: vi.fn()
-      },
+      lifecycle: makeLifecycle({ start, stop }),
       createMihomoApi: () => makeMihomoApi({ updateProvider }),
       createSnapshot: async () => makeSnapshot()
     });
@@ -247,13 +235,7 @@ describe('app actions', () => {
           read: vi.fn(),
           update
         },
-        lifecycle: {
-          getStatus: () => 'running',
-          start,
-          stop,
-          restart: vi.fn(),
-          repair: vi.fn()
-        },
+        lifecycle: makeLifecycle({ start, stop }),
         createSnapshot: async () => makeSnapshot({ subscriptionUrl: 'https://example.com/new' })
       },
       ' https://example.com/new '
@@ -262,6 +244,29 @@ describe('app actions', () => {
     expect(update).toHaveBeenCalledWith({ subscriptionUrl: 'https://example.com/new' });
     expect(stop).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledOnce();
+  });
+
+  it('delegates a running subscription fallback to the intent-aware runtime restart', async () => {
+    const updateProvider = vi.fn(async () => {
+      throw new Error('missing provider');
+    });
+    const restart = vi.fn(async () => undefined);
+    const lifecycle = makeLifecycle();
+
+    await updateSubscriptionNodes({
+      settingsStore: {
+        read: async () => makeSettings(),
+        update: vi.fn()
+      },
+      lifecycle,
+      runtime: { start: vi.fn(async () => undefined), restart },
+      createMihomoApi: () => makeMihomoApi({ updateProvider }),
+      createSnapshot: async () => makeSnapshot()
+    });
+
+    expect(restart).toHaveBeenCalledOnce();
+    expect(lifecycle.stop).not.toHaveBeenCalled();
+    expect(lifecycle.start).not.toHaveBeenCalled();
   });
 
   it('passes the all-node test cancellation signal to mihomo', async () => {
@@ -276,13 +281,7 @@ describe('app actions', () => {
           read: async () => makeSettings(),
           update: vi.fn()
         },
-        lifecycle: {
-          getStatus: () => 'running',
-          start: vi.fn(),
-          stop: vi.fn(),
-          restart: vi.fn(),
-          repair: vi.fn()
-        },
+        lifecycle: makeLifecycle(),
         createMihomoApi: () => makeMihomoApi({ testAllNodes }),
         createSnapshot
       },
@@ -306,13 +305,7 @@ describe('app actions', () => {
           read: async () => makeSettings(),
           update: vi.fn()
         },
-        lifecycle: {
-          getStatus: () => 'running',
-          start: vi.fn(),
-          stop: vi.fn(),
-          restart: vi.fn(),
-          repair: vi.fn()
-        },
+        lifecycle: makeLifecycle(),
         createMihomoApi: () => makeMihomoApi({ testNodeDelay }),
         createSnapshot: async () => makeSnapshot()
       },
@@ -338,13 +331,7 @@ describe('app actions', () => {
           read: async () => makeSettings(),
           update: vi.fn()
         },
-        lifecycle: {
-          getStatus: () => 'running',
-          start: vi.fn(),
-          stop: vi.fn(),
-          restart: vi.fn(),
-          repair: vi.fn()
-        },
+        lifecycle: makeLifecycle(),
         createMihomoApi: () => makeMihomoApi({ testAllNodes }),
         createSnapshot: async () => makeSnapshot()
       },
@@ -352,5 +339,27 @@ describe('app actions', () => {
     );
 
     expect(onNodeTested).toHaveBeenCalledWith(testedNode);
+  });
+
+  it('uses the intent-aware runtime hook before testing a node while stopped', async () => {
+    const start = vi.fn(async () => undefined);
+    const lifecycle = makeLifecycle({ getStatus: vi.fn(() => 'stopped' as const) });
+
+    await testMihomoNode(
+      {
+        settingsStore: {
+          read: async () => makeSettings(),
+          update: vi.fn()
+        },
+        lifecycle,
+        runtime: { start, restart: vi.fn(async () => undefined) },
+        createMihomoApi: () => makeMihomoApi(),
+        createSnapshot: async () => makeSnapshot()
+      },
+      'Japan 01'
+    );
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(lifecycle.start).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSystemProxyAdapter } from '../../src/main/platform/systemProxy';
@@ -23,6 +23,9 @@ describe('createSystemProxyAdapter', () => {
 
   it('enables and restores current-user Windows proxy settings', async () => {
     const calls: string[] = [];
+    let proxyEnabled = false;
+    let proxyServer = 'old:8080';
+    let currentOverride = 'old.local;<local>';
     const proxy = createSystemProxyAdapter({
       platform: 'win32',
       runCommand: async (command) => {
@@ -31,13 +34,22 @@ describe('createSystemProxyAdapter', () => {
           return installedStorePackageFamilies;
         }
         if (command.args[0] === 'query' && command.args.includes('ProxyEnable')) {
-          return 'ProxyEnable    REG_DWORD    0x0';
+          return `ProxyEnable    REG_DWORD    ${proxyEnabled ? '0x1' : '0x0'}`;
         }
         if (command.args[0] === 'query' && command.args.includes('ProxyServer')) {
-          return 'ProxyServer    REG_SZ    old:8080';
+          return `ProxyServer    REG_SZ    ${proxyServer}`;
         }
         if (command.args[0] === 'query' && command.args.includes('ProxyOverride')) {
-          return 'ProxyOverride    REG_SZ    old.local;<local>';
+          return `ProxyOverride    REG_SZ    ${currentOverride}`;
+        }
+        if (command.args[0] === 'add' && command.args.includes('ProxyEnable')) {
+          proxyEnabled = command.args[command.args.indexOf('/d') + 1] === '1';
+        }
+        if (command.args[0] === 'add' && command.args.includes('ProxyServer')) {
+          proxyServer = command.args[command.args.indexOf('/d') + 1] ?? '';
+        }
+        if (command.args[0] === 'add' && command.args.includes('ProxyOverride')) {
+          currentOverride = command.args[command.args.indexOf('/d') + 1] ?? '';
         }
         return '';
       }
@@ -67,6 +79,9 @@ describe('createSystemProxyAdapter', () => {
 
   it('keeps the original proxy state when enable is called twice', async () => {
     const calls: string[] = [];
+    let proxyEnabled = false;
+    let proxyServer = 'old:8080';
+    let currentOverride = '';
     const proxy = createSystemProxyAdapter({
       platform: 'win32',
       runCommand: async (command) => {
@@ -75,10 +90,22 @@ describe('createSystemProxyAdapter', () => {
           return installedStorePackageFamilies;
         }
         if (command.args[0] === 'query' && command.args.includes('ProxyEnable')) {
-          return 'ProxyEnable    REG_DWORD    0x0';
+          return `ProxyEnable    REG_DWORD    ${proxyEnabled ? '0x1' : '0x0'}`;
         }
         if (command.args[0] === 'query' && command.args.includes('ProxyServer')) {
-          return 'ProxyServer    REG_SZ    old:8080';
+          return `ProxyServer    REG_SZ    ${proxyServer}`;
+        }
+        if (command.args[0] === 'query' && command.args.includes('ProxyOverride')) {
+          return currentOverride ? `ProxyOverride    REG_SZ    ${currentOverride}` : '';
+        }
+        if (command.args[0] === 'add' && command.args.includes('ProxyEnable')) {
+          proxyEnabled = command.args[command.args.indexOf('/d') + 1] === '1';
+        }
+        if (command.args[0] === 'add' && command.args.includes('ProxyServer')) {
+          proxyServer = command.args[command.args.indexOf('/d') + 1] ?? '';
+        }
+        if (command.args[0] === 'add' && command.args.includes('ProxyOverride')) {
+          currentOverride = command.args[command.args.indexOf('/d') + 1] ?? '';
         }
         return '';
       }
@@ -86,14 +113,16 @@ describe('createSystemProxyAdapter', () => {
 
     await proxy.enable();
     await proxy.enable();
-    await proxy.restore();
 
-    const proxyEnableQueries = calls.filter((call) =>
+    const proxyEnableQueriesBeforeRestore = calls.filter((call) =>
       call.includes(
         'reg.exe query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings /v ProxyEnable'
       )
     );
-    expect(proxyEnableQueries).toHaveLength(1);
+    expect(proxyEnableQueriesBeforeRestore).toHaveLength(1);
+
+    await proxy.restore();
+
     expect(calls.some((call) => call.includes('ProxyServer /t REG_SZ /d old:8080'))).toBe(true);
   });
 
@@ -297,6 +326,57 @@ describe('createSystemProxyAdapter', () => {
     }
   });
 
+  it('does not overwrite a proxy that the user changed before a normal stop', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const proxyState = {
+      enabled: false,
+      server: 'old:8080',
+      override: 'old.local;<local>'
+    };
+    const runCommand = createMutableProxyCommands(proxyState);
+
+    try {
+      const proxy = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await proxy.enable();
+      proxyState.enabled = true;
+      proxyState.server = 'user:9090';
+      proxyState.override = 'user.local';
+
+      await proxy.restore();
+
+      expect(proxyState).toEqual({ enabled: true, server: 'user:9090', override: 'user.local' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('restores the app proxy while preserving a user-edited bypass list', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const proxyState = {
+      enabled: false,
+      server: 'old:8080',
+      override: 'old.local;<local>'
+    };
+    const runCommand = createMutableProxyCommands(proxyState);
+
+    try {
+      const firstProcess = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await firstProcess.enable();
+      proxyState.override = 'user.local;<local>';
+
+      const restartedProcess = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await restartedProcess.restore();
+
+      expect(proxyState).toEqual({
+        enabled: false,
+        server: 'old:8080',
+        override: 'user.local;<local>'
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('restores fields already written when a crash happens between registry writes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
     const previous = { enabled: false, server: 'old:8080', override: 'old.local;<local>' };
@@ -333,6 +413,63 @@ describe('createSystemProxyAdapter', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it('keeps proxy ownership state when the WinINet refresh command fails during restore', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const ownershipPath = join(dir, 'system-proxy-ownership.json');
+    const proxyState = {
+      enabled: false,
+      server: 'old:8080',
+      override: 'old.local;<local>'
+    };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    let failRefresh = false;
+    const runCommand = async (command: { file: string; args: string[] }) => {
+      if (failRefresh && command.file === 'powershell.exe' && command.args.join(' ').includes('InternetSetOption')) {
+        throw new Error('WinINet refresh failed');
+      }
+      return mutableCommands(command);
+    };
+
+    try {
+      const proxy = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await proxy.enable();
+      failRefresh = true;
+
+      await expect(proxy.restore()).rejects.toThrow('WinINet refresh failed');
+      await expect(access(ownershipPath)).resolves.toBeUndefined();
+      expect(proxyState).toEqual({ enabled: false, server: 'old:8080', override: 'old.local;<local>' });
+
+      failRefresh = false;
+      await expect(proxy.restore()).resolves.toBeUndefined();
+      await expect(access(ownershipPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('makes the WinINet refresh script fail when either native notification fails', async () => {
+    const calls: string[] = [];
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        calls.push(command.args.join(' '));
+        if (command.args[0] === 'query' && command.args.includes('ProxyEnable')) {
+          return 'ProxyEnable    REG_DWORD    0x0';
+        }
+        return '';
+      }
+    });
+
+    await proxy.enable();
+
+    const script = calls.find((call) => call.includes('InternetSetOption')) ?? '';
+    expect(script).toContain('$settingsChanged =');
+    expect(script).toContain('$settingsRefreshed =');
+    expect(script).toContain('if (-not $settingsChanged -or -not $settingsRefreshed)');
+    expect(script).toContain('GetLastWin32Error()');
+    expect(script).toContain('throw "Failed to refresh WinINet proxy settings: $errorCode"');
   });
 });
 

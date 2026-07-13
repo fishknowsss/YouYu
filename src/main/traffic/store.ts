@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
+import { isDeepStrictEqual } from 'node:util';
 import type { PersistentTrafficStats, TrafficIdentity } from '../../shared/ipc';
 import { readJsonFile, writeJsonFileAtomic } from '../storage/jsonFile';
 
@@ -47,6 +48,8 @@ export type PendingTrafficReport = {
   reportedAt: string;
 };
 
+type TrafficIdentityKey = Pick<TrafficIdentity, 'userId' | 'deviceId'>;
+
 type TrafficRegistrationSecret = {
   name: string;
   passphrase: string;
@@ -83,6 +86,10 @@ export class TrafficStore {
   }
 
   async read(): Promise<TrafficFile> {
+    return this.enqueue(() => this.readCurrent());
+  }
+
+  private async readCurrent(): Promise<TrafficFile> {
     const result = await readJsonFile<Partial<TrafficFile>>(this.filePath, {
       preserveInvalid: false,
       validate: (value) =>
@@ -123,6 +130,9 @@ export class TrafficStore {
         await this.removeLegacySecretArtifacts();
         return migrated;
       }
+      if (shouldRewriteNormalizedTraffic(result.value, normalized)) {
+        await this.write(normalized, false);
+      }
       return normalized;
     }
 
@@ -145,7 +155,7 @@ export class TrafficStore {
     if (upload === 0 && download === 0 && (!nodeName || durationMs === 0)) return;
 
     await this.enqueue(async () => {
-      const current = await this.read();
+      const current = await this.readCurrent();
       const dateKey = toDateKey(now);
       const day = current.daily[dateKey] ?? { upload: 0, download: 0 };
       const nodeUsage = { ...current.nodeUsage };
@@ -185,7 +195,7 @@ export class TrafficStore {
 
   async registerIdentity(identity: Omit<TrafficIdentity, 'registeredAt'>): Promise<TrafficIdentity> {
     return this.enqueue(async () => {
-      const current = await this.read();
+      const current = await this.readCurrent();
       const sameIdentity = isSameTrafficIdentity(current.identity, identity);
       const registered: TrafficIdentity = {
         ...identity,
@@ -214,7 +224,7 @@ export class TrafficStore {
     return this.enqueue(async () => {
       const name = input.name.trim();
       const passphrase = input.passphrase.trim();
-      const current = await this.read();
+      const current = await this.readCurrent();
       const deviceSeed = current.deviceSeed || randomUUID();
       const registered: TrafficIdentity = {
         userId: `pending:${deviceSeed}`,
@@ -244,7 +254,7 @@ export class TrafficStore {
 
   async getPendingRegistration(): Promise<TrafficRegistrationSecret | undefined> {
     return this.enqueue(async () => {
-      const current = await this.read();
+      const current = await this.readCurrent();
       if (current.identity?.verificationStatus !== 'pending') return undefined;
       const pending = current.pendingRegistration;
       if (!pending?.name.trim()) return undefined;
@@ -293,7 +303,7 @@ export class TrafficStore {
 
   async clearIdentity(message?: string): Promise<void> {
     await this.enqueue(async () => {
-      const current = await this.read();
+      const current = await this.readCurrent();
       await this.write({
         ...current,
         identity: undefined,
@@ -306,9 +316,26 @@ export class TrafficStore {
     });
   }
 
+  async clearIdentityIfCurrent(identity: TrafficIdentityKey, reportId: string, message?: string): Promise<boolean> {
+    return this.enqueue(async () => {
+      const current = await this.readCurrent();
+      if (!isSameTrafficIdentity(current.identity, identity) || current.pendingReport?.id !== reportId) return false;
+      await this.write({
+        ...current,
+        identity: undefined,
+        pendingRegistration: undefined,
+        pendingReport: undefined,
+        ...getServerTotalState(current, false),
+        reportStatus: message ? 'failed' : 'idle',
+        reportError: message
+      });
+      return true;
+    });
+  }
+
   async createDeviceSeed(): Promise<string> {
     return this.enqueue(async () => {
-      const current = await this.read();
+      const current = await this.readCurrent();
       if (current.deviceSeed) return current.deviceSeed;
       const deviceSeed = randomUUID();
       await this.write({ ...current, deviceSeed });
@@ -316,9 +343,15 @@ export class TrafficStore {
     });
   }
 
-  async getOrCreatePendingReport(upload: number, download: number, now = new Date()): Promise<PendingTrafficReport> {
+  async getOrCreatePendingReport(
+    upload: number,
+    download: number,
+    now = new Date(),
+    identity?: TrafficIdentityKey
+  ): Promise<PendingTrafficReport | undefined> {
     return this.enqueue(async () => {
-      const current = await this.read();
+      const current = await this.readCurrent();
+      if (identity && !isSameTrafficIdentity(current.identity, identity)) return undefined;
       if (current.pendingReport) return current.pendingReport;
 
       const pendingReport: PendingTrafficReport = {
@@ -332,10 +365,17 @@ export class TrafficStore {
     });
   }
 
-  async markReported(upload: number, download: number, reportedAt = new Date(), reportId?: string): Promise<void> {
-    await this.enqueue(async () => {
-      const current = await this.read();
-      if (reportId && current.pendingReport?.id !== reportId) return;
+  async markReported(
+    upload: number,
+    download: number,
+    reportedAt = new Date(),
+    reportId?: string,
+    identity?: TrafficIdentityKey
+  ): Promise<boolean> {
+    return this.enqueue(async () => {
+      const current = await this.readCurrent();
+      if (identity && !isSameTrafficIdentity(current.identity, identity)) return false;
+      if (reportId && current.pendingReport?.id !== reportId) return false;
       const pendingUpload = Math.max(0, current.pendingUpload - normalizeBytes(upload));
       const pendingDownload = Math.max(0, current.pendingDownload - normalizeBytes(download));
       const lastReportedAt = reportedAt.toISOString();
@@ -349,20 +389,23 @@ export class TrafficStore {
         reportStatus: pendingUpload || pendingDownload ? 'pending' : 'synced',
         reportError: undefined
       });
+      return true;
     });
   }
 
   async markServerTotals(
     input: { totalUpload?: number; totalDownload?: number },
-    syncedAt = new Date()
-  ): Promise<void> {
+    syncedAt = new Date(),
+    identity?: TrafficIdentityKey
+  ): Promise<boolean> {
     const totalUpload = normalizeOptionalBytes(input.totalUpload);
     const totalDownload = normalizeOptionalBytes(input.totalDownload);
-    if (typeof totalUpload !== 'number' || typeof totalDownload !== 'number') return;
+    if (typeof totalUpload !== 'number' || typeof totalDownload !== 'number') return false;
 
-    await this.enqueue(async () => {
-      const current = await this.read();
-      if (!current.identity || current.identity.verificationStatus === 'pending') return;
+    return this.enqueue(async () => {
+      const current = await this.readCurrent();
+      if (!current.identity || current.identity.verificationStatus === 'pending') return false;
+      if (identity && !isSameTrafficIdentity(current.identity, identity)) return false;
       await this.write({
         ...current,
         serverTotalUpload: totalUpload,
@@ -371,12 +414,13 @@ export class TrafficStore {
         serverDeviceId: current.identity.deviceId,
         serverSyncedAt: syncedAt.toISOString()
       });
+      return true;
     });
   }
 
   async markReportFailed(message: string): Promise<void> {
     await this.enqueue(async () => {
-      const current = await this.read();
+      const current = await this.readCurrent();
       await this.write({
         ...current,
         reportStatus: 'failed',
@@ -385,9 +429,22 @@ export class TrafficStore {
     });
   }
 
+  async markReportFailedIfCurrent(identity: TrafficIdentityKey, reportId: string, message: string): Promise<boolean> {
+    return this.enqueue(async () => {
+      const current = await this.readCurrent();
+      if (!isSameTrafficIdentity(current.identity, identity) || current.pendingReport?.id !== reportId) return false;
+      await this.write({
+        ...current,
+        reportStatus: 'failed',
+        reportError: message
+      });
+      return true;
+    });
+  }
+
   async markNotConfigured(): Promise<void> {
     await this.enqueue(async () => {
-      const current = await this.read();
+      const current = await this.readCurrent();
       await this.write({
         ...current,
         reportStatus: 'not-configured',
@@ -397,7 +454,6 @@ export class TrafficStore {
   }
 
   async getDeviceSecret(): Promise<string | undefined> {
-    await this.queue.catch(() => undefined);
     const current = await this.read();
     return current.deviceSeed;
   }
@@ -406,7 +462,6 @@ export class TrafficStore {
     identity?: TrafficIdentity;
     stats: PersistentTrafficStats;
   }> {
-    await this.queue.catch(() => undefined);
     const current = await this.read();
     const today = current.daily[toDateKey(now)] ?? { upload: 0, download: 0 };
     const serverTotalUpload = current.serverTotalUpload;
@@ -506,6 +561,11 @@ export class TrafficStore {
   private createDefaults(): TrafficFile {
     return this.normalize({});
   }
+}
+
+function shouldRewriteNormalizedTraffic(parsed: Partial<TrafficFile>, normalized: TrafficFile): boolean {
+  const persisted = JSON.parse(JSON.stringify(normalized)) as Partial<TrafficFile>;
+  return !isDeepStrictEqual(parsed, persisted);
 }
 
 function normalizeIdentity(value: unknown): TrafficIdentity | undefined {

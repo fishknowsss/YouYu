@@ -8,5 +8,4 @@ resources/mihomo
 cloudflare/youyu-traffic/.wrangler
 src/renderer/assets/pet
 package-lock.json
-index.js
 *.md

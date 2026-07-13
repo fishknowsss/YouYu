@@ -36,6 +36,41 @@ describe('SettingsStore', () => {
     expect(second.controllerSecret).toBe(first.controllerSecret);
   });
 
+  it('persists a replacement for an invalid controller secret', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-settings-'));
+    tempDirs.push(dir);
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify({
+        settingsVersion: 4,
+        subscriptionUrl: 'https://example.com/sub',
+        controllerSecret: 'short',
+        mode: 'rule',
+        strategy: 'auto',
+        ruleProfile: 'ruleset',
+        selectedNode: '',
+        systemProxyEnabled: true,
+        dnsEnhanced: true,
+        snifferEnabled: true,
+        tunEnabled: false,
+        strictRouteEnabled: true,
+        allowLan: false,
+        subscriptionRefreshIntervalHours: 12
+      })
+    );
+    const store = new SettingsStore(dir);
+
+    const first = await store.read();
+    const second = await store.read();
+    const persisted = JSON.parse(await readFile(join(dir, 'settings.json'), 'utf8')) as {
+      controllerSecret?: string;
+    };
+
+    expect(first.controllerSecret).toHaveLength(32);
+    expect(second.controllerSecret).toBe(first.controllerSecret);
+    expect(persisted.controllerSecret).toBe(first.controllerSecret);
+  });
+
   it('persists subscription url without replacing the secret', async () => {
     const store = await makeStore();
     const before = await store.read();

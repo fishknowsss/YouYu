@@ -125,6 +125,220 @@ proxies:
     );
   });
 
+  it('does not reuse cached subscription config after the subscription url changes', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    let subscriptionUrl = 'https://example.com/sub-a';
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      if (String(url) === 'https://example.com/sub-a') {
+        return new Response(`
+proxies:
+  - name: stale-node-from-a
+    type: ss
+    server: 127.0.0.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+`);
+      }
+      if (String(url) === 'https://example.com/sub-b') {
+        return new Response(undefined, { status: 503 });
+      }
+      return Response.json({ version: 'test' });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const spawn = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const createRuntime = () =>
+      createMihomoRuntime({
+        binaryPath: 'C:/YouYu/mihomo.exe',
+        userDataDir,
+        readSettings: async () => makeSettings({ subscriptionUrl, localSubscriptionUrl: subscriptionUrl }),
+        spawnProcess: spawn,
+        waitForReady: vi.fn(async () => undefined)
+      });
+
+    await createRuntime().start();
+    subscriptionUrl = 'https://example.com/sub-b';
+    await createRuntime().start();
+
+    const config = await readFile(join(userDataDir, 'mihomo', 'config.yaml'), 'utf8');
+    expect(config).toContain('https://example.com/sub-b');
+    expect(config).not.toContain('stale-node-from-a');
+  });
+
+  it('uses only the current identity remote subscription when one is active', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const fetch = vi.fn(async () => new Response('proxies: []\n'));
+    vi.stubGlobal('fetch', fetch);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () =>
+        makeSettings({
+          subscriptionUrl: 'https://old-user.example.com/sub',
+          localSubscriptionUrl: 'https://local.example.com/sub',
+          remoteSubscriptionUrl: 'https://old-user.example.com/sub'
+        }),
+      readRemoteConfig: async () => ({
+        version: 2,
+        enabled: true,
+        subscriptionUrl: 'https://current-user.example.com/sub',
+        directRules: [],
+        proxyRules: []
+      }),
+      spawnProcess: vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false })),
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await runtime.start();
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://current-user.example.com/sub',
+      expect.objectContaining({ headers: { 'User-Agent': 'Clash Verge/2.3.2' } })
+    );
+    expect(fetch).not.toHaveBeenCalledWith('https://old-user.example.com/sub', expect.anything());
+  });
+
+  it('falls back to the local subscription when no identity-bound remote config is active', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const fetch = vi.fn(async () => new Response('proxies: []\n'));
+    vi.stubGlobal('fetch', fetch);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () =>
+        makeSettings({
+          subscriptionUrl: 'https://old-user.example.com/sub',
+          localSubscriptionUrl: 'https://local.example.com/sub',
+          remoteSubscriptionUrl: 'https://old-user.example.com/sub'
+        }),
+      readRemoteConfig: async () => undefined,
+      spawnProcess: vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false })),
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await runtime.start();
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://local.example.com/sub',
+      expect.objectContaining({ headers: { 'User-Agent': 'Clash Verge/2.3.2' } })
+    );
+    expect(fetch).not.toHaveBeenCalledWith('https://old-user.example.com/sub', expect.anything());
+  });
+
+  it('does not write or spawn from a remote config whose identity changes during subscription fetch', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    let currentBinding = 'identity-a';
+    let releaseFetch: (() => void) | undefined;
+    let fetchStartedResolve: (() => void) | undefined;
+    const fetchStarted = new Promise<void>((resolve) => {
+      fetchStartedResolve = resolve;
+    });
+    const fetch = vi.fn(async () => {
+      fetchStartedResolve?.();
+      await new Promise<void>((resolve) => {
+        releaseFetch = resolve;
+      });
+      return new Response('proxies: []\n');
+    });
+    vi.stubGlobal('fetch', fetch);
+    const spawn = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const snapshot = {
+      binding: 'identity-a',
+      revision: 'identity-a-config',
+      config: {
+        version: 1,
+        enabled: true,
+        subscriptionUrl: 'https://identity-a.example/sub',
+        directRules: ['DOMAIN-SUFFIX,identity-a.example'],
+        proxyRules: []
+      }
+    };
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ localSubscriptionUrl: 'https://local.example/sub' }),
+      readRemoteConfigSnapshot: async () => snapshot,
+      isRemoteConfigSnapshotCurrent: async (candidate) => candidate.binding === currentBinding,
+      spawnProcess: spawn,
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    const start = runtime.start();
+    await fetchStarted;
+    currentBinding = 'identity-b';
+    releaseFetch?.();
+
+    await expect(start).rejects.toThrow('remote config changed during mihomo start');
+    expect(fetch).toHaveBeenCalledWith(
+      'https://identity-a.example/sub',
+      expect.objectContaining({ headers: { 'User-Agent': 'Clash Verge/2.3.2' } })
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    await expect(readFile(join(userDataDir, 'mihomo', 'config.yaml'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT'
+    });
+  });
+
+  it('stops the spawned process when the remote config identity changes while waiting for readiness', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    let currentBinding = 'identity-a';
+    let releaseReady: (() => void) | undefined;
+    let readyStartedResolve: (() => void) | undefined;
+    const readyStarted = new Promise<void>((resolve) => {
+      readyStartedResolve = resolve;
+    });
+    const readyGate = new Promise<void>((resolve) => {
+      releaseReady = resolve;
+    });
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.killed = false;
+    child.kill = vi.fn(() => {
+      child.killed = true;
+      queueMicrotask(() => child.emit('exit', 0, null));
+      return true;
+    });
+    const snapshot = {
+      binding: 'identity-a',
+      revision: 'identity-a-config',
+      config: {
+        version: 1,
+        enabled: true,
+        subscriptionUrl: 'https://identity-a.example/sub',
+        directRules: [],
+        proxyRules: []
+      }
+    };
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ localSubscriptionUrl: 'https://local.example/sub' }),
+      readRemoteConfigSnapshot: async () => snapshot,
+      isRemoteConfigSnapshotCurrent: async (candidate) => candidate.binding === currentBinding,
+      spawnProcess: () => child as never,
+      waitForReady: async () => {
+        readyStartedResolve?.();
+        await readyGate;
+      }
+    });
+
+    const start = runtime.start();
+    await readyStarted;
+    currentBinding = 'identity-b';
+    releaseReady?.();
+
+    await expect(start).rejects.toThrow('remote config changed during mihomo start');
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(runtime.isRunning?.()).toBe(false);
+  });
+
   it('waits for mihomo to exit before resolving stop', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);
@@ -618,5 +832,65 @@ proxies:
     await expect(startup).rejects.toThrow();
     expect(child.kill).toHaveBeenCalled();
     expect(runtime.isRunning?.()).toBe(false);
+  });
+
+  it('waits for a killed startup process to exit before completing cancellation or allowing restart', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const firstChild = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    firstChild.killed = false;
+    firstChild.kill = vi.fn(() => {
+      firstChild.killed = true;
+      return true;
+    });
+    const secondChild = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    secondChild.killed = false;
+    secondChild.kill = vi.fn();
+    const spawnProcess = vi.fn().mockReturnValueOnce(firstChild).mockReturnValueOnce(secondChild);
+    const waitForReady = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<void>(() => undefined))
+      .mockResolvedValue(undefined);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      spawnProcess,
+      waitForReady
+    });
+    const controller = new AbortController();
+    const startup = runtime.start(controller.signal);
+    let startupSettled = false;
+    void startup.then(
+      () => {
+        startupSettled = true;
+      },
+      () => {
+        startupSettled = true;
+      }
+    );
+
+    await vi.waitFor(() => expect(runtime.isRunning?.()).toBe(true));
+    controller.abort(new Error('operation canceled'));
+    await vi.waitFor(() => expect(firstChild.kill).toHaveBeenCalledOnce());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(startupSettled).toBe(false);
+    expect(runtime.isRunning?.()).toBe(true);
+    await expect(runtime.start()).rejects.toThrow('previous mihomo process has not exited');
+    expect(spawnProcess).toHaveBeenCalledOnce();
+
+    firstChild.emit('exit', null, 'SIGTERM');
+    await expect(startup).rejects.toThrow('operation canceled');
+    expect(runtime.isRunning?.()).toBe(false);
+
+    await runtime.start();
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
   });
 });

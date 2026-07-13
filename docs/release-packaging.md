@@ -44,12 +44,11 @@
 
 标准顺序是先打无桌宠版，再打内部版，最后打标准版。这样最终 `release/win-unpacked/resources/default-subscription.txt` 来自标准版，仍然为空，适合继续跑公开版 `smoke`。
 
-建议用系统临时目录暂存前两次产物，避免误改仓库里的历史归档：
+通常直接运行 `npm run dist:win:local`。只有排查单个打包步骤时，才按下面的手动顺序执行；临时目录使用随机后缀，避免并行任务互相覆盖：
 
 ```powershell
 $version = (node -p "require('./package.json').version")
-$archive = Join-Path $env:TEMP "youyu-release-$version"
-if (Test-Path $archive) { Remove-Item -LiteralPath $archive -Recurse -Force }
+$archive = Join-Path $env:TEMP ("youyu-release-{0}-{1}" -f $version, [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $archive | Out-Null
 
 npm run dist:win:no
@@ -67,6 +66,7 @@ Copy-Item "$archive/YouYu-$version-x64-in.exe" "release/YouYu-$version-x64-in.ex
 Copy-Item "$archive/YouYu-$version-x64-in.exe.blockmap" "release/YouYu-$version-x64-in.exe.blockmap" -Force
 
 npm run smoke
+Remove-Item -LiteralPath $archive -Recurse -Force
 ```
 
 `release/`、`release-archive/` 和 `resources/generated/` 都不应该提交。

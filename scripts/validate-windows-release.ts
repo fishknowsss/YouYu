@@ -3,12 +3,11 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { resolveBuildMode } from './build-mode.mjs';
 
 const root = process.cwd();
 const releaseDir = join(root, 'release');
-const internalBuild = process.argv.includes('--internal');
-const noPetBuild = process.argv.includes('--no-pet');
-const publicUpdateBuild = process.argv.includes('--public-update');
+const { internalBuild, noPetBuild, publicUpdateBuild } = resolveBuildMode(process.argv.slice(2));
 const bundledSubscriptionBuild = (internalBuild || noPetBuild) && !publicUpdateBuild;
 
 const packageJson = (await import('../package.json', { with: { type: 'json' } })).default as {

@@ -1100,6 +1100,8 @@ describe('createMihomoApiClient', () => {
     await expect(task).rejects.toThrow(/aborted|cancelled/i);
     expect(onNodeTested).toHaveBeenCalled();
     expect(onNodeTested.mock.calls.every(([node]) => node.testState === 'testing')).toBe(true);
+    const nodes = await api.listNodes();
+    expect(nodes.every((node) => node.testState !== 'testing')).toBe(true);
   });
 
   it('updates every proxy provider reported by mihomo', async () => {
