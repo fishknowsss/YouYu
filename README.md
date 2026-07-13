@@ -1,9 +1,10 @@
-# YouYu
+# YouYu：Windows Mihomo 桌面客户端
 
 [![Release](https://img.shields.io/github/v/release/fishknowsss/YouYu?display_name=tag&label=release)](https://github.com/fishknowsss/YouYu/releases/latest)
 [![Validate](https://github.com/fishknowsss/YouYu/actions/workflows/validate.yml/badge.svg)](https://github.com/fishknowsss/YouYu/actions/workflows/validate.yml)
 [![Build Windows](https://github.com/fishknowsss/YouYu/actions/workflows/build-windows.yml/badge.svg)](https://github.com/fishknowsss/YouYu/actions/workflows/build-windows.yml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4)](https://github.com/fishknowsss/YouYu/releases/latest)
+[![Website](https://img.shields.io/badge/website-项目主页-7c4dca)](https://fishknowsss.github.io/YouYu/)
 
 YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新和桌宠交互。
 
