@@ -5,13 +5,20 @@
 [![Build Windows](https://github.com/fishknowsss/YouYu/actions/workflows/build-windows.yml/badge.svg)](https://github.com/fishknowsss/YouYu/actions/workflows/build-windows.yml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4)](https://github.com/fishknowsss/YouYu/releases/latest)
 
-YouYu 是一款面向 Windows x64 的代理桌面客户端。应用基于 Electron、React、TypeScript 和 Vite 构建，内置 Mihomo 运行时，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新和桌宠交互。
+YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新和桌宠交互。
 
-当前发布版本为 `1.5.0`。安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)。
+当前发布版本为 [`1.5.6`](https://github.com/fishknowsss/YouYu/releases/tag/v1.5.6)。安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)。
+
+## 1.5.6 当前状态
+
+- 设置页按订阅、三行控制和软件更新组成五行布局，在 `900×600` 默认窗口中保持统一的行高与操作列。
+- 专业首页保留运行数据和实时诊断；测试页可在默认窗口中完整显示 16 项检测。
+- 覆盖安装会先清理 YouYu 设置的系统代理；应用内安装会先完成主进程清理与交接，启动安装器失败时保留更新包以便重试。
+- 更新下载会显示差分包、完整包回退和校验状态，标准版、内部通道版与无桌宠版继续使用独立更新元数据。
 
 ## 界面预览
 
-以下截图均为 `900×600` 默认窗口尺寸，使用开发环境中的虚拟订阅、虚拟节点和演示流量，不包含真实节点、账号或后台数据。
+以下截图均来自 `1.5.6` 的 `900×600` 开发预览。订阅使用 `example.com`，出口 IP 使用 RFC 文档保留地址，节点、流量、测速和诊断内容均为虚构演示数据。
 
 ### 小白模式
 
@@ -21,7 +28,7 @@ YouYu 是一款面向 Windows x64 的代理桌面客户端。应用基于 Electr
 
 ### 专业模式控制台
 
-控制台集中显示当前节点、实时健康状态、代理模式、今日与累计流量、常用节点、最长使用节点和诊断日志。
+控制台集中显示当前节点、实时健康状态、代理模式、今日与累计流量、常用节点、最长使用节点和最新诊断日志。
 
 ![YouYu 专业模式控制台](docs/screenshots/home-advanced.png)
 
@@ -45,7 +52,7 @@ YouYu 是一款面向 Windows x64 的代理桌面客户端。应用基于 Electr
 
 ### 设置
 
-设置页提供订阅、规则来源、后台刷新、TUN、系统代理、DNS 增强、流量识别、同步、修复和软件更新入口。
+设置页以五行布局组织订阅、规则来源、后台刷新、TUN、系统代理、DNS 增强、流量识别、同步、修复和软件更新。
 
 ![YouYu 设置页](docs/screenshots/settings.png)
 
@@ -70,7 +77,7 @@ YouYu 是一款面向 Windows x64 的代理桌面客户端。应用基于 Electr
 
 - 分别显示今日上传、今日下载、累计上传和累计下载。
 - 记录按流量计算的常用节点，以及按连接时长计算的最长使用节点。
-- 本地持续采集 Mihomo 流量，网络异常时保留待上报增量，避免统计被直接丢弃。
+- 本地持续采集 Mihomo 流量，网络异常时保留待上报增量；上报批次使用持久化幂等 ID，避免响应丢失后重复累计。
 - 完成使用登记后，累计流量与远端流量后台同步；身份匹配时以后台累计值为基准，并叠加尚未确认的本地增量。
 - 今日流量按本机日期切换统计，累计流量与当天流量采用不同口径。
 
@@ -83,7 +90,7 @@ YouYu 是一款面向 Windows x64 的代理桌面客户端。应用基于 Electr
 - GitHub、Microsoft 商店、Discord、Google 和 Cloudflare。
 - Cloudflare Turnstile、Google reCAPTCHA 与 hCaptcha。
 
-测试结果包含可用状态、HTTP 状态、耗时、出口 IP、归属地、最终地址、命中规则和策略链。执行连通性测试前需要先启动代理。
+测试结果包含可用状态、HTTP 状态、耗时、出口 IP、归属地、最终地址、命中规则和策略链。16 项结果可在 `900×600` 默认窗口中完整显示；执行测试前需要先启动代理。
 
 ### 桌宠
 
@@ -100,13 +107,15 @@ YouYu 是一款面向 Windows x64 的代理桌面客户端。应用基于 Electr
 - 支持 TUN；启用后使用严格路由。
 - 显示系统代理、DNS 增强和流量识别状态。
 - “修复”会停止当前 Mihomo 运行时、关闭 YouYu 设置的 WinINET 代理、重置 WinHTTP 代理、刷新 DNS 缓存，并检查 Microsoft Store 回环豁免。
+- 覆盖安装强制关闭应用前会先清理 YouYu 设置的系统代理，避免 Mihomo 已退出而系统仍指向本地代理端口。
 - 修复针对代理残留、DNS 缓存和商店回环等常见问题，不替代网卡驱动、路由器或运营商故障排查。
 
 ### 自动更新
 
 - 使用 `electron-updater` 检查和下载更新。
 - 标准版、内部通道版和无桌宠版使用独立的更新元数据，避免跨通道安装。
-- 支持应用内检查更新、下载进度、完整性校验和安装。
+- 支持应用内检查更新、差分下载、完整包回退、下载进度、完整性校验和安装。
+- 安装前先完成主进程清理与 IPC 交接；安装器启动失败时保留已下载文件，用户可以直接重试。
 - 发布时同时上传安装包、差分更新所需的 `.blockmap` 和对应 `latest*.yml`。
 
 ## 安装与使用
