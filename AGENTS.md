@@ -27,6 +27,8 @@
 
 ## Packaging Rules
 
+- Use `npm run dist:win:local` for a local three-installer delivery. It leaves the standard installer without a bundled subscription and leaves the `-in` and `-no` installers with the private bundled subscription.
+- Never hand over the `-in` or `-no` installers produced by `npm run dist:win:release` as private local builds. Those same-named public update installers intentionally contain no bundled subscription.
 - Read [docs/release-packaging.md](docs/release-packaging.md) before changing packaging, release, subscription defaults, or versioning.
 - Public GitHub update builds must use `npm run dist:win:release` and produce standard, internal-channel, and no-pet-channel update assets plus `latest.yml`, `latest-in.yml`, and `latest-no.yml`.
 - Public builds must not contain a bundled subscription. `scripts/validate-windows-release.ts` enforces an empty bundled `default-subscription.txt` for standard public builds and for `--public-update` internal/no-pet channel builds.

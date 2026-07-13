@@ -1,5 +1,7 @@
 # YouYu Release Packaging
 
+本地交付三包统一运行 `npm run dist:win:local`。该命令最终在 `release/` 留下标准空订阅安装包，以及内置私有订阅的 `-in`、`-no` 安装包。不要把 `npm run dist:win:release` 生成的同名 `-in`、`-no` 公开更新包当作本地内置版本；公开更新包按设计全部为空订阅。
+
 这份文档记录 YouYu 的打包、版本号、订阅内置和本地归档规则。以后处理打包、发布、版本号、订阅默认值时，先读这里。
 
 ## 交付原则
