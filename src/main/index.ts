@@ -34,6 +34,7 @@ import { TrafficReporter } from './traffic/reporter';
 import { TrafficStore } from './traffic/store';
 import { TrafficTracker } from './traffic/tracker';
 import { RemoteConfigClient } from './remoteConfig';
+import { calculateMainWindowMetrics } from './windowSizing';
 import {
   closeMihomoConnections,
   saveSubscriptionSettings,
@@ -2633,12 +2634,13 @@ function createTray() {
 }
 
 async function createWindow() {
-  const mainWindowSize = getDefaultMainWindowSize();
+  const display = screen.getPrimaryDisplay();
+  const mainWindowMetrics = calculateMainWindowMetrics(display.size, display.workAreaSize);
   const win = new BrowserWindow({
-    width: mainWindowSize.width,
-    height: mainWindowSize.height,
-    minWidth: 900,
-    minHeight: 600,
+    width: mainWindowMetrics.width,
+    height: mainWindowMetrics.height,
+    minWidth: mainWindowMetrics.minWidth,
+    minHeight: mainWindowMetrics.minHeight,
     useContentSize: true,
     title: 'YouYu',
     icon: windowIconPath,
@@ -2662,6 +2664,7 @@ async function createWindow() {
     }
   });
   mainWindow = win;
+  win.webContents.setZoomFactor(mainWindowMetrics.zoomFactor);
   secureRendererNavigation(win);
 
   win.webContents.on('preload-error', (_event, preloadPath, error) => {
@@ -2692,31 +2695,6 @@ async function createWindow() {
   } else {
     await win.loadFile(join(__dirname, '../renderer/index.html'));
   }
-}
-
-function getDefaultMainWindowSize(): { width: number; height: number } {
-  const workArea = screen.getPrimaryDisplay().workAreaSize;
-  const preferredWidth = 900;
-  const preferredHeight = 600;
-  const minWidth = 900;
-  const minHeight = 600;
-  const horizontalMargin = workArea.width >= 1400 ? 96 : 56;
-  const verticalMargin = workArea.height >= 900 ? 96 : 64;
-  const maxWidth = Math.max(minWidth, workArea.width - horizontalMargin);
-  const maxHeight = Math.max(minHeight, workArea.height - verticalMargin);
-
-  let width = Math.min(preferredWidth, maxWidth);
-  let height = Math.round(width / 1.5);
-
-  if (height > maxHeight) {
-    height = Math.min(preferredHeight, maxHeight);
-    width = Math.round(height * 1.5);
-  }
-
-  return {
-    width: Math.max(minWidth, Math.round(width)),
-    height: Math.max(minHeight, Math.round(height))
-  };
 }
 
 async function createPetWindow() {

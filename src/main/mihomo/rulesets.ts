@@ -172,7 +172,6 @@ export function buildYouYuRuleSetRules(options: RuleSetTargetOptions = {}): stri
     `RULE-SET,Apple,${apple}`,
     `RULE-SET,Microsoft,${microsoft}`,
     `RULE-SET,China,${direct}`,
-    `GEOIP,CN,${direct},no-resolve`,
     `RULE-SET,Proxy,${proxy}`,
     `MATCH,${proxy}`
   ]);

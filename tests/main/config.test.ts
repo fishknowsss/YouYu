@@ -97,10 +97,10 @@ describe('buildMihomoConfig', () => {
         'RULE-SET,GitHub,开发平台',
         'RULE-SET,Microsoft,微软服务',
         'RULE-SET,China,DIRECT',
-        'GEOIP,CN,DIRECT,no-resolve',
         `MATCH,${selector}`
       ])
     );
+    expect(config.rules.some((rule: string) => rule.startsWith('GEOIP,'))).toBe(false);
   });
 
   it('puts remote desktop and remote managed rules before proxy priority rules', () => {

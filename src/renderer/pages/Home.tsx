@@ -350,7 +350,7 @@ function NodeHealth({ snapshot }: { snapshot: AppSnapshot }) {
 
 function getStatusLabel(status: AppSnapshot['status']): string {
   if (status === 'running') return '运行中';
-  if (status === 'failed') return '启动失败';
+  if (status === 'failed') return '异常';
   return '已停止';
 }
 

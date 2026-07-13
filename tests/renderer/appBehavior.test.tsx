@@ -204,4 +204,51 @@ describe('advanced home diagnostics', () => {
     expect(log.scrollTop).toBe(240);
     expect(log.lastElementChild?.textContent).toBe('重复日志');
   });
+
+  it('uses a short status label when startup fails', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    const snapshot = {
+      status: 'failed',
+      currentNode: '自动选择',
+      traffic: {
+        todayUpload: 0,
+        todayDownload: 0,
+        totalUpload: 0,
+        totalDownload: 0,
+        nodeUsage: {}
+      },
+      diagnostics: { logs: [] },
+      strategy: 'auto',
+      mode: 'rule',
+      nodeHealth: {
+        delayStatus: 'untested',
+        availability: { status: 'untested', totalCount: 0 }
+      }
+    } as unknown as AppSnapshot;
+
+    await act(async () =>
+      root?.render(
+        <Home
+          usageMode="advanced"
+          snapshot={snapshot}
+          busy={false}
+          busyLabel=""
+          message=""
+          onQuickStart={vi.fn()}
+          onStart={vi.fn()}
+          onStop={vi.fn()}
+          onRepair={vi.fn()}
+          onModeChange={vi.fn()}
+          onStrategyChange={vi.fn()}
+          onOpenNodes={vi.fn()}
+          onUsageModeChange={vi.fn()}
+          onInstallUpdate={vi.fn()}
+        />
+      )
+    );
+
+    expect(container.querySelector('.status-badge')?.textContent).toBe('异常');
+  });
 });
