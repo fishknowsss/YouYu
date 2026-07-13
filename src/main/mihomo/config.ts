@@ -333,6 +333,11 @@ const builtInProxyNames = new Set(['COMPATIBLE', 'DIRECT', 'PASS', 'REJECT', 'RE
 const routableProxyGroupTypes = new Set(['select', 'url-test', 'fallback', 'load-balance', 'relay']);
 const nodeHealthCheckIntervalSeconds = 1800;
 const autoSelectToleranceMs = 150;
+const secureHealthCheckUrl = 'https://www.gstatic.com/generate_204';
+const insecureGoogleHealthCheckUrl = 'http://www.gstatic.com/generate_204';
+const secureCloudflareHealthCheckUrl = 'https://cp.cloudflare.com/generate_204';
+const insecureCloudflareHealthCheckUrl = 'http://1.1.1.1/generate_204';
+const healthCheckExpectedStatus = 204;
 
 export type MihomoConfigInput = {
   subscriptionUrl: string;
@@ -381,7 +386,8 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
         'exclude-filter': noticeNodeExcludeFilter,
         'health-check': {
           enable: true,
-          url: 'https://www.gstatic.com/generate_204',
+          url: secureHealthCheckUrl,
+          'expected-status': healthCheckExpectedStatus,
           interval: nodeHealthCheckIntervalSeconds,
           timeout: 5000,
           lazy: true
@@ -520,7 +526,8 @@ function buildProviderProxyGroups() {
       name: strategyTargets.auto,
       type: 'url-test',
       use: ['airport'],
-      url: 'https://www.gstatic.com/generate_204',
+      url: secureHealthCheckUrl,
+      'expected-status': healthCheckExpectedStatus,
       interval: nodeHealthCheckIntervalSeconds,
       tolerance: autoSelectToleranceMs,
       lazy: true
@@ -529,7 +536,8 @@ function buildProviderProxyGroups() {
       name: strategyTargets.fallback,
       type: 'fallback',
       use: ['airport'],
-      url: 'https://www.gstatic.com/generate_204',
+      url: secureHealthCheckUrl,
+      'expected-status': healthCheckExpectedStatus,
       interval: nodeHealthCheckIntervalSeconds,
       lazy: true
     },
@@ -538,7 +546,8 @@ function buildProviderProxyGroups() {
       type: 'load-balance',
       strategy: 'consistent-hashing',
       use: ['airport'],
-      url: 'https://www.gstatic.com/generate_204',
+      url: secureHealthCheckUrl,
+      'expected-status': healthCheckExpectedStatus,
       interval: nodeHealthCheckIntervalSeconds,
       lazy: true
     }
@@ -563,7 +572,8 @@ function buildInlineProxyGroups(orderedProxyNames: string[]) {
       name: strategyTargets.auto,
       type: 'url-test',
       proxies: orderedProxyNames,
-      url: 'https://www.gstatic.com/generate_204',
+      url: secureHealthCheckUrl,
+      'expected-status': healthCheckExpectedStatus,
       interval: nodeHealthCheckIntervalSeconds,
       tolerance: autoSelectToleranceMs,
       lazy: true
@@ -572,7 +582,8 @@ function buildInlineProxyGroups(orderedProxyNames: string[]) {
       name: strategyTargets.fallback,
       type: 'fallback',
       proxies: orderedProxyNames,
-      url: 'https://www.gstatic.com/generate_204',
+      url: secureHealthCheckUrl,
+      'expected-status': healthCheckExpectedStatus,
       interval: nodeHealthCheckIntervalSeconds,
       lazy: true
     },
@@ -580,7 +591,8 @@ function buildInlineProxyGroups(orderedProxyNames: string[]) {
       name: strategyTargets['load-balance'],
       type: 'load-balance',
       proxies: orderedProxyNames,
-      url: 'https://www.gstatic.com/generate_204',
+      url: secureHealthCheckUrl,
+      'expected-status': healthCheckExpectedStatus,
       interval: nodeHealthCheckIntervalSeconds,
       strategy: 'consistent-hashing',
       lazy: true
@@ -704,6 +716,7 @@ function buildSubscriptionConfig(input: MihomoConfigInput): string | null {
     removeSubscriptionListenerPorts(merged);
     Object.assign(merged, runtimeOptions);
     sanitizeDnsConfig(merged);
+    sanitizeHealthCheckUrls(merged);
     sanitizeSubscriptionNoticeNodes(merged);
 
     const ruleProfile = input.ruleProfile ?? 'ruleset';
@@ -733,6 +746,33 @@ function buildSubscriptionConfig(input: MihomoConfigInput): string | null {
     return YAML.stringify(merged);
   } catch {
     return null;
+  }
+}
+
+function sanitizeHealthCheckUrls(config: Record<string, unknown>) {
+  const groups = config['proxy-groups'];
+  if (Array.isArray(groups)) {
+    for (const group of groups) {
+      if (isRecord(group)) normalizeKnownHealthCheck(group);
+    }
+  }
+
+  const providers = config['proxy-providers'];
+  if (isRecord(providers)) {
+    for (const provider of Object.values(providers)) {
+      if (!isRecord(provider) || !isRecord(provider['health-check'])) continue;
+      normalizeKnownHealthCheck(provider['health-check']);
+    }
+  }
+}
+
+function normalizeKnownHealthCheck(healthCheck: Record<string, unknown>) {
+  if (healthCheck.url === insecureGoogleHealthCheckUrl) {
+    healthCheck.url = secureHealthCheckUrl;
+    healthCheck['expected-status'] = healthCheckExpectedStatus;
+  } else if (healthCheck.url === insecureCloudflareHealthCheckUrl) {
+    healthCheck.url = secureCloudflareHealthCheckUrl;
+    healthCheck['expected-status'] = healthCheckExpectedStatus;
   }
 }
 

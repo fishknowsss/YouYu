@@ -2,6 +2,26 @@
 
 本文件记录 YouYu 的重要版本变化。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，分类参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.5.10] - 2026-07-13
+
+### 修复
+
+- 修复完整订阅中的 `proxy-groups[*].url` 和 `proxy-providers.*.health-check.url` 可能保留常见 HTTP 204 探测地址，导致 Mihomo 统一延迟测速出现第二次请求超时与诊断警告的问题。
+- 修复在线订阅与缓存回退生成路径行为不一致的隐患；两条路径现在都会在写入运行时配置前完成相同规范化。
+
+### 改进
+
+- 将 `http://www.gstatic.com/generate_204` 转换为对应 HTTPS 地址，将 `http://1.1.1.1/generate_204` 转换为 Cloudflare HTTPS 204 地址。
+- 对规范化后的订阅健康检查及 YouYu 自建健康检查统一要求返回 204，避免异常页面被误判为节点可用。
+- 仅处理健康检查字段中的已知明文地址，保留 provider 订阅下载地址和自定义 HTTPS 健康检查配置。
+
+### 验证
+
+- 主项目完整测试、类型检查、ESLint、Prettier 和生产构建通过。
+- 在线订阅、缓存回退、group、provider、交叉地址映射和自定义配置保留均有回归覆盖。
+- 三个公开更新通道安装包通过空内置订阅校验、安装包结构校验和冒烟检查。
+- 本版本未修改 `src/renderer` 或前端样式，界面与交互保持不变。
+
 ## [1.5.9] - 2026-07-13
 
 ### 安全
@@ -39,4 +59,5 @@
 - 三个公开更新通道的安装包、`.blockmap` 和 `latest*.yml` 均由同一次 `dist:win:release` 构建产生并通过空内置订阅校验。
 - 本版本未修改 `src/renderer` 或前端样式，界面与交互保持不变。
 
+[1.5.10]: https://github.com/fishknowsss/YouYu/releases/tag/v1.5.10
 [1.5.9]: https://github.com/fishknowsss/YouYu/releases/tag/v1.5.9

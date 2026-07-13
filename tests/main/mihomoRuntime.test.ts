@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { parse } from 'yaml';
 import { createMihomoRuntime } from '../../src/main/mihomo/process';
 import type { AppSettings } from '../../src/main/storage/settings';
 
@@ -86,6 +87,14 @@ proxies:
     port: 8388
     cipher: aes-128-gcm
     password: pass
+proxy-groups:
+  - name: PROXY
+    type: url-test
+    url: http://www.gstatic.com/generate_204
+    proxies:
+      - cached-node
+rules:
+  - MATCH,PROXY
 `
             )
           : new Response(undefined, { status: 503 });
@@ -105,6 +114,12 @@ proxies:
     });
 
     await firstRuntime.start();
+    const liveConfig = parse(await readFile(join(userDataDir, 'mihomo', 'config.yaml'), 'utf8'));
+    expect(liveConfig['proxy-groups'][0]).toMatchObject({
+      name: 'PROXY',
+      url: 'https://www.gstatic.com/generate_204',
+      'expected-status': 204
+    });
     subscriptionAvailable = false;
 
     const secondRuntime = createMihomoRuntime({
@@ -117,8 +132,13 @@ proxies:
 
     await secondRuntime.start();
 
-    const config = await readFile(join(userDataDir, 'mihomo', 'config.yaml'), 'utf8');
-    expect(config).toContain('cached-node');
+    const config = parse(await readFile(join(userDataDir, 'mihomo', 'config.yaml'), 'utf8'));
+    expect(config.proxies).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'cached-node' })]));
+    expect(config['proxy-groups'][0]).toMatchObject({
+      name: 'PROXY',
+      url: 'https://www.gstatic.com/generate_204',
+      'expected-status': 204
+    });
     expect(fetch).toHaveBeenCalledWith(
       'https://example.com/sub',
       expect.objectContaining({ headers: { 'User-Agent': 'Clash Verge/2.3.2' } })

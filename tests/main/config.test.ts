@@ -53,6 +53,7 @@ describe('buildMihomoConfig', () => {
     expect(config['proxy-providers'].airport['exclude-filter']).toContain('自动选择');
     expect(config['proxy-providers'].airport['exclude-filter']).toContain('全球拦截');
     expect(config['proxy-providers'].airport['health-check'].interval).toBe(1800);
+    expect(config['proxy-providers'].airport['health-check']['expected-status']).toBe(204);
     expect(config['rule-providers']).toMatchObject({
       OpenAI: expect.objectContaining({ behavior: 'classical' }),
       Discord: expect.objectContaining({ behavior: 'classical' }),
@@ -65,8 +66,14 @@ describe('buildMihomoConfig', () => {
     expect(config['proxy-groups'][1]).toMatchObject({
       type: 'url-test',
       interval: 1800,
-      tolerance: 150
+      tolerance: 150,
+      'expected-status': 204
     });
+    expect(
+      config['proxy-groups']
+        .filter((group: { url?: string }) => Boolean(group.url))
+        .every((group: { 'expected-status'?: number }) => group['expected-status'] === 204)
+    ).toBe(true);
     expect(config.dns).toBeUndefined();
     expect(config.tun).toBeUndefined();
     expect(config.sniffer.enable).toBe(true);
@@ -226,8 +233,14 @@ proxies:
     expect(config['proxy-groups'][1]).toMatchObject({
       type: 'url-test',
       interval: 1800,
-      tolerance: 150
+      tolerance: 150,
+      'expected-status': 204
     });
+    expect(
+      config['proxy-groups']
+        .filter((group: { url?: string }) => Boolean(group.url))
+        .every((group: { 'expected-status'?: number }) => group['expected-status'] === 204)
+    ).toBe(true);
     expect(config.rules).toContain(`MATCH,${config['proxy-groups'][0].name}`);
   });
 
@@ -410,6 +423,112 @@ rules:
     expect(config.rules).toContain('MATCH,DIRECT');
     expect(config.rules).not.toContain('GEOSITE,cn,DIRECT');
     expect(config.rules).not.toContain('GEOIP,CN,DIRECT');
+  });
+
+  it('secures provider health checks without changing subscription endpoints', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/sub',
+      secret: 'local-secret',
+      ruleProfile: 'subscription',
+      subscriptionConfigText: `
+proxy-providers:
+  airport:
+    type: http
+    url: http://example.com/subscription.yaml
+    path: ./providers/airport.yaml
+    health-check:
+      enable: true
+      url: http://1.1.1.1/generate_204
+      expected-status: 200
+  backup:
+    type: http
+    url: https://example.com/backup.yaml
+    path: ./providers/backup.yaml
+    health-check:
+      enable: true
+      url: http://www.gstatic.com/generate_204
+proxy-groups:
+  - name: PROXY
+    type: select
+    use:
+      - airport
+      - backup
+rules:
+  - MATCH,PROXY
+`
+    });
+    const config = parse(yamlText);
+    const provider = config['proxy-providers'].airport;
+
+    expect(provider.url).toBe('http://example.com/subscription.yaml');
+    expect(provider['health-check']).toMatchObject({
+      enable: true,
+      url: 'https://cp.cloudflare.com/generate_204',
+      'expected-status': 204
+    });
+    expect(config['proxy-providers'].backup).toMatchObject({
+      url: 'https://example.com/backup.yaml',
+      'health-check': {
+        enable: true,
+        url: 'https://www.gstatic.com/generate_204',
+        'expected-status': 204
+      }
+    });
+  });
+
+  it('secures known group health checks without changing custom HTTPS checks', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/sub',
+      secret: 'local-secret',
+      ruleProfile: 'subscription',
+      subscriptionConfigText: `
+proxies:
+  - name: HK 01
+    type: ss
+    server: 127.0.0.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+proxy-groups:
+  - name: AUTO
+    type: url-test
+    url: http://www.gstatic.com/generate_204
+    expected-status: 200
+    proxies:
+      - HK 01
+  - name: CUSTOM
+    type: fallback
+    url: https://status.example.com/ping
+    expected-status: 200
+    proxies:
+      - HK 01
+  - name: CLOUDFLARE
+    type: load-balance
+    url: http://1.1.1.1/generate_204
+    expected-status: 200
+    proxies:
+      - HK 01
+rules:
+  - MATCH,AUTO
+`
+    });
+    const config = parse(yamlText);
+
+    expect(config['proxy-groups'][0]).toMatchObject({
+      name: 'AUTO',
+      url: 'https://www.gstatic.com/generate_204',
+      'expected-status': 204
+    });
+    expect(config['proxy-groups'][1]).toMatchObject({
+      name: 'CUSTOM',
+      url: 'https://status.example.com/ping',
+      'expected-status': 200
+    });
+    expect(config['proxy-groups'][2]).toMatchObject({
+      name: 'CLOUDFLARE',
+      url: 'https://cp.cloudflare.com/generate_204',
+      'expected-status': 204
+    });
   });
 
   it('uses YouYu rulesets for full airport configs by default without removing airport nodes', () => {

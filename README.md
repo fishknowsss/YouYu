@@ -8,14 +8,14 @@
 
 YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新和桌宠交互。
 
-当前源码与最新公开发布版本为 [`1.5.9`](https://github.com/fishknowsss/YouYu/releases/tag/v1.5.9)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)，本次完整说明见 [v1.5.9 发布说明](docs/releases/v1.5.9.md)。
+当前源码与最新公开发布版本为 [`1.5.10`](https://github.com/fishknowsss/YouYu/releases/tag/v1.5.10)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)，本次完整说明见 [v1.5.10 发布说明](docs/releases/v1.5.10.md)。
 
-## 1.5.9 发布重点
+## 1.5.10 发布重点
 
-- 代理启停、后台刷新、健康检查和退出清理统一遵循运行意图；停止后不会被旧任务重新拉起，清理失败时可安全恢复。
-- 流量身份、远程配置缓存和远程订阅按用户与设备隔离；设备失效后会清除远程订阅并停止代理。
-- 覆盖安装只处理当前安装路径中的 YouYu 进程；强制关闭前会校验并恢复 YouYu 实际接管的系统代理。
-- Worker 加强登记幂等、原子限流、请求上限和数据库约束预检；CI 会拒绝 Wrangler 状态、私有订阅和本地缓存进入仓库。
+- 完整订阅中的常见 HTTP 204 健康检查地址会在运行前转换为对应的 HTTPS 地址，减少节点测速超时和 Mihomo 诊断警告。
+- 在线订阅与本地缓存回退统一经过同一套健康检查规范化，断网重启时不会恢复旧的明文探测配置。
+- YouYu 管理的测速地址明确要求返回 204，异常页面不会再被当作节点可用。
+- 订阅下载地址和自定义 HTTPS 健康检查保持原样，避免改变机场自定义行为。
 - 本次版本没有调整前端界面或交互；升级后原有使用方式保持不变。
 
 ## 界面预览
