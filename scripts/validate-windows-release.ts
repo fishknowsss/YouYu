@@ -1,4 +1,5 @@
 import { access, readFile, readdir, stat } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
@@ -24,6 +25,7 @@ const expectedBlockmapPath = join(releaseDir, `${expectedInstallerName}.blockmap
 const expectedUpdateMetadataName = internalBuild ? 'latest-in.yml' : noPetBuild ? 'latest-no.yml' : 'latest.yml';
 const expectedUpdateMetadataPath = join(releaseDir, expectedUpdateMetadataName);
 const bundledSubscriptionPath = join(releaseDir, 'win-unpacked', 'resources', 'default-subscription.txt');
+const fullscreenProbePath = join(releaseDir, 'win-unpacked', 'resources', 'windows-fullscreen-probe.exe');
 const trafficApiUrlPath = join(releaseDir, 'win-unpacked', 'resources', 'traffic-api-url.txt');
 
 await access(expectedInstallerPath);
@@ -77,6 +79,21 @@ if (confusingEntries.length > 0) {
 const currentInstaller = await stat(expectedInstallerPath);
 if (currentInstaller.size < 80 * 1024 * 1024) {
   throw new Error(`Installer is unexpectedly small: ${expectedInstallerName}`);
+}
+
+const fullscreenProbe = await stat(fullscreenProbePath);
+if (fullscreenProbe.size < 1024 || fullscreenProbe.size > 1024 * 1024) {
+  throw new Error(`Windows fullscreen probe has an unexpected size: ${fullscreenProbe.size}`);
+}
+const fullscreenProbeResult = spawnSync(fullscreenProbePath, ['0', String(process.pid), '250', '1'], {
+  encoding: 'utf8',
+  windowsHide: true,
+  timeout: 10_000
+});
+if (fullscreenProbeResult.status !== 0 || fullscreenProbeResult.stdout.trim() !== '0') {
+  throw new Error(
+    `Windows fullscreen probe failed to execute: ${fullscreenProbeResult.stderr.trim() || fullscreenProbeResult.error?.message || `exit ${fullscreenProbeResult.status}`}`
+  );
 }
 
 const bundledSubscription = (await readFile(bundledSubscriptionPath, 'utf8')).trim();

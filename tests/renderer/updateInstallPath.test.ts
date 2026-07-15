@@ -18,4 +18,15 @@ describe('update install entry points', () => {
     expect(source).toContain('if (updateInstallerLaunchFailed)');
     expect(source).toContain('event.preventDefault();');
   });
+
+  it('installs an in-app Windows update silently and starts YouYu again', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const install = source.slice(
+      source.indexOf('async function installDownloadedUpdate'),
+      source.indexOf('function recoverFromUpdateInstallerLaunchFailure')
+    );
+
+    expect(install).toContain('autoUpdater.quitAndInstall(true, true)');
+    expect(install).not.toContain('autoUpdater.quitAndInstall(false, true)');
+  });
 });

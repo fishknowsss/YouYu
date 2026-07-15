@@ -1031,12 +1031,6 @@ select:focus-visible {
   pointer-events: none;
 }
 
-.pet-sprite-edgeRightSleep .pet-side-sleep-zs {
-  --pet-z-mid-x: calc(-4px * var(--pet-scale));
-  --pet-z-end-x: calc(-10px * var(--pet-scale));
-  transform: scaleX(-1);
-}
-
 .pet-side-sleep-z {
   position: absolute;
   left: 0;
@@ -2279,7 +2273,7 @@ select:focus-visible {
 .settings-panel {
   --settings-row-height: 64px;
   --settings-control-height: 46px;
-  --settings-update-row-height: 54px;
+  --settings-footer-row-height: 54px;
   --settings-action-width: 130px;
   align-self: stretch;
   display: grid;
@@ -2363,7 +2357,7 @@ select:focus-visible {
 
 .settings-diagnostics-bar {
   min-width: 0;
-  height: var(--settings-control-height);
+  height: var(--settings-footer-row-height);
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--settings-action-width);
   align-items: center;
@@ -2418,18 +2412,13 @@ select:focus-visible {
 
 .settings-diagnostics-export {
   grid-column: 2;
-  background: transparent;
 }
 
 .settings-footer-action {
   width: 100%;
   height: var(--settings-control-height);
-  font-size: 16px;
-  font-weight: 500;
-}
-
-.settings-diagnostics-export:hover:not(:disabled) {
-  background: #efe4fb;
+  font-size: 18px;
+  font-weight: 700;
 }
 
 .settings-action-status.is-error {
@@ -2651,7 +2640,7 @@ select:focus-visible {
 .update-row {
   grid-column: 1 / -1;
   min-width: 0;
-  min-height: var(--settings-update-row-height);
+  min-height: var(--settings-footer-row-height);
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--settings-action-width);
   align-items: center;

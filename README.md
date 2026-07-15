@@ -8,7 +8,15 @@
 
 YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新和桌宠交互。
 
-当前源码版本为 `1.6.1`，最新公开发布版本为 [`1.6.0`](https://github.com/fishknowsss/YouYu/releases/tag/v1.6.0)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)，本次完整说明见 [v1.6.1 迭代说明](docs/releases/v1.6.1.md)。
+当前源码版本与最新公开发布版本均为 [`1.6.2`](https://github.com/fishknowsss/YouYu/releases/tag/v1.6.2)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)，本次完整说明见 [v1.6.2 迭代说明](docs/releases/v1.6.2.md)。
+
+## 1.6.2 迭代重点
+
+- 设置页“诊断日志”和“软件更新”统一为 54px 行高；“导出”和“检查”沿用同一套 18px 次级按钮字体、700 字重、背景与 130px 操作列。
+- 小白模式与专业模式继续共用更新流程；应用内下载完成后改为静默安装，并在安装成功后自动启动新版本。
+- 桌宠使用不可激活的 Windows 工具窗口并重复应用任务栏排除策略，避免偶发出现第二个任务栏预览框。
+- 桌宠只在其所在显示器出现真正全屏应用时隐藏并停止接收鼠标，其他显示器不受影响；退出全屏后稳定恢复，用户主动隐藏的状态不会被覆盖。
+- 右睡 `ZZZ` 直接跟随桌宠整体镜像，左睡动画和其他桌宠视觉保持不变。
 
 ## 1.6.1 迭代重点
 

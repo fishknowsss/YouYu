@@ -48,9 +48,10 @@ describe('settings diagnostic export', () => {
     expect(barRule).toContain('grid-template-columns: minmax(0, 1fr) var(--settings-action-width)');
     expect(barRule).toContain('column-gap: 16px');
     expect(exportRule).toContain('grid-column: 2');
-    expect(footerActionRule).toContain('font-size: 16px');
-    expect(footerActionRule).toContain('font-weight: 500');
-    expect(updateRule).toContain('min-height: var(--settings-update-row-height)');
+    expect(footerActionRule).toContain('font-size: 18px');
+    expect(footerActionRule).toContain('font-weight: 700');
+    expect(barRule).toContain('height: var(--settings-footer-row-height)');
+    expect(updateRule).toContain('min-height: var(--settings-footer-row-height)');
     expect(updateRule).toContain('padding: 4px 0 4px 14px');
     expect(controlsRule).not.toContain('grid-row: 4');
   });

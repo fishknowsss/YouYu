@@ -23,6 +23,8 @@ extraResources:
       - '**/*'
   - from: resources/generated/default-subscription.txt
     to: default-subscription.txt
+  - from: resources/generated/windows-fullscreen-probe.exe
+    to: windows-fullscreen-probe.exe
   - from: resources/traffic-api-url.txt
     to: traffic-api-url.txt
   - from: build/icon.png

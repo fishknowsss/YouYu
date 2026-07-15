@@ -2,6 +2,27 @@
 
 本文件记录 YouYu 的重要版本变化。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，分类参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.6.2] - 2026-07-15
+
+### 修复
+
+- 修复设置页“诊断日志”和“软件更新”默认行高不一致，以及“导出”和“检查”使用单独小号轻字、背景不一致的问题；两行现在共享 54px 行高、46px 按钮高度、18px 字号、700 字重和次级按钮表面。
+- 修复应用内更新仍打开交互式安装向导的问题；下载完成后由同一更新入口静默安装，并在成功后强制启动新版本。Windows 按计算机安装所需的系统授权仍由系统安全提示负责。
+- 修复桌宠虽然设置 `skipTaskbar`，但仍是普通无 owner 顶层窗口，导致资源管理器或任务栏重建后偶发出现独立预览框的问题；桌宠现在同时使用工具窗口、不可激活和重复任务栏排除策略。
+- 修复桌宠覆盖同屏全屏视频或游戏的问题；只检测桌宠所在物理显示器的真正全屏顶层窗口，进入时立即隐藏并停止鼠标交互，异屏不受影响，退出后双采样稳定恢复。
+- 修复右睡 `ZZZ` 在父级镜像后又进行一次反向补偿，导致轨迹不符合左右自然镜像的问题。
+
+### 改进
+
+- 全屏探测采用构建期生成的 7.5KB x64 本地辅助程序，运行副本使用内容哈希命名并在启动前校验完整性；它会忽略桌面、任务栏、最小化、DWM 隐藏、子窗口和工具窗口，失败时保持用户原本的桌宠显示意图并使用退避重试。
+- 将用户主动显示/隐藏桌宠与全屏临时抑制拆分，避免退出全屏时错误恢复用户已经主动隐藏的桌宠。
+
+### 验证
+
+- 主项目 52 个测试文件、480 项测试通过，Worker 29 项测试通过。
+- 900×600 真实渲染确认两条底部行均为 54px，两个按钮均为 46px、18px、700 字重并使用相同背景。
+- 桌面端与 Worker 类型检查、ESLint、Prettier、仓库卫生、Worker dry-run、Windows 安装包结构和发布链路纳入发布验证。
+
 ## [1.6.1] - 2026-07-15
 
 ### 修复
@@ -148,7 +169,8 @@
 - 三个公开更新通道的安装包、`.blockmap` 和 `latest*.yml` 均由同一次 `dist:win:release` 构建产生并通过空内置订阅校验。
 - 本版本未修改 `src/renderer` 或前端样式，界面与交互保持不变。
 
-[1.6.1]: https://github.com/fishknowsss/YouYu/compare/v1.6.0...HEAD
+[1.6.2]: https://github.com/fishknowsss/YouYu/compare/v1.6.1...v1.6.2
+[1.6.1]: https://github.com/fishknowsss/YouYu/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/fishknowsss/YouYu/releases/tag/v1.6.0
 [1.5.11]: https://github.com/fishknowsss/YouYu/releases/tag/v1.5.11
 [1.5.10]: https://github.com/fishknowsss/YouYu/releases/tag/v1.5.10

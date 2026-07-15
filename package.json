@@ -1,14 +1,15 @@
 {
   "name": "youyu",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "private": true,
   "author": "118 Studio",
   "description": "YouYu Windows proxy desktop app",
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "npm run build:fullscreen-probe && electron-vite dev",
     "dev:ui": "vite --host 127.0.0.1 --port 5173",
+    "build:fullscreen-probe": "node scripts/build-windows-fullscreen-probe.mjs",
     "assets": "node scripts/run-brand-assets.mjs",
     "cache:electron:win": "node scripts/cache-electron-win.mjs",
     "clean:release": "node scripts/clean-release.mjs",

@@ -26,6 +26,13 @@ import { createMihomoRuntime } from './mihomo/process';
 import { createSystemProxyAdapter } from './platform/systemProxy';
 import { runWindowsElevatedProcess, spawnWindowsElevatedMihomo } from './platform/elevatedProcess';
 import { createWindowsStartupTask } from './platform/startupTask';
+import {
+  createFullscreenSuppressionStabilizer,
+  getNativeWindowHandleDecimal,
+  prepareWindowsFullscreenProbeExecutable,
+  startWindowsFullscreenProbe,
+  type WindowsFullscreenProbe
+} from './platform/windowsFullscreenProbe';
 import { SettingsStore } from './storage/settings';
 import {
   availabilitySnapshotFromRecord,
@@ -65,6 +72,8 @@ import {
 } from '../shared/ipc';
 import { getUpdateDownloadPhase, normalizeUpdateBytes } from '../shared/updateProgress';
 import { deferUpdateInstallerLaunch } from './updateInstallHandoff';
+import { createPetVisibilityController } from './petVisibilityController';
+import { applyPetWindowTaskbarPolicy } from './petWindowPolicy';
 import { createRuntimeIntentController } from './runtimeIntent';
 import { buildProxyRelaunchArguments, resumeProxyAfterRelaunchArgument } from './appRelaunch';
 import { clearMihomoRepairCache, runNetworkRepair, type NetworkRepairOptions } from './networkRepair';
@@ -136,6 +145,10 @@ let petDockTimer: ReturnType<typeof setTimeout> | undefined;
 let petSequenceTimer: ReturnType<typeof setTimeout> | undefined;
 let petMoveTimer: ReturnType<typeof setInterval> | undefined;
 let petMousePassthrough = false;
+let petFullscreenProbe: WindowsFullscreenProbe | undefined;
+let petFullscreenProbeHelperPath: string | undefined;
+let petFullscreenProbeGeneration = 0;
+let petFullscreenProbeErrorLogged = false;
 let petDockBehavior:
   | {
       kind: 'side';
@@ -206,6 +219,13 @@ let lastError: string | undefined;
 const appLogs: string[] = [];
 const foldedMihomoDialWarnings = new Map<string, { count: number; lastAt: number }>();
 const petFeatureEnabled = !__YOUYU_DISABLE_PET__;
+const petVisibilityController = createPetVisibilityController({
+  initialUserRequestedVisible: true,
+  onVisibilityChange: (visible) => applyPetWindowVisibility(visible)
+});
+const petFullscreenSuppressionStabilizer = createFullscreenSuppressionStabilizer((suppressed) =>
+  petVisibilityController.setFullscreenSuppressed(suppressed)
+);
 const petWindowSize = {
   width: 190,
   height: 212
@@ -884,7 +904,7 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
           return;
         }
         updateInstallerLaunchStarted = true;
-        autoUpdater.quitAndInstall(false, true);
+        autoUpdater.quitAndInstall(true, true);
       },
       onError: recoverFromUpdateInstallerLaunchFailure
     });
@@ -920,6 +940,7 @@ function recoverFromUpdateInstallFailure(prefix: string, error: unknown) {
   cleanupFinished = false;
   isQuitting = false;
   lifecycle.resumeStarts();
+  restartPetFullscreenProbe();
   appendLog(message);
   setUpdateSnapshot({ status: 'downloaded', message });
   startRemoteConfigPolling();
@@ -941,6 +962,9 @@ async function prepareForUpdateInstall(): Promise<void> {
   trafficReporter.stop();
   if (lifecycle.getStatus() !== 'stopped') {
     await lifecycle.stop();
+  }
+  if (petFeatureEnabled) {
+    stopPetFullscreenProbe({ restoreVisibility: false });
   }
 }
 
@@ -2611,36 +2635,119 @@ function syncPetStateToRuntime() {
 
 function showPetWindow() {
   if (!petFeatureEnabled) return;
+  petVisibilityController.setUserRequestedVisible(true);
   if (!petWindow) {
     void createPetWindow();
     return;
   }
 
-  petWindow.showInactive();
-  setPetMousePassthrough(true);
-  syncPetStateToRuntime();
+  applyPetWindowVisibility();
   refreshTrayMenu();
 }
 
 function hidePetWindow() {
   if (!petFeatureEnabled) return;
-  if (!petWindow) return;
-  clearPetSequenceTimer();
-  clearPetMoveTimer();
-  setPetMousePassthrough(true);
-  petWindow.hide();
-  setPetState('idle');
+  petVisibilityController.setUserRequestedVisible(false);
   refreshTrayMenu();
 }
 
 function togglePetWindow() {
   if (!petFeatureEnabled) return;
-  if (petWindow?.isVisible()) {
+  if (petVisibilityController.isUserRequestedVisible()) {
     hidePetWindow();
     return;
   }
 
   showPetWindow();
+}
+
+function applyPetWindowVisibility(visible = petVisibilityController.isVisible()) {
+  if (!petWindow || petWindow.isDestroyed()) return;
+
+  if (!visible) {
+    stopPetDrag({ settle: false });
+    clearPetDockBehavior();
+    clearPetSequenceTimer();
+    clearPetMoveTimer();
+    setPetMousePassthrough(true, true);
+    petWindow.setAlwaysOnTop(false);
+    petWindow.hide();
+    setPetState('idle');
+    refreshTrayMenu();
+    return;
+  }
+
+  petWindow.setAlwaysOnTop(true, 'floating');
+  petWindow.showInactive();
+  applyPetWindowTaskbarPolicy(petWindow);
+  setPetMousePassthrough(true, true);
+  syncPetStateToRuntime();
+  refreshTrayMenu();
+}
+
+async function startPetFullscreenProbe(window: BrowserWindow) {
+  const generation = ++petFullscreenProbeGeneration;
+  petFullscreenProbe?.stop();
+  petFullscreenProbe = undefined;
+  petFullscreenSuppressionStabilizer.reset();
+  if (process.platform !== 'win32') return;
+
+  try {
+    if (!petFullscreenProbeHelperPath) {
+      const sourcePath = app.isPackaged
+        ? join(process.resourcesPath, 'windows-fullscreen-probe.exe')
+        : join(app.getAppPath(), 'resources', 'generated', 'windows-fullscreen-probe.exe');
+      petFullscreenProbeHelperPath = await prepareWindowsFullscreenProbeExecutable({
+        sourcePath,
+        runtimeDirectory: join(userDataDir, 'runtime', 'helpers')
+      });
+    }
+    if (
+      generation !== petFullscreenProbeGeneration ||
+      petWindow !== window ||
+      window.isDestroyed() ||
+      isQuitting ||
+      cleanupStarted
+    ) {
+      return;
+    }
+    petFullscreenProbe = startWindowsFullscreenProbe({
+      helperPath: petFullscreenProbeHelperPath,
+      petWindowHandle: getNativeWindowHandleDecimal(window.getNativeWindowHandle()),
+      onSample: (fullscreenOnPetMonitor) => {
+        petFullscreenProbeErrorLogged = false;
+        petFullscreenSuppressionStabilizer.update(fullscreenOnPetMonitor);
+      },
+      onError: (error) => {
+        petFullscreenSuppressionStabilizer.reset();
+        if (petFullscreenProbeErrorLogged) return;
+        petFullscreenProbeErrorLogged = true;
+        appendLog(`桌宠全屏避让暂不可用，保持显示: ${formatError(error)}`);
+      }
+    });
+  } catch (error) {
+    if (generation !== petFullscreenProbeGeneration) return;
+    petFullscreenSuppressionStabilizer.reset();
+    if (!petFullscreenProbeErrorLogged) {
+      petFullscreenProbeErrorLogged = true;
+      appendLog(`桌宠全屏避让初始化失败，保持显示: ${formatError(error)}`);
+    }
+  }
+}
+
+function stopPetFullscreenProbe(options: { restoreVisibility?: boolean } = {}) {
+  petFullscreenProbeGeneration += 1;
+  petFullscreenProbe?.stop();
+  petFullscreenProbe = undefined;
+  petFullscreenProbeErrorLogged = false;
+  if (options.restoreVisibility !== false) {
+    petFullscreenSuppressionStabilizer.reset();
+  }
+}
+
+function restartPetFullscreenProbe() {
+  if (!petFeatureEnabled || !petWindow || petWindow.isDestroyed()) return;
+  void startPetFullscreenProbe(petWindow);
 }
 
 function isLaunchAtLoginEnabled(): boolean {
@@ -3049,7 +3156,7 @@ function refreshTrayMenu() {
     ...(petFeatureEnabled
       ? [
           {
-            label: petWindow?.isVisible() ? '隐藏桌宠' : '显示桌宠',
+            label: petVisibilityController.isUserRequestedVisible() ? '隐藏桌宠' : '显示桌宠',
             click: togglePetWindow
           }
         ]
@@ -3182,6 +3289,7 @@ async function createPetWindow() {
     ...bounds,
     useContentSize: true,
     title: 'YouYu 桌宠',
+    type: 'toolbar',
     frame: false,
     transparent: true,
     resizable: false,
@@ -3190,6 +3298,7 @@ async function createPetWindow() {
     maximizable: false,
     fullscreenable: false,
     alwaysOnTop: true,
+    focusable: false,
     skipTaskbar: true,
     hasShadow: false,
     show: false,
@@ -3206,8 +3315,10 @@ async function createPetWindow() {
   });
   petWindow = win;
   secureRendererNavigation(win);
+  applyPetWindowTaskbarPolicy(win);
   win.setAlwaysOnTop(true, 'floating');
   setPetMousePassthrough(true, true);
+  void startPetFullscreenProbe(win);
 
   win.webContents.on('preload-error', (_event, preloadPath, error) => {
     console.error(`pet preload failed: ${preloadPath}`, error);
@@ -3218,7 +3329,8 @@ async function createPetWindow() {
   });
 
   win.once('ready-to-show', () => {
-    win.showInactive();
+    applyPetWindowVisibility();
+    applyPetWindowTaskbarPolicy(win);
     sendPetState();
     syncPetStateToRuntime();
     refreshTrayMenu();
@@ -3228,6 +3340,7 @@ async function createPetWindow() {
     if (petWindow === win) {
       petWindow = null;
     }
+    stopPetFullscreenProbe();
     stopPetDrag();
     clearPetDockBehavior();
     clearPetSequenceTimer();
@@ -3310,6 +3423,7 @@ async function cleanupBeforeExit(options: ExitCleanupOptions = {}): Promise<bool
   activeNodeTestController = undefined;
   stopRemoteConfigPolling();
   if (petFeatureEnabled) {
+    stopPetFullscreenProbe({ restoreVisibility: false });
     stopPetDrag({ settle: false });
     clearPetDockBehavior();
     clearPetSequenceTimer();
@@ -3334,6 +3448,7 @@ async function cleanupBeforeExit(options: ExitCleanupOptions = {}): Promise<bool
     recordError('退出清理失败', error);
     startRemoteConfigPolling();
     scheduleUpdateCheck(updatePeriodicIntervalMs);
+    restartPetFullscreenProbe();
     if (shouldRestoreRuntimeIntent) {
       const restoredIntentGeneration = runtimeIntent.requestStart();
       if (lifecycle.getStatus() === 'stopped') {

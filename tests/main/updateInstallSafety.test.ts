@@ -43,10 +43,10 @@ describe('update and exit lifecycle safety', () => {
     expect(deferredLaunch).toContain('!updateInstallerLaunchPending');
     expect(deferredLaunch).toContain('updateInstallAttempt !== installAttempt');
     expect(deferredLaunch.indexOf('updateInstallAttempt !== installAttempt')).toBeLessThan(
-      deferredLaunch.indexOf('autoUpdater.quitAndInstall(false, true)')
+      deferredLaunch.indexOf('autoUpdater.quitAndInstall(true, true)')
     );
     expect(deferredLaunch.indexOf('updateInstallerLaunchStarted = true')).toBeLessThan(
-      deferredLaunch.indexOf('autoUpdater.quitAndInstall(false, true)')
+      deferredLaunch.indexOf('autoUpdater.quitAndInstall(true, true)')
     );
   });
 
@@ -90,5 +90,32 @@ describe('update and exit lifecycle safety', () => {
     expect(recovery).toContain('scheduleRuntimeRecovery(0)');
     expect(recovery.indexOf('lifecycle.resumeStarts()')).toBeLessThan(recovery.indexOf('scheduleRuntimeRecovery(0)'));
     expect(recovery.indexOf('isQuitting = false')).toBeLessThan(recovery.indexOf('scheduleRuntimeRecovery(0)'));
+  });
+
+  it('stops the fullscreen helper for an update and restarts it if installation is interrupted', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const prepare = source.slice(
+      source.indexOf('async function prepareForUpdateInstall'),
+      source.indexOf('function getUpdateInfoVersion')
+    );
+    const recovery = source.slice(
+      source.indexOf('function recoverFromUpdateInstallFailure'),
+      source.indexOf('async function prepareForUpdateInstall')
+    );
+
+    expect(prepare).toContain('stopPetFullscreenProbe({ restoreVisibility: false })');
+    expect(recovery).toContain('restartPetFullscreenProbe()');
+  });
+
+  it('restarts fullscreen avoidance after an exit cleanup failure', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const cleanup = source.slice(
+      source.indexOf('async function cleanupBeforeExit'),
+      source.indexOf('const gotSingleInstanceLock')
+    );
+    const recovery = cleanup.slice(cleanup.indexOf('catch (error)'));
+
+    expect(recovery).toContain('restartPetFullscreenProbe()');
+    expect(recovery.indexOf('restartPetFullscreenProbe()')).toBeLessThan(recovery.indexOf('showMainWindow()'));
   });
 });
