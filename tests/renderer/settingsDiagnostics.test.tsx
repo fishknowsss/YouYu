@@ -27,8 +27,10 @@ describe('settings diagnostic export', () => {
     expect(html).toContain('class="settings-diagnostics-summary" role="status" aria-live="polite" aria-atomic="true"');
     expect(html).toContain('诊断日志');
     expect(html).toContain('37 条');
-    expect(html).toContain('class="secondary-button settings-control-button settings-diagnostics-export"');
+    expect(html).toContain('class="secondary-button settings-footer-action settings-diagnostics-export"');
     expect(html).toContain('>导出</button>');
+    expect(html).toContain('class="secondary-button settings-footer-action"');
+    expect(html).toContain('>检查</button>');
     expect(html).toContain('class="settings-action-status is-error"');
     expect(html).toContain('DNS 异常 · 点击修复');
   });
@@ -38,12 +40,18 @@ describe('settings diagnostic export', () => {
     const controlsRule = getRule(styles, '.settings-controls-grid');
     const barRule = getRule(styles, '.settings-diagnostics-bar');
     const exportRule = getRule(styles, '.settings-diagnostics-export');
+    const footerActionRule = getRule(styles, '.settings-footer-action');
+    const updateRule = getRule(styles, '.update-row');
 
     expect(controlsRule).toContain('grid-template-rows: repeat(3, var(--settings-row-height))');
     expect(controlsRule).not.toContain('var(--settings-control-height)');
     expect(barRule).toContain('grid-template-columns: minmax(0, 1fr) var(--settings-action-width)');
     expect(barRule).toContain('column-gap: 16px');
     expect(exportRule).toContain('grid-column: 2');
+    expect(footerActionRule).toContain('font-size: 16px');
+    expect(footerActionRule).toContain('font-weight: 500');
+    expect(updateRule).toContain('min-height: var(--settings-update-row-height)');
+    expect(updateRule).toContain('padding: 4px 0 4px 14px');
     expect(controlsRule).not.toContain('grid-row: 4');
   });
 
@@ -65,7 +73,7 @@ describe('settings diagnostic export', () => {
     );
 
     expect(html).toMatch(
-      /<button class="secondary-button settings-control-button settings-diagnostics-export" disabled="">导出中<\/button>/
+      /<button class="secondary-button settings-footer-action settings-diagnostics-export" disabled="">导出中<\/button>/
     );
   });
 
@@ -149,7 +157,18 @@ describe('settings diagnostic export', () => {
   it('does not apply the secondary hover surface to disabled buttons', async () => {
     const styles = await readFile('src/renderer/styles.css', 'utf8');
     expect(styles).toContain('.secondary-button:hover:not(:disabled)');
+    expect(styles).toContain('.wide-button:hover:not(:disabled)');
     expect(styles).not.toContain('.secondary-button:hover,');
+    expect(styles).not.toContain('.wide-button:hover {');
+  });
+
+  it('keeps the selected sidebar item on an accent surface while hovering', async () => {
+    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const selectedHoverRule = getRule(styles, '.nav-list button.active:hover:not(:disabled)');
+
+    expect(styles).toContain('.nav-list button:not(.active):hover:not(:disabled)');
+    expect(selectedHoverRule).toContain('background: var(--accent-strong)');
+    expect(styles).not.toContain('.nav-list button:hover:not(:disabled),');
   });
 });
 

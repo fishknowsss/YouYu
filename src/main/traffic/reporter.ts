@@ -27,12 +27,22 @@ type ActivateResponse = {
   userId?: string;
   deviceId?: string;
   name?: string;
+  traffic?: {
+    totalUpload?: number;
+    totalDownload?: number;
+    todayUpload?: number;
+    todayDownload?: number;
+    date?: string;
+  };
 };
 
 type TrafficReportResponse = {
   traffic?: {
     totalUpload?: number;
     totalDownload?: number;
+    todayUpload?: number;
+    todayDownload?: number;
+    date?: string;
   };
 };
 
@@ -97,18 +107,41 @@ export class TrafficReporter {
     }
 
     const data = response.body as ActivateResponse;
-    if (!data.userId || !data.deviceId) {
+    const traffic = data.traffic;
+    if (
+      !data.userId ||
+      !data.deviceId ||
+      !traffic ||
+      !isNonNegativeNumber(traffic.totalUpload) ||
+      !isNonNegativeNumber(traffic.totalDownload) ||
+      !isNonNegativeNumber(traffic.todayUpload) ||
+      !isNonNegativeNumber(traffic.todayDownload) ||
+      typeof traffic.date !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(traffic.date)
+    ) {
       throw new Error(`traffic activation response invalid (${responseRouteDetails(response)})`);
     }
 
-    const identity = await this.options.store.registerIdentity({
-      userId: data.userId,
-      deviceId: data.deviceId,
-      name: data.name ?? name,
-      deviceName: hostname()
-    });
-    await this.reportPending().catch(() => undefined);
-    return identity;
+    const activated = await this.options.store.activateIdentity(
+      {
+        userId: data.userId,
+        deviceId: data.deviceId,
+        name: data.name ?? name,
+        deviceName: hostname()
+      },
+      {
+        totalUpload: traffic.totalUpload,
+        totalDownload: traffic.totalDownload,
+        todayUpload: traffic.todayUpload,
+        todayDownload: traffic.todayDownload,
+        date: traffic.date
+      },
+      new Date()
+    );
+    if (activated.pendingUpload > 0 || activated.pendingDownload > 0) {
+      await this.reportPending().catch(() => undefined);
+    }
+    return activated.identity;
   }
 
   async reportPending() {
@@ -194,7 +227,17 @@ export class TrafficReporter {
       await this.options.store.markServerTotals(
         (response.body as TrafficReportResponse).traffic ?? {},
         new Date(),
-        identityKey
+        identityKey,
+        {
+          localDayBaseline:
+            report.localDate && typeof report.localDayUpload === 'number' && typeof report.localDayDownload === 'number'
+              ? {
+                  date: report.localDate,
+                  upload: report.localDayUpload,
+                  download: report.localDayDownload
+                }
+              : 'current'
+        }
       );
     }
   }
@@ -202,6 +245,10 @@ export class TrafficReporter {
 
 function normalizeEndpoint(value: string): string {
   return value.trim().replace(/\/+$/, '');
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 type JsonResponse = {

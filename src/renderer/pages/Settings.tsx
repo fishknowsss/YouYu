@@ -186,7 +186,7 @@ export function Settings({
                 </span>
               </div>
               <button
-                className="secondary-button settings-control-button settings-diagnostics-export"
+                className="secondary-button settings-footer-action settings-diagnostics-export"
                 disabled={busy}
                 onClick={onExportDiagnostics}
               >
@@ -303,7 +303,7 @@ function UpdatePanel({
         </div>
       )}
       <button
-        className={ready ? 'wide-button' : 'secondary-button'}
+        className={`${ready ? 'wide-button' : 'secondary-button'} settings-footer-action`}
         disabled={busy || waiting}
         onClick={ready ? onInstallUpdate : onCheckUpdate}
       >

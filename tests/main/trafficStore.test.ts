@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TrafficStore } from '../../src/main/traffic/store';
 
 let dir: string;
@@ -179,6 +179,162 @@ describe('TrafficStore', () => {
     expect(snapshot.stats.totalSource).toBe('server');
   });
 
+  it('uses the backend today baseline and only adds local bytes recorded after that baseline', async () => {
+    const store = new TrafficStore(dir);
+    const syncedAt = new Date('2026-05-10T08:10:00.000Z');
+
+    await store.registerIdentity({
+      userId: 'u_1',
+      deviceId: 'd_1',
+      name: 'Alice',
+      deviceName: 'DESKTOP'
+    });
+    await store.addTraffic(100, 200, new Date('2026-05-10T08:00:00.000Z'));
+    await store.markServerTotals(
+      {
+        totalUpload: 900,
+        totalDownload: 1200,
+        todayUpload: 500,
+        todayDownload: 700,
+        date: '2026-05-10'
+      },
+      syncedAt,
+      undefined,
+      { localDayBaseline: 'current' }
+    );
+    await store.addTraffic(25, 35, new Date('2026-05-10T08:15:00.000Z'));
+
+    await expect(store.getSnapshot(new Date('2026-05-10T08:20:00.000Z'))).resolves.toMatchObject({
+      stats: {
+        totalUpload: 1025,
+        totalDownload: 1435,
+        todayUpload: 525,
+        todayDownload: 735,
+        totalSource: 'server'
+      }
+    });
+  });
+
+  it('does not hide traffic recorded while a backend report is in flight', async () => {
+    const store = new TrafficStore(dir);
+    const reportStartedAt = new Date('2026-05-10T08:00:00.000Z');
+
+    await store.registerIdentity({
+      userId: 'u_1',
+      deviceId: 'd_1',
+      name: 'Alice',
+      deviceName: 'DESKTOP'
+    });
+    await store.addTraffic(100, 200, reportStartedAt);
+    const report = await store.getOrCreatePendingReport(100, 200, reportStartedAt, {
+      userId: 'u_1',
+      deviceId: 'd_1'
+    });
+    await store.addTraffic(25, 35, new Date('2026-05-10T08:01:00.000Z'));
+    await store.markReported(100, 200, new Date('2026-05-10T08:02:00.000Z'), report?.id, {
+      userId: 'u_1',
+      deviceId: 'd_1'
+    });
+    await store.markServerTotals(
+      {
+        totalUpload: 1000,
+        totalDownload: 1400,
+        todayUpload: 500,
+        todayDownload: 700,
+        date: '2026-05-10'
+      },
+      new Date('2026-05-10T08:02:00.000Z'),
+      { userId: 'u_1', deviceId: 'd_1' },
+      {
+        localDayBaseline: {
+          date: report!.localDate!,
+          upload: report!.localDayUpload!,
+          download: report!.localDayDownload!
+        }
+      }
+    );
+
+    await expect(store.getSnapshot(new Date('2026-05-10T08:03:00.000Z'))).resolves.toMatchObject({
+      stats: {
+        totalUpload: 1025,
+        totalDownload: 1435,
+        todayUpload: 525,
+        todayDownload: 735,
+        pendingUpload: 25,
+        pendingDownload: 35,
+        totalSource: 'server'
+      }
+    });
+  });
+
+  it('atomically replaces a verified identity together with its cloud baselines', async () => {
+    const store = new TrafficStore(dir);
+    const now = new Date('2026-05-10T08:10:00.000Z');
+    await store.registerIdentity({ userId: 'old-user', deviceId: 'device', name: 'Alice', deviceName: 'PC' });
+    await store.addTraffic(100, 200, now, { nodeName: 'Old Node', durationMs: 5_000 });
+
+    const writableStore = store as unknown as { write(value: unknown, backupExisting?: boolean): Promise<void> };
+    const writeSpy = vi.spyOn(writableStore, 'write');
+    const activated = await store.activateIdentity(
+      { userId: 'new-user', deviceId: 'device', name: 'Bob', deviceName: 'PC' },
+      {
+        totalUpload: 4_096,
+        totalDownload: 8_192,
+        todayUpload: 1_024,
+        todayDownload: 2_048,
+        date: '2026-05-10'
+      },
+      now
+    );
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(activated).toMatchObject({
+      identity: { userId: 'new-user', deviceId: 'device', name: 'Bob' },
+      pendingUpload: 0,
+      pendingDownload: 0
+    });
+    await expect(store.getSnapshot(now)).resolves.toMatchObject({
+      identity: { userId: 'new-user', deviceId: 'device', name: 'Bob' },
+      stats: {
+        totalUpload: 4_096,
+        totalDownload: 8_192,
+        todayUpload: 1_024,
+        todayDownload: 2_048,
+        pendingUpload: 0,
+        pendingDownload: 0,
+        totalSource: 'server',
+        nodeUsage: {}
+      }
+    });
+  });
+
+  it('keeps the old identity and usage when the atomic activation write fails', async () => {
+    const store = new TrafficStore(dir);
+    const now = new Date('2026-05-10T08:10:00.000Z');
+    await store.registerIdentity({ userId: 'old-user', deviceId: 'device', name: 'Alice', deviceName: 'PC' });
+    await store.addTraffic(100, 200, now, { nodeName: 'Old Node', durationMs: 5_000 });
+    const before = await store.getSnapshot(now);
+
+    const writableStore = store as unknown as { write(value: unknown, backupExisting?: boolean): Promise<void> };
+    const writeSpy = vi.spyOn(writableStore, 'write').mockRejectedValueOnce(new Error('disk full'));
+    await expect(
+      store.activateIdentity(
+        { userId: 'new-user', deviceId: 'device', name: 'Bob', deviceName: 'PC' },
+        {
+          totalUpload: 4_096,
+          totalDownload: 8_192,
+          todayUpload: 1_024,
+          todayDownload: 2_048,
+          date: '2026-05-10'
+        },
+        now
+      )
+    ).rejects.toThrow('disk full');
+    writeSpy.mockRestore();
+
+    await expect(store.getSnapshot(now)).resolves.toEqual(before);
+  });
+
   it('does not reuse backend totals after the registered identity changes', async () => {
     const store = new TrafficStore(dir);
 
@@ -202,6 +358,97 @@ describe('TrafficStore', () => {
     expect(snapshot.stats.totalDownload).toBe(0);
     expect(snapshot.stats.totalSource).toBe('local');
     expect(snapshot.stats.serverSyncedAt).toBeUndefined();
+  });
+
+  it('clears identity-scoped traffic when switching between verified identities', async () => {
+    const store = new TrafficStore(dir);
+    const recordedAt = new Date('2026-05-10T08:00:00.000Z');
+
+    await store.registerIdentity({
+      userId: 'u_1',
+      deviceId: 'd_1',
+      name: 'Alice',
+      deviceName: 'DESKTOP'
+    });
+    await store.addTraffic(100, 200, recordedAt, { nodeName: 'Node A', durationMs: 5_000 });
+    await store.markServerTotals({ totalUpload: 900, totalDownload: 1200 }, recordedAt);
+    const pendingReport = await store.getOrCreatePendingReport(100, 200, recordedAt, {
+      userId: 'u_1',
+      deviceId: 'd_1'
+    });
+
+    await store.registerIdentity({
+      userId: 'u_2',
+      deviceId: 'd_2',
+      name: 'Bob',
+      deviceName: 'DESKTOP'
+    });
+
+    const snapshot = await store.getSnapshot(recordedAt);
+    const persisted = await store.read();
+    expect(pendingReport).toBeDefined();
+    expect(snapshot.identity).toMatchObject({ userId: 'u_2', deviceId: 'd_2', name: 'Bob' });
+    expect(snapshot.stats).toMatchObject({
+      totalUpload: 0,
+      totalDownload: 0,
+      todayUpload: 0,
+      todayDownload: 0,
+      pendingUpload: 0,
+      pendingDownload: 0,
+      totalSource: 'local',
+      nodeUsage: {},
+      reportStatus: 'idle'
+    });
+    expect(snapshot.stats.serverSyncedAt).toBeUndefined();
+    expect(persisted.pendingReport).toBeUndefined();
+    expect(persisted.daily).toEqual({});
+    expect(persisted.nodeUsage).toEqual({});
+    expect(persisted.lastUpdatedAt).toBeUndefined();
+    expect(persisted.lastReportedAt).toBeUndefined();
+  });
+
+  it('keeps identity-scoped traffic when the same verified identity registers again', async () => {
+    const store = new TrafficStore(dir);
+    const recordedAt = new Date('2026-05-10T08:00:00.000Z');
+
+    await store.registerIdentity({
+      userId: 'u_1',
+      deviceId: 'd_1',
+      name: 'Alice',
+      deviceName: 'DESKTOP'
+    });
+    await store.addTraffic(100, 200, recordedAt, { nodeName: 'Node A', durationMs: 5_000 });
+    await store.markServerTotals({ totalUpload: 900, totalDownload: 1200 }, recordedAt);
+    const pendingReport = await store.getOrCreatePendingReport(100, 200, recordedAt, {
+      userId: 'u_1',
+      deviceId: 'd_1'
+    });
+
+    await store.registerIdentity({
+      userId: 'u_1',
+      deviceId: 'd_1',
+      name: 'Alice',
+      deviceName: 'DESKTOP-RENAMED'
+    });
+
+    const snapshot = await store.getSnapshot(recordedAt);
+    const persisted = await store.read();
+    expect(snapshot.stats).toMatchObject({
+      totalUpload: 1000,
+      totalDownload: 1400,
+      todayUpload: 100,
+      todayDownload: 200,
+      pendingUpload: 100,
+      pendingDownload: 200,
+      totalSource: 'server',
+      nodeUsage: {
+        mostUsed: expect.objectContaining({ name: 'Node A' }),
+        longestUsed: expect.objectContaining({ name: 'Node A' })
+      }
+    });
+    expect(persisted.pendingReport).toEqual(pendingReport);
+    expect(persisted.serverUserId).toBe('u_1');
+    expect(persisted.serverDeviceId).toBe('d_1');
   });
 
   it('does not create a pending report for an identity that changed after the snapshot was read', async () => {
@@ -230,18 +477,20 @@ describe('TrafficStore', () => {
     ).resolves.toBeUndefined();
     await expect(store.getSnapshot()).resolves.toMatchObject({
       identity: { userId: 'u_2', deviceId: 'd_2' },
-      stats: { pendingUpload: 100, pendingDownload: 200 }
+      stats: { pendingUpload: 0, pendingDownload: 0 }
     });
     expect((await store.read()).pendingReport).toBeUndefined();
   });
 
   it('can keep a pending local registration until activation succeeds later', async () => {
     const store = new TrafficStore(dir, { secretStorage: testSecretStorage });
+    const recordedAt = new Date('2026-05-10T08:00:00.000Z');
 
     const pending = await store.registerPendingIdentity({
       name: '张三',
       passphrase: 'secret'
     });
+    await store.addTraffic(100, 200, recordedAt, { nodeName: 'Node A', durationMs: 5_000 });
 
     expect(pending.verificationStatus).toBe('pending');
     await expect(store.getPendingRegistration()).resolves.toEqual({
@@ -258,6 +507,21 @@ describe('TrafficStore', () => {
 
     expect(verified.verificationStatus).toBe('verified');
     await expect(store.getPendingRegistration()).resolves.toBeUndefined();
+    await expect(store.getSnapshot(recordedAt)).resolves.toMatchObject({
+      identity: { userId: 'u_1', deviceId: 'd_1', verificationStatus: 'verified' },
+      stats: {
+        totalUpload: 100,
+        totalDownload: 200,
+        todayUpload: 100,
+        todayDownload: 200,
+        pendingUpload: 100,
+        pendingDownload: 200,
+        nodeUsage: {
+          mostUsed: expect.objectContaining({ name: 'Node A' }),
+          longestUsed: expect.objectContaining({ name: 'Node A' })
+        }
+      }
+    });
   });
 
   it('can clear a failed pending registration so the gate can be shown again', async () => {

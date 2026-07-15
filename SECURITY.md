@@ -2,7 +2,7 @@
 
 ## 支持范围
 
-安全修复只面向最新公开的 `1.5.x` 版本。旧版本用户应先升级到 [最新 Release](https://github.com/fishknowsss/YouYu/releases/latest)，再确认问题是否仍然存在。
+安全修复只面向最新公开的 `1.6.x` 版本。旧版本用户应先升级到 [最新 Release](https://github.com/fishknowsss/YouYu/releases/latest)，再确认问题是否仍然存在。
 
 ## 私下报告漏洞
 
@@ -20,7 +20,11 @@
 ## 仓库与发布要求
 
 - `resources/default-subscription.txt` 必须为空。
-- `resources/default-subscription.in.txt`、`.dev.vars*`、`.wrangler/`、`release/`、`release-archive/` 和 `resources/generated/` 不得提交。
+- `resources/default-subscription.in.txt`、`.dev.vars*`、`.wrangler/`、`release/`、`release-archive/`、`team-builds/`、遗留的 `local-subscription-builds/` 和 `resources/generated/` 不得提交。
 - 公共三通道资产必须由 `npm run dist:win:release` 生成，并通过空内置订阅校验。
 - 推送前应运行 `npm run validate:repo`；正式发布还需完成 [发布检查清单](docs/release-packaging.md)。
 - 发现历史敏感内容时，按 [历史净化流程](docs/security-history-cleanup.md) 完成凭据处置、离线备份、历史改写、远端校验和缓存清理申请。
+
+## 登记口令边界
+
+`REGISTRATION_PASSPHRASE` 是受信团队选择和切换已有姓名档案的共享授权，不是每个姓名独立的账号密码。持有该口令的人可以为已有姓名登记设备，并读取该用户适用的远程配置、累计用量和当日用量。只应在受信团队内分发；疑似泄露时应立即轮换 Cloudflare Secret，并避免在日志、截图、安装包说明或聊天记录中发送。

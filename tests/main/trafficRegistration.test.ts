@@ -82,7 +82,7 @@ describe('createTrafficRegistrationCoordinator', () => {
     expect(harness.releaseTemporaryRuntime).toHaveBeenCalledOnce();
   });
 
-  it('reports temporary runtime cleanup failure after registration succeeds', async () => {
+  it('returns a post-commit warning when temporary runtime cleanup fails after registration succeeds', async () => {
     const harness = createHarness({
       register: async (proxyUrl) => {
         if (!proxyUrl) throw new Error('fetch failed');
@@ -90,7 +90,10 @@ describe('createTrafficRegistrationCoordinator', () => {
     });
     harness.releaseTemporaryRuntime.mockRejectedValueOnce(new Error('proxy restore failed'));
 
-    await expect(harness.coordinator.register(input)).rejects.toThrow('proxy restore failed');
+    await expect(harness.coordinator.register(input)).resolves.toMatchObject({
+      committed: true,
+      postCommitError: expect.objectContaining({ message: 'proxy restore failed' })
+    });
     expect(harness.releaseTemporaryRuntime).toHaveBeenCalledOnce();
   });
 
@@ -101,6 +104,42 @@ describe('createTrafficRegistrationCoordinator', () => {
     await harness.coordinator.register(input);
     expect(harness.registerPendingIdentity).toHaveBeenCalledWith(input);
     expect(harness.releaseTemporaryRuntime).not.toHaveBeenCalled();
+  });
+
+  it('keeps the verified identity when a switch has no fallback subscription', async () => {
+    const directError = new Error('fetch failed');
+    const harness = createHarness({
+      hasSubscription: false,
+      register: async () => Promise.reject(directError)
+    });
+
+    await expect(harness.coordinator.register(input, { preserveExistingIdentity: true })).rejects.toBe(directError);
+    expect(harness.registerPendingIdentity).not.toHaveBeenCalled();
+    expect(harness.acquireTemporaryRuntime).not.toHaveBeenCalled();
+  });
+
+  it('keeps the verified identity when a switch cannot start the temporary runtime', async () => {
+    const startError = new Error('mihomo failed');
+    const harness = createHarness({ register: async () => Promise.reject(new Error('fetch failed')) });
+    harness.acquireTemporaryRuntime.mockRejectedValueOnce(startError);
+
+    await expect(harness.coordinator.register(input, { preserveExistingIdentity: true })).rejects.toBe(startError);
+    expect(harness.registerPendingIdentity).not.toHaveBeenCalled();
+    expect(harness.releaseTemporaryRuntime).not.toHaveBeenCalled();
+  });
+
+  it('keeps the verified identity when a switch proxy retry fails transiently', async () => {
+    const proxyError = new Error('traffic request timed out');
+    const harness = createHarness({
+      register: async (proxyUrl) => {
+        if (!proxyUrl) throw new Error('fetch failed');
+        throw proxyError;
+      }
+    });
+
+    await expect(harness.coordinator.register(input, { preserveExistingIdentity: true })).rejects.toBe(proxyError);
+    expect(harness.registerPendingIdentity).not.toHaveBeenCalled();
+    expect(harness.releaseTemporaryRuntime).toHaveBeenCalledOnce();
   });
 
   it('clears identity and stops the proxy after permanent pending activation failure', async () => {

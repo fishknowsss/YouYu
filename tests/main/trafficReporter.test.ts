@@ -27,6 +27,25 @@ async function rejectDirectFetch(): Promise<Response> {
   throw new TypeError('direct route unavailable');
 }
 
+function toTrafficDateKey(date: Date): string {
+  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function activationPayload(userId: string, deviceId: string, name: string) {
+  return {
+    userId,
+    deviceId,
+    name,
+    traffic: {
+      totalUpload: 0,
+      totalDownload: 0,
+      todayUpload: 0,
+      todayDownload: 0,
+      date: toTrafficDateKey(new Date())
+    }
+  };
+}
+
 describe('TrafficReporter', () => {
   it('marks traffic reporting as not configured when the endpoint is missing', async () => {
     const store = new TrafficStore(dir);
@@ -61,7 +80,7 @@ describe('TrafficReporter', () => {
       expect(body.appVersion).toBe('0.8.6');
       return {
         status: 200,
-        body: { userId: 'user_1', deviceId: 'device_1', name: body.name }
+        body: activationPayload('user_1', 'device_1', String(body.name))
       };
     });
     const store = new TrafficStore(dir);
@@ -87,11 +106,72 @@ describe('TrafficReporter', () => {
     });
   });
 
+  it('uses activation totals as the authoritative baseline without a follow-up heartbeat', async () => {
+    let reportRequests = 0;
+    const endpoint = await startJsonServer(async (_body, request) => {
+      if (request.url === '/api/traffic/report') {
+        reportRequests += 1;
+        return { status: 503, body: { error: 'heartbeat unavailable' } };
+      }
+      return {
+        status: 200,
+        body: {
+          userId: 'cloud-user',
+          deviceId: 'cloud-device',
+          name: 'Cloud User',
+          traffic: {
+            totalUpload: 4096,
+            totalDownload: 8192,
+            todayUpload: 1024,
+            todayDownload: 2048,
+            date: toTrafficDateKey(new Date())
+          }
+        }
+      };
+    });
+    const store = new TrafficStore(dir);
+    const reporter = new TrafficReporter({ store, endpoint, appVersion: '1.6.1' });
+
+    await expect(reporter.register({ name: 'Cloud User', passphrase: 'secret' })).resolves.toMatchObject({
+      userId: 'cloud-user',
+      deviceId: 'cloud-device'
+    });
+    await expect(store.getSnapshot()).resolves.toMatchObject({
+      stats: {
+        totalUpload: 4096,
+        totalDownload: 8192,
+        todayUpload: 1024,
+        todayDownload: 2048,
+        pendingUpload: 0,
+        pendingDownload: 0,
+        totalSource: 'server'
+      }
+    });
+    expect(reportRequests).toBe(0);
+  });
+
+  it('rejects an incomplete activation baseline before replacing the local identity', async () => {
+    const endpoint = await startJsonServer(async () => ({
+      status: 200,
+      body: { userId: 'new-user', deviceId: 'device', name: 'Bob' }
+    }));
+    const store = new TrafficStore(dir);
+    await store.registerIdentity({ userId: 'old-user', deviceId: 'device', name: 'Alice', deviceName: 'PC' });
+    await store.addTraffic(100, 200);
+    const before = await store.getSnapshot();
+    const reporter = new TrafficReporter({ store, endpoint, appVersion: '1.6.1' });
+
+    await expect(reporter.register({ name: 'Bob', passphrase: 'secret' })).rejects.toThrow(
+      'traffic activation response invalid'
+    );
+    await expect(store.getSnapshot()).resolves.toEqual(before);
+  });
+
   it('uses the injected direct fetch before a configured proxy without changing the activation body', async () => {
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ userId: 'user_1', deviceId: 'device_1', name: 'Alice' }), { status: 200 })
+        new Response(JSON.stringify(activationPayload('user_1', 'device_1', 'Alice')), { status: 200 })
       )
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ ok: true, traffic: { totalUpload: 0, totalDownload: 0 } }), { status: 200 })
@@ -117,7 +197,7 @@ describe('TrafficReporter', () => {
       deviceSeed: expect.any(String),
       appVersion: '1.6.0'
     });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('reuses the exact activation body and device seed when a retryable direct response falls back', async () => {
@@ -127,7 +207,7 @@ describe('TrafficReporter', () => {
       proxiedBody = body;
       return {
         status: 200,
-        body: { userId: 'user_1', deviceId: 'device_1', name: 'Alice' }
+        body: activationPayload('user_1', 'device_1', 'Alice')
       };
     });
     const fetch = vi
@@ -599,7 +679,7 @@ describe('TrafficReporter', () => {
     expect(onIdentityInvalidated).not.toHaveBeenCalled();
     await expect(store.getSnapshot()).resolves.toMatchObject({
       identity: { userId: 'new-user', deviceId: 'new-device' },
-      stats: { pendingUpload: 100, pendingDownload: 200, reportStatus: 'pending' }
+      stats: { pendingUpload: 0, pendingDownload: 0, reportStatus: 'idle' }
     });
   });
 
@@ -656,11 +736,11 @@ describe('TrafficReporter', () => {
     await expect(store.getSnapshot()).resolves.toMatchObject({
       identity: { userId: 'new-user', deviceId: 'new-device' },
       stats: {
-        pendingUpload: 100,
-        pendingDownload: 200,
+        pendingUpload: 0,
+        pendingDownload: 0,
         totalSource: 'local',
-        totalUpload: 100,
-        totalDownload: 200
+        totalUpload: 0,
+        totalDownload: 0
       }
     });
   });

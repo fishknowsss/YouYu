@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { refreshTeamBuilds } from './team-builds.mjs';
 
 const root = process.cwd();
 const releaseDir = join(root, 'release');
@@ -30,10 +31,13 @@ try {
   ]);
   await run('npm', ['run', 'smoke']);
 
+  const teamBuilds = await refreshTeamBuilds({ root, sourceDir: archive, version });
+
   const entries = (await readdir(releaseDir))
     .filter((name) => name.startsWith(`YouYu-${version}-x64`) || name === 'latest.yml')
     .sort();
   console.log(entries.join('\n'));
+  console.log(`team-builds:\n${teamBuilds.map((path) => path.slice(root.length + 1)).join('\n')}`);
 } finally {
   await rm(archive, { recursive: true, force: true });
 }

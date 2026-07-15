@@ -1960,39 +1960,116 @@ async function repairProxy(signal?: AbortSignal, options: NetworkRepairOptions =
 
 async function registerTrafficIdentity(input: Parameters<TrafficReporter['register']>[0]): Promise<AppSnapshot> {
   const previousIdentity = (await trafficStore.getSnapshot()).identity;
-  await trafficRegistration.register(input);
-  const nextIdentity = (await trafficStore.getSnapshot()).identity;
-  const identityChanged =
-    !previousIdentity ||
-    !nextIdentity ||
-    previousIdentity.userId !== nextIdentity.userId ||
-    previousIdentity.deviceId !== nextIdentity.deviceId ||
-    previousIdentity.verificationStatus !== nextIdentity.verificationStatus;
-
-  if (identityChanged) {
-    await applyRemoteSubscription(undefined);
-    const activeIntentGeneration = runtimeIntent.capture();
-    if (activeIntentGeneration !== undefined) {
-      const newIntentGeneration = runtimeIntent.requestStart();
-      await syncRemoteConfig({
-        proxyUrl: getRuntimeTrafficProxyUrl()
-      });
-      await restartLifecycleForIntent(newIntentGeneration);
-      trafficTracker.start();
-      trafficReporter.start();
-    }
-  } else if (lifecycle.getStatus() === 'running') {
-    await syncRemoteConfig({
-      proxyUrl: getRuntimeTrafficProxyUrl(),
-      restartIfRunning: true,
-      intentGeneration: runtimeIntent.capture()
-    });
+  const switchingVerifiedIdentity = Boolean(previousIdentity && previousIdentity.verificationStatus !== 'pending');
+  const runtimeWasRunning = lifecycle.getStatus() === 'running';
+  let trafficCollectionPaused = false;
+  let postCommitIssue = false;
+  const recordPostCommitIssue = (context: string, error: unknown) => {
+    postCommitIssue = true;
+    recordError(context, error);
+  };
+  const resumeTrafficCollection = () => {
+    if (!trafficCollectionPaused || !runtimeWasRunning || lifecycle.getStatus() !== 'running') return;
     trafficTracker.start();
     trafficReporter.start();
+  };
+
+  let registrationResult: Awaited<ReturnType<typeof trafficRegistration.register>>;
+  try {
+    if (switchingVerifiedIdentity) {
+      await trafficTracker.flush();
+      trafficTracker.stop();
+      trafficReporter.stop();
+      trafficCollectionPaused = true;
+      await trafficReporter.reportPending();
+      const settled = await trafficStore.getSnapshot();
+      if (
+        settled.stats.pendingUpload > 0 ||
+        settled.stats.pendingDownload > 0 ||
+        settled.stats.totalSource !== 'server'
+      ) {
+        throw new Error('当前用户用量尚未同步，请稍后重试');
+      }
+    }
+
+    registrationResult = await trafficRegistration.register(input, {
+      preserveExistingIdentity: switchingVerifiedIdentity
+    });
+  } catch (error) {
+    resumeTrafficCollection();
+    throw error;
   }
-  startRemoteConfigPolling();
-  clearLastError();
-  return createSnapshot();
+
+  if (registrationResult.postCommitError) {
+    recordPostCommitIssue(
+      '\u7528\u6237\u5df2\u5207\u6362\uff0c\u4e34\u65f6\u4ee3\u7406\u6536\u5c3e\u5931\u8d25',
+      registrationResult.postCommitError
+    );
+  }
+
+  try {
+    const nextIdentity = (await trafficStore.getSnapshot()).identity;
+    const identityChanged =
+      !previousIdentity ||
+      !nextIdentity ||
+      previousIdentity.userId !== nextIdentity.userId ||
+      previousIdentity.deviceId !== nextIdentity.deviceId ||
+      previousIdentity.verificationStatus !== nextIdentity.verificationStatus;
+
+    if (identityChanged) {
+      try {
+        await applyRemoteSubscription(undefined);
+      } catch (error) {
+        recordPostCommitIssue(
+          '\u7528\u6237\u5df2\u5207\u6362\uff0c\u65e7\u8fdc\u7a0b\u914d\u7f6e\u6e05\u7406\u5931\u8d25',
+          error
+        );
+      }
+      const activeIntentGeneration = runtimeIntent.capture();
+      const newIntentGeneration = activeIntentGeneration === undefined ? undefined : runtimeIntent.requestStart();
+      try {
+        await syncRemoteConfig({
+          proxyUrl: getRuntimeTrafficProxyUrl(),
+          throwOnError: true
+        });
+      } catch (error) {
+        recordPostCommitIssue(
+          '\u7528\u6237\u5df2\u5207\u6362\uff0c\u65b0\u7528\u6237\u914d\u7f6e\u540c\u6b65\u5931\u8d25',
+          error
+        );
+      }
+      if (newIntentGeneration !== undefined) {
+        try {
+          await restartLifecycleForIntent(newIntentGeneration);
+          trafficTracker.start();
+          trafficReporter.start();
+        } catch (error) {
+          recordPostCommitIssue('\u7528\u6237\u5df2\u5207\u6362\uff0c\u4ee3\u7406\u91cd\u542f\u5931\u8d25', error);
+        }
+      }
+    } else if (lifecycle.getStatus() === 'running') {
+      try {
+        await syncRemoteConfig({
+          proxyUrl: getRuntimeTrafficProxyUrl(),
+          restartIfRunning: true,
+          throwOnError: true,
+          intentGeneration: runtimeIntent.capture()
+        });
+        trafficTracker.start();
+        trafficReporter.start();
+      } catch (error) {
+        recordPostCommitIssue(
+          '\u7528\u6237\u5df2\u767b\u8bb0\uff0c\u8fdc\u7a0b\u914d\u7f6e\u5237\u65b0\u5931\u8d25',
+          error
+        );
+      }
+    }
+    startRemoteConfigPolling();
+    if (!postCommitIssue) clearLastError();
+    return createSnapshot();
+  } finally {
+    resumeTrafficCollection();
+  }
 }
 
 async function cancelProxyStart(): Promise<void> {

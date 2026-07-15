@@ -425,7 +425,15 @@ export function createDevYouYuApi(): YouYuApi {
           registeredAt: new Date().toISOString()
         },
         traffic: {
-          ...snapshot.traffic,
+          totalUpload: 0,
+          totalDownload: 0,
+          todayUpload: 0,
+          todayDownload: 0,
+          pendingUpload: 0,
+          pendingDownload: 0,
+          totalSource: 'server',
+          serverSyncedAt: new Date().toISOString(),
+          nodeUsage: {},
           reportStatus: 'synced'
         }
       });

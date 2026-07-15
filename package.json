@@ -1,6 +1,6 @@
 {
   "name": "youyu",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "private": true,
   "author": "118 Studio",
   "description": "YouYu Windows proxy desktop app",
@@ -16,7 +16,7 @@
     "test": "vitest run",
     "test:worker": "node --import tsx --test cloudflare/youyu-traffic/test/*.test.mjs",
     "typecheck:worker": "tsc -p cloudflare/youyu-traffic/tsconfig.json",
-    "build:worker": "wrangler deploy --dry-run --config cloudflare/youyu-traffic/wrangler.toml --outdir out/worker",
+    "build:worker": "wrangler deploy --config cloudflare/youyu-traffic/wrangler.toml --dry-run --outdir out/worker",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

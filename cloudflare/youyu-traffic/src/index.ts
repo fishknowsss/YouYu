@@ -24,6 +24,7 @@ type TrafficReportInput = {
 };
 
 type TrafficSummary = {
+  date: string;
   totalUpload: number;
   totalDownload: number;
   deviceTotalUpload: number;
@@ -92,6 +93,7 @@ const ACTIVATION_MAX_NAME_LENGTH = 80;
 const ACTIVATION_MAX_DEVICE_NAME_LENGTH = 120;
 const ACTIVATION_MAX_PLATFORM_LENGTH = 32;
 const ACTIVATION_MAX_APP_VERSION_LENGTH = 64;
+const TRAFFIC_TIME_ZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 export type RetentionCleanupResult = {
   cutoff: string;
@@ -219,7 +221,7 @@ async function activate(request: Request, env: Env): Promise<Response> {
     consumeRateLimitAttempt(env, rateLimitKey, 8, 15 * 60 * 1000),
     consumeRateLimitAttempt(env, ipRateLimitKey, 24, 15 * 60 * 1000)
   ]);
-  if (passphrase !== expectedPassphrase) {
+  if (!constantTimeEqual(passphrase, expectedPassphrase)) {
     throw new HttpError(403, 'invalid passphrase');
   }
   await Promise.all([clearRateLimit(env, rateLimitKey), clearRateLimit(env, ipRateLimitKey)]);
@@ -230,31 +232,21 @@ async function activate(request: Request, env: Env): Promise<Response> {
   await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO users (id, name, normalized_name, status, created_at)
-       SELECT ?, ?, ?, ?, ?
-       WHERE NOT EXISTS (SELECT 1 FROM devices WHERE device_seed = ?)`
-    ).bind(proposedUserId, name, normalizedName, 'active', now, deviceSeed),
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(proposedUserId, name, normalizedName, 'active', now),
     env.DB.prepare(
       `INSERT OR IGNORE INTO devices
          (id, user_id, device_seed, device_name, platform, app_version, first_seen_at, last_seen_at)
        SELECT ?, users.id, ?, ?, ?, ?, ?, ?
        FROM users
-       WHERE users.id = ?`
-    ).bind(proposedDeviceId, deviceSeed, deviceName, platform, appVersion, now, now, proposedUserId),
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO devices
-         (id, user_id, device_seed, device_name, platform, app_version, first_seen_at, last_seen_at)
-       SELECT ?, users.id, ?, ?, ?, ?, ?, ?
-       FROM users
-       WHERE users.normalized_name = ?
-         AND NOT EXISTS (SELECT 1 FROM devices WHERE devices.user_id = users.id)
-         AND NOT EXISTS (SELECT 1 FROM devices WHERE devices.device_seed = ?)`
-    ).bind(proposedDeviceId, deviceSeed, deviceName, platform, appVersion, now, now, normalizedName, deviceSeed),
+       WHERE users.normalized_name = ?`
+    ).bind(proposedDeviceId, deviceSeed, deviceName, platform, appVersion, now, now, normalizedName),
     env.DB.prepare(
       `UPDATE devices
-       SET device_name = ?, platform = ?, app_version = ?, last_seen_at = ?
-       WHERE device_seed = ?
-         AND user_id = (SELECT id FROM users WHERE normalized_name = ?)`
-    ).bind(deviceName, platform, appVersion, now, deviceSeed, normalizedName)
+       SET user_id = (SELECT id FROM users WHERE normalized_name = ?),
+           device_name = ?, platform = ?, app_version = ?, last_seen_at = ?
+       WHERE device_seed = ?`
+    ).bind(normalizedName, deviceName, platform, appVersion, now, deviceSeed)
   ]);
 
   const registration = await env.DB.prepare(
@@ -267,10 +259,18 @@ async function activate(request: Request, env: Env): Promise<Response> {
     .first<{ userId: string; name: string; deviceId: string }>();
   if (!registration) throw new HttpError(409, 'registration conflict');
 
+  const traffic = await getTrafficSummary(
+    env,
+    registration.userId,
+    registration.deviceId,
+    toTrafficDateKey(new Date(now))
+  );
+
   return json({
     userId: registration.userId,
     deviceId: registration.deviceId,
-    name: registration.name
+    name: registration.name,
+    traffic
   });
 }
 
@@ -1080,7 +1080,7 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
   const upload = normalizeBytes(input.uploadDelta);
   const download = normalizeBytes(input.downloadDelta);
   const now = new Date().toISOString();
-  const date = now.slice(0, 10);
+  const date = toTrafficDateKey(new Date(now));
 
   if (!userId || !deviceId) throw new HttpError(400, 'missing identity');
   if (!reportId) throw new HttpError(400, 'missing report id');
@@ -1236,6 +1236,7 @@ async function getTrafficSummary(env: Env, userId: string, deviceId: string, dat
     .first<{ upload: number; download: number }>();
 
   return {
+    date,
     totalUpload: normalizeBytes(totals?.totalUpload),
     totalDownload: normalizeBytes(totals?.totalDownload),
     deviceTotalUpload: normalizeBytes(deviceTotals?.totalUpload),
@@ -1244,6 +1245,10 @@ async function getTrafficSummary(env: Env, userId: string, deviceId: string, dat
     todayDownload: normalizeBytes(today?.download),
     updatedAt: new Date().toISOString()
   };
+}
+
+function toTrafficDateKey(date: Date): string {
+  return new Date(date.getTime() + TRAFFIC_TIME_ZONE_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 async function listUsers(env: Env): Promise<Response> {

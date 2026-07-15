@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
@@ -11,34 +12,81 @@ const adminToken = 'admin-secret';
 const maxRequestBodyBytes = 16 * 1024;
 const maxAdminConfigBodyBytes = 64 * 1024;
 
-test('an existing name cannot attach a different device seed', async (context) => {
+test('an existing name attaches another device to the same user data', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
+  const firstSeed = '11111111-1111-4111-8111-111111111111';
+  const secondSeed = '22222222-2222-4222-8222-222222222222';
+  const today = toTrafficDateKey(new Date());
 
   const first = await activate(database, {
     name: 'Alice',
-    deviceSeed: '11111111-1111-4111-8111-111111111111'
+    deviceSeed: firstSeed
   });
   assert.equal(first.status, 200);
   const firstIdentity = await first.json();
-
-  const conflicting = await activate(database, {
-    name: ' Alice ',
-    deviceSeed: '22222222-2222-4222-8222-222222222222'
+  await database
+    .prepare(
+      `INSERT INTO traffic_daily
+         (user_id, device_id, date, upload_bytes, download_bytes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(firstIdentity.userId, firstIdentity.deviceId, today, 4096, 8192, new Date().toISOString())
+    .run();
+  const configWrite = await updateAdminUserConfig(database, firstIdentity.userId, {
+    subscriptionUrl: 'https://example.com/alice-sub',
+    preferredNode: 'Alice Node'
   });
-  assert.equal(conflicting.status, 409);
-  assert.deepEqual(await conflicting.json(), { error: 'registration conflict' });
-  assert.equal(database.queryAll('SELECT id FROM devices WHERE user_id = ?', firstIdentity.userId).length, 1);
+  assert.equal(configWrite.status, 200);
+
+  const attached = await activate(database, {
+    name: ' Alice ',
+    deviceSeed: secondSeed
+  });
+  assert.equal(attached.status, 200);
+  const attachedIdentity = await attached.json();
+  assert.equal(attachedIdentity.userId, firstIdentity.userId);
+  assert.notEqual(attachedIdentity.deviceId, firstIdentity.deviceId);
+  assert.deepEqual(trafficWithoutTimestamp(attachedIdentity.traffic), {
+    date: today,
+    totalUpload: 4096,
+    totalDownload: 8192,
+    deviceTotalUpload: 0,
+    deviceTotalDownload: 0,
+    todayUpload: 4096,
+    todayDownload: 8192
+  });
+  assert.equal(database.queryAll('SELECT id FROM devices WHERE user_id = ?', firstIdentity.userId).length, 2);
+
+  const config = await getClientConfig(database, attachedIdentity, secondSeed);
+  assert.equal(config.status, 200);
+  const configBody = await config.json();
+  assert.equal(configBody.config.subscriptionUrl, 'https://example.com/alice-sub');
+  assert.equal(configBody.config.preferredNode, 'Alice Node');
+  assert.equal(configBody.config.enabled, true);
 
   const retry = await activate(database, {
     name: 'ALICE',
-    deviceSeed: '11111111-1111-4111-8111-111111111111'
+    deviceSeed: firstSeed
   });
   assert.equal(retry.status, 200);
-  assert.deepEqual(await retry.json(), firstIdentity);
+  const retriedIdentity = await retry.json();
+  assert.equal(retriedIdentity.userId, firstIdentity.userId);
+  assert.equal(retriedIdentity.deviceId, firstIdentity.deviceId);
+  assert.equal(retriedIdentity.name, firstIdentity.name);
+  assert.deepEqual(trafficWithoutTimestamp(retriedIdentity.traffic), {
+    date: today,
+    totalUpload: 4096,
+    totalDownload: 8192,
+    deviceTotalUpload: 4096,
+    deviceTotalDownload: 8192,
+    todayUpload: 4096,
+    todayDownload: 8192
+  });
+  assert.equal(database.queryAll('SELECT id FROM devices WHERE user_id = ?', firstIdentity.userId).length, 2);
 });
 
-test('an orphaned existing user atomically accepts only one fresh device seed', async (context) => {
+test('an orphaned existing user atomically accepts concurrent fresh devices', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
   await database
@@ -57,30 +105,99 @@ test('an orphaned existing user atomically accepts only one fresh device seed', 
     })
   ]);
 
-  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
-  const accepted = responses.find((response) => response.status === 200);
-  assert.ok(accepted);
-  assert.equal((await accepted.json()).userId, 'orphan-user');
-  assert.equal(database.queryAll('SELECT id FROM devices WHERE user_id = ?', 'orphan-user').length, 1);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 200]);
+  assert.deepEqual(await Promise.all(responses.map(async (response) => (await response.json()).userId)), [
+    'orphan-user',
+    'orphan-user'
+  ]);
+  assert.equal(database.queryAll('SELECT id FROM devices WHERE user_id = ?', 'orphan-user').length, 2);
 });
 
-test('an existing device seed cannot move to a different name', async (context) => {
+test('an existing device can switch to another existing user name', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
   const firstSeed = '11111111-1111-4111-8111-111111111111';
+  const bobSeed = '22222222-2222-4222-8222-222222222222';
+  const today = toTrafficDateKey(new Date());
 
   const first = await activate(database, { name: 'Alice', deviceSeed: firstSeed });
   assert.equal(first.status, 200);
+  const firstIdentity = await first.json();
+  await database
+    .prepare(
+      `INSERT INTO traffic_daily
+         (user_id, device_id, date, upload_bytes, download_bytes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(firstIdentity.userId, firstIdentity.deviceId, today, 100, 200, new Date().toISOString())
+    .run();
 
-  const conflicting = await activate(database, { name: 'Bob', deviceSeed: firstSeed });
-  assert.equal(conflicting.status, 409);
-  assert.deepEqual(await conflicting.json(), { error: 'registration conflict' });
-
-  const independent = await activate(database, {
+  const bob = await activate(database, {
     name: 'Bob',
-    deviceSeed: '22222222-2222-4222-8222-222222222222'
+    deviceSeed: bobSeed
   });
-  assert.equal(independent.status, 200);
+  assert.equal(bob.status, 200);
+  const bobIdentity = await bob.json();
+  await database
+    .prepare(
+      `INSERT INTO traffic_daily
+         (user_id, device_id, date, upload_bytes, download_bytes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(bobIdentity.userId, bobIdentity.deviceId, today, 700, 900, new Date().toISOString())
+    .run();
+  const configWrite = await updateAdminUserConfig(database, bobIdentity.userId, {
+    subscriptionUrl: 'https://example.com/bob-sub',
+    preferredNode: 'Bob Node'
+  });
+  assert.equal(configWrite.status, 200);
+
+  const switched = await activate(database, { name: 'Bob', deviceSeed: firstSeed });
+  assert.equal(switched.status, 200);
+  const switchedIdentity = await switched.json();
+  assert.equal(switchedIdentity.userId, bobIdentity.userId);
+  assert.equal(switchedIdentity.name, bobIdentity.name);
+  assert.equal(switchedIdentity.deviceId, firstIdentity.deviceId);
+  assert.deepEqual(trafficWithoutTimestamp(switchedIdentity.traffic), {
+    date: today,
+    totalUpload: 700,
+    totalDownload: 900,
+    deviceTotalUpload: 0,
+    deviceTotalDownload: 0,
+    todayUpload: 700,
+    todayDownload: 900
+  });
+  assert.equal(
+    database.queryAll('SELECT user_id FROM devices WHERE device_seed = ?', firstSeed)[0]?.user_id,
+    bobIdentity.userId
+  );
+  const aliceHistory = database.queryAll(
+    `SELECT user_id, device_id, upload_bytes, download_bytes
+     FROM traffic_daily
+     WHERE user_id = ? AND device_id = ?`,
+    firstIdentity.userId,
+    firstIdentity.deviceId
+  );
+  assert.equal(aliceHistory.length, 1);
+  assert.deepEqual(
+    { ...aliceHistory[0] },
+    {
+      user_id: firstIdentity.userId,
+      device_id: firstIdentity.deviceId,
+      upload_bytes: 100,
+      download_bytes: 200
+    }
+  );
+
+  const config = await getClientConfig(database, switchedIdentity, firstSeed);
+  assert.equal(config.status, 200);
+  const configBody = await config.json();
+  assert.equal(configBody.config.subscriptionUrl, 'https://example.com/bob-sub');
+  assert.equal(configBody.config.preferredNode, 'Bob Node');
+  assert.equal(
+    database.queryAll('SELECT user_id FROM user_remote_config WHERE user_id = ?', bobIdentity.userId).length,
+    1
+  );
 });
 
 test('activation rejects malformed JSON as a bad request', async (context) => {
@@ -473,6 +590,38 @@ async function activate(database, input) {
       REGISTRATION_PASSPHRASE: registrationPassphrase
     }
   );
+}
+
+async function getClientConfig(database, identity, deviceSeed) {
+  const url = new URL('https://worker.example/api/config');
+  url.searchParams.set('userId', identity.userId);
+  url.searchParams.set('deviceId', identity.deviceId);
+  const timestamp = String(Date.now());
+  const bodyHash = createHash('sha256').update('').digest('hex');
+  const canonical = ['GET', `${url.pathname}${url.search}`, timestamp, bodyHash].join('\n');
+  const signature = createHmac('sha256', deviceSeed).update(canonical).digest('hex');
+
+  return worker.fetch(
+    new Request(url, {
+      headers: {
+        'x-youyu-timestamp': timestamp,
+        'x-youyu-signature': signature
+      }
+    }),
+    {
+      DB: database,
+      REGISTRATION_PASSPHRASE: registrationPassphrase
+    }
+  );
+}
+
+function trafficWithoutTimestamp(traffic) {
+  const { updatedAt: _updatedAt, ...summary } = traffic;
+  return summary;
+}
+
+function toTrafficDateKey(date) {
+  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 async function updateAdminConfig(database, input) {

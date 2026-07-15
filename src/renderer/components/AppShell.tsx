@@ -15,9 +15,18 @@ type AppShellProps = {
   children: ReactNode;
   onPageChange: (page: PageKey) => void;
   onAdvancedUnlock?: () => void;
+  onRegistrationRequest?: () => void;
 };
 
-export function AppShell({ page, usageMode, inert = false, children, onPageChange, onAdvancedUnlock }: AppShellProps) {
+export function AppShell({
+  page,
+  usageMode,
+  inert = false,
+  children,
+  onPageChange,
+  onAdvancedUnlock,
+  onRegistrationRequest
+}: AppShellProps) {
   const navItems: Array<{ key: PageKey; label: string }> = [
     { key: 'home', label: '首页' },
     { key: 'nodes', label: '节点' },
@@ -49,15 +58,21 @@ export function AppShell({ page, usageMode, inert = false, children, onPageChang
               <button
                 key={item.key}
                 className={page === item.key ? 'active' : ''}
+                aria-current={page === item.key ? 'page' : undefined}
                 onClick={() => onPageChange(item.key)}
               >
                 {item.label}
               </button>
             ))}
           </nav>
-          <div className="version-chip" aria-label={`版本 ${versionLabel}`}>
+          <button
+            type="button"
+            className="version-chip"
+            aria-label={`重新登记，当前版本 ${versionLabel}`}
+            onClick={onRegistrationRequest}
+          >
             <span>{versionLabel}</span>
-          </div>
+          </button>
         </aside>
       )}
       <main className="main-surface">{children}</main>

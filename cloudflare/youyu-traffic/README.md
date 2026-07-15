@@ -42,6 +42,13 @@ It does not deploy the Worker.
 
 Use your own private value for `REGISTRATION_PASSPHRASE`.
 
+`REGISTRATION_PASSPHRASE` is the authorization boundary for team profile selection. A client with the valid shared
+passphrase may register a new name, attach another device seed to an existing name, or move the current stable device
+seed to another existing name. The existing user's D1 identity, remote configuration, cumulative traffic totals, and
+current-day traffic totals are reused.
+Names are not separate credentials, so distribute this passphrase only to trusted team members and rotate it if it is
+exposed. Repeating activation with the same device seed and normalized name is idempotent.
+
 The production Worker is exposed through the `youyu-api.fishknowsss.com` Custom Domain declared in `wrangler.toml`.
 Cloudflare manages its DNS record and certificate; the existing `workers.dev` address remains available for legacy
 diagnostics. After deploy, put the production Custom Domain URL into:

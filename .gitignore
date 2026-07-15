@@ -2,6 +2,9 @@ node_modules/
 out/
 release/
 release-archive/
+team-builds/
+/.team-builds-staging-*/
+/.team-builds-previous/
 local-subscription-builds/
 .playwright-mcp/
 .codex/

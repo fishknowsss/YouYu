@@ -1,6 +1,6 @@
 # YouYu Release Packaging
 
-本地交付三包统一运行 `npm run dist:win:local`。该命令最终在 `release/` 留下标准空订阅安装包，以及内置私有订阅的 `-in`、`-no` 安装包。不要把 `npm run dist:win:release` 生成的同名 `-in`、`-no` 公开更新包当作本地内置版本；公开更新包按设计全部为空订阅。
+本地交付三包统一运行 `npm run dist:win:local`。该命令最终在 `release/` 留下标准空订阅安装包，以及内置私有订阅的 `-in`、`-no` 安装包；全部校验成功后，还会自动刷新仅供团队手动分发的扁平 `team-builds/` 双包目录。不要把 `npm run dist:win:release` 生成的同名 `-in`、`-no` 公开更新包当作本地内置版本；公开更新包按设计全部为空订阅。
 
 这份文档记录 YouYu 的打包、版本号、订阅内置和本地归档规则。以后处理打包、发布、版本号、订阅默认值时，先读这里。
 
@@ -66,43 +66,43 @@ Copy-Item "$archive/YouYu-$version-x64-in.exe" "release/YouYu-$version-x64-in.ex
 Copy-Item "$archive/YouYu-$version-x64-in.exe.blockmap" "release/YouYu-$version-x64-in.exe.blockmap" -Force
 
 npm run smoke
+
+node --input-type=module -e "import { refreshTeamBuilds } from './scripts/team-builds.mjs'; await refreshTeamBuilds({ root: process.cwd(), sourceDir: process.argv[1], version: process.argv[2] });" "$archive" "$version"
+
 Remove-Item -LiteralPath $archive -Recurse -Force
 ```
 
-`release/`、`release-archive/`、`local-subscription-builds/` 和 `resources/generated/` 都不应该提交。
+`release/`、`release-archive/`、`team-builds/`、遗留的 `local-subscription-builds/` 和 `resources/generated/` 都不应该提交。
 
 ## 私有双包留存规则
 
-每个新版本完成 `npm run dist:win:local` 后，必须另存一份仅供本机或内部分发的带订阅双包：
+每次 `npm run dist:win:local` 全部构建、校验和冒烟测试成功后，脚本会自动替换仅供团队手动分发的带订阅双包：
 
 ```text
-local-subscription-builds/<version>/YouYu-<version>-x64-in.exe
-local-subscription-builds/<version>/YouYu-<version>-x64-in.exe.blockmap
-local-subscription-builds/<version>/YouYu-<version>-x64-no.exe
-local-subscription-builds/<version>/YouYu-<version>-x64-no.exe.blockmap
+team-builds/YouYu-<version>-x64-in.exe
+team-builds/YouYu-<version>-x64-no.exe
 ```
 
-- 这里只保留内置私有订阅的 `-in` 和 `-no` 两版，不复制标准无后缀版。
-- 文件必须来自 `npm run dist:win:local` 的最终本地产物，不能使用 `npm run dist:win:release` 生成的同名空订阅公开更新包。
+- `team-builds/` 只表示“当前可以直接发给团队的安装包”，目录内固定只有当前版本的两个 EXE；不分版本子目录，不保留旧版本，不复制标准无后缀版。
+- `.blockmap` 是 electron-updater 差分下载使用的分块索引。团队成员手动接收并运行完整 EXE 时不需要它，因此不得复制到 `team-builds/`；公开 `release/`、`release-archive/` 和 GitHub Release 仍需保留对应 `.blockmap`。
+- 文件必须来自 `npm run dist:win:local` 暂存的私有产物，不能使用 `npm run dist:win:release` 生成的同名空订阅公开更新包。
 - 复制前应确认 `-in`、`-no` 安装包内的 `resources/default-subscription.txt` 非空，并与本机 `resources/default-subscription.in.txt` 一致。
-- `local-subscription-builds/` 整体由 `.gitignore` 排除，只在本机保存；不得提交、上传 GitHub Release、放入 Actions artifact 或作为公开更新资产来源。
-- 该目录按版本分文件夹长期保留，不套用 `release-archive/` 的“当前版本加前两个版本”清理规则。
+- `team-builds/` 整体由 `.gitignore` 排除，只在本机保存；不得提交、上传 GitHub Release、放入 Actions artifact 或作为公开更新资产来源。
+- 打包失败时不能破坏上一次可用双包；新双包准备完整后再整体替换旧目录。
 
-PowerShell 留存命令：
+通常不需要手动复制；`npm run dist:win:local` 已完成留存。排查脚本时如需手动刷新，可在确认当前 `release/` 中的 `-in`、`-no` 确为私有构建后执行：
 
 ```powershell
 $version = node -p "require('./package.json').version"
-$target = Join-Path 'local-subscription-builds' $version
-New-Item -ItemType Directory -Force -Path $target | Out-Null
-Copy-Item "release/YouYu-$version-x64-in.exe" $target -Force
-Copy-Item "release/YouYu-$version-x64-in.exe.blockmap" $target -Force
-Copy-Item "release/YouYu-$version-x64-no.exe" $target -Force
-Copy-Item "release/YouYu-$version-x64-no.exe.blockmap" $target -Force
+$source = (Resolve-Path 'release').Path
+node --input-type=module -e "import { refreshTeamBuilds } from './scripts/team-builds.mjs'; await refreshTeamBuilds({ root: process.cwd(), sourceDir: process.argv[1], version: process.argv[2] });" "$source" "$version"
 ```
+
+两处排查命令都复用正式打包脚本的原子刷新逻辑：先在仓库根目录准备完整暂存目录，再整体交换；任一源文件缺失或复制失败时不会先删除上一次可用双包。不要改回“先删 `team-builds/`、再逐个复制”的手工流程。
 
 ## 本地归档规则
 
-`release-archive/` 只用于本机备份公开更新产物，不用于打包中转，也不提交到 Git。带私有订阅的 `-in`、`-no` 双包只进入 `local-subscription-builds/<version>/`，避免与同名公开空订阅包混淆。
+`release-archive/` 只用于本机备份公开更新产物，不用于打包中转，也不提交到 Git。它保留 `.blockmap`，因为这些文件服务自动更新。带私有订阅的 `-in`、`-no` 手动分发双包只进入扁平 `team-builds/`，不承担历史归档职责。
 
 归档保留范围：
 
@@ -225,7 +225,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    node -p "require('./package.json').version"
    ```
 
-   只提交本次源码、文档、版本号和测试改动。不要提交 `release/`、`release-archive/`、`local-subscription-builds/`、`out/`、`resources/generated/` 或本机私有订阅文件。
+   只提交本次源码、文档、版本号和测试改动。不要提交 `release/`、`release-archive/`、`team-builds/`、遗留的 `local-subscription-builds/`、`out/`、`resources/generated/` 或本机私有订阅文件。
 
 2. 运行本地验证。
 
@@ -250,7 +250,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    npm run dist:win:local
    ```
 
-   反向确认 `-in`、`-no` 的内置订阅与 `resources/default-subscription.in.txt` 一致后，立即按“私有双包留存规则”复制到 `local-subscription-builds/<version>/`。这个留存动作必须在下一条公开打包命令前完成，因为公开打包会用空订阅同名文件覆盖 `release/`。
+   该命令会在所有构建与 `smoke` 成功后，从私有临时产物自动刷新 `team-builds/`。反向确认其中两个 EXE 的内置订阅与 `resources/default-subscription.in.txt` 一致，并确认目录中没有标准版、版本子目录或 `.blockmap`。后续公开打包可以覆盖 `release/`，但不得改写 `team-builds/`。
 
    再生成三通道公开更新资产：
 
@@ -278,7 +278,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
    `release-archive/` 只保留当前版本和前两个构建版本的公开更新产物。归档当前版本时至少保留三个公开空订阅安装包和对应 `.blockmap`；可以同时保留 `<version>-latest.yml` 方便本机追溯。删除旧版本前先确认目标路径在 `release-archive/` 内。
 
-   确认 `local-subscription-builds/<version>/` 已在公开打包前留存本地内置订阅的 `-in`、`-no` 安装包及对应 `.blockmap`。不要从当前公开 `release/` 重新覆盖该目录；私有双包目录不包含标准版，不上传 GitHub，也不按三版本策略清理。
+   确认扁平 `team-builds/` 已在公开打包前留存当前版本的私有 `-in`、`-no` 两个 EXE。不要从当前公开 `release/` 重新覆盖该目录；它不包含标准版、`.blockmap` 或历史版本，也不上传 GitHub。
 
 5. 提交源码改动。
 
@@ -362,5 +362,5 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 - `release/YouYu-<version>-x64.exe` 存在。
 - `release/YouYu-<version>-x64-in.exe` 存在。
 - `release/YouYu-<version>-x64-no.exe` 存在。
-- `local-subscription-builds/<version>/` 中已另存带订阅的 `-in`、`-no` 两版及对应 `.blockmap`，且没有标准无后缀版。
+- `team-builds/` 中恰好只有当前版本、带订阅的 `-in` 和 `-no` 两个 EXE；没有版本子目录、标准无后缀版或 `.blockmap`。
 - 上传 GitHub 时使用 `npm run dist:win:release` 生成的三通道公开更新产物，并确认 `latest.yml`、`latest-in.yml`、`latest-no.yml` 都存在。

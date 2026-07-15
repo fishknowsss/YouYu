@@ -284,7 +284,10 @@ select:focus-visible {
     transform 140ms ease;
 }
 
-.nav-list button:hover:not(:disabled),
+.nav-list button:not(.active):hover:not(:disabled) {
+  background: #efe4fb;
+}
+
 .secondary-button:hover:not(:disabled),
 .action-row button:hover:not(:disabled),
 .quick-edit-button:hover:not(:disabled) {
@@ -294,6 +297,10 @@ select:focus-visible {
 .nav-list button.active {
   color: #fff;
   background: var(--accent);
+}
+
+.nav-list button.active:hover:not(:disabled) {
+  background: var(--accent-strong);
 }
 
 .version-chip {
@@ -314,6 +321,21 @@ select:focus-visible {
   font-weight: 950;
   letter-spacing: 0;
   line-height: 1;
+  cursor: default;
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.version-chip:hover:not(:disabled) {
+  color: var(--accent-strong);
+  border-color: rgb(143 88 215 / 42%);
+  background: rgb(143 88 215 / 7%);
+}
+
+.version-chip:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .version-chip span {
@@ -1606,8 +1628,8 @@ select:focus-visible {
   background: var(--accent);
 }
 
-.power-button:hover,
-.wide-button:hover {
+.power-button:hover:not(:disabled),
+.wide-button:hover:not(:disabled) {
   background: var(--accent-strong);
   box-shadow: none;
 }
@@ -1674,6 +1696,10 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.registration-status.is-error {
+  color: var(--danger);
 }
 
 .registration-spinner {
@@ -2253,6 +2279,7 @@ select:focus-visible {
 .settings-panel {
   --settings-row-height: 64px;
   --settings-control-height: 46px;
+  --settings-update-row-height: 54px;
   --settings-action-width: 130px;
   align-self: stretch;
   display: grid;
@@ -2394,6 +2421,13 @@ select:focus-visible {
   background: transparent;
 }
 
+.settings-footer-action {
+  width: 100%;
+  height: var(--settings-control-height);
+  font-size: 16px;
+  font-weight: 500;
+}
+
 .settings-diagnostics-export:hover:not(:disabled) {
   background: #efe4fb;
 }
@@ -2445,8 +2479,7 @@ select:focus-visible {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgb(246 242 251 / 88%);
-  backdrop-filter: blur(8px);
+  background: var(--surface);
   -webkit-app-region: no-drag;
 }
 
@@ -2477,6 +2510,20 @@ select:focus-visible {
 .registration-form {
   display: grid;
   gap: 14px;
+}
+
+.registration-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.registration-actions.has-cancel {
+  grid-template-columns: 1fr 1fr;
+}
+
+.registration-actions button {
+  width: 100%;
 }
 
 .page-loading {
@@ -2604,13 +2651,13 @@ select:focus-visible {
 .update-row {
   grid-column: 1 / -1;
   min-width: 0;
-  min-height: var(--settings-row-height);
+  min-height: var(--settings-update-row-height);
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--settings-action-width);
   align-items: center;
   gap: 16px;
   border-radius: 8px;
-  padding: 8px 0 8px 12px;
+  padding: 4px 0 4px 14px;
   background: var(--accent-tint);
 }
 

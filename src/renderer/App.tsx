@@ -8,6 +8,7 @@ import type {
   TrafficRegistrationInput
 } from '../shared/ipc';
 import { AppShell, type PageKey, type UsageMode } from './components/AppShell';
+import { isActionErrorMessage } from './actionMessages';
 import { Home } from './pages/Home';
 import { NodeSelect } from './pages/NodeSelect';
 import { Settings } from './pages/Settings';
@@ -118,6 +119,8 @@ export function App() {
   const [switchingNode, setSwitchingNode] = useState('');
   const [snapshotLoaded, setSnapshotLoaded] = useState(false);
   const [advancedUnlockClicks, setAdvancedUnlockClicks] = useState(0);
+  const [registrationSwitchOpen, setRegistrationSwitchOpen] = useState(false);
+  const restoreRegistrationEntryFocusRef = useRef(false);
   const snapshotRef = useRef(snapshot);
   const snapshotGenerationRef = useRef(0);
   const nodeSelectionGenerationRef = useRef(0);
@@ -154,6 +157,12 @@ export function App() {
 
   useEffect(() => scheduleTransientMessageClear(message, setMessage), [message]);
   useEffect(() => scheduleTransientMessageClear(settingsMessage, setSettingsMessage), [settingsMessage]);
+
+  useEffect(() => {
+    if (registrationSwitchOpen || !restoreRegistrationEntryFocusRef.current) return;
+    restoreRegistrationEntryFocusRef.current = false;
+    document.querySelector<HTMLButtonElement>('.version-chip')?.focus();
+  }, [registrationSwitchOpen]);
 
   useEffect(() => {
     const advancedSequence = [
@@ -202,7 +211,7 @@ export function App() {
     action: (api: NonNullable<Window['youyu']>, request?: OperationRequest) => Promise<AppSnapshot>,
     doneMessage: string,
     options: ActionOptions = {}
-  ) {
+  ): Promise<boolean> {
     const {
       workingMessage = '',
       timeoutMs = actionTimeoutMs,
@@ -215,7 +224,7 @@ export function App() {
     if (!api) {
       if (messageSink) messageSink('核心接口未加载');
       else setMessage('核心接口未加载');
-      return;
+      return false;
     }
 
     const request = cancellable ? createOperationRequest() : undefined;
@@ -233,6 +242,7 @@ export function App() {
       commitSnapshot(next, snapshotGeneration);
       if (messageSink) messageSink(doneMessage);
       else setMessage(doneMessage);
+      return true;
     } catch (error) {
       if (error instanceof ActionTimeoutError && request) {
         await api.cancelOperation(request.requestId).catch(() => false);
@@ -242,6 +252,7 @@ export function App() {
       const errorMessage = getActionErrorMessage(error);
       if (messageSink) messageSink(errorMessage);
       else setMessage(errorMessage);
+      return false;
     } finally {
       setBusy(false);
       setBusyLabel('');
@@ -423,14 +434,40 @@ export function App() {
     setAdvancedUnlockClicks(next);
   }
 
+  function openRegistrationSwitch() {
+    setMessage('');
+    restoreRegistrationEntryFocusRef.current = true;
+    setRegistrationSwitchOpen(true);
+  }
+
+  if (snapshotLoaded && (!registered || registrationSwitchOpen)) {
+    const switchingUser = registered && registrationSwitchOpen;
+    return (
+      <RegistrationGate
+        busy={busy}
+        message={message}
+        mode={switchingUser ? 'switch' : 'initial'}
+        initialName={switchingUser ? snapshot.trafficIdentity?.name : undefined}
+        onCancel={switchingUser ? () => setRegistrationSwitchOpen(false) : undefined}
+        onRegister={async (input) => {
+          const success = await runAction((api) => api.registerTrafficIdentity(input), '', {
+            workingMessage: switchingUser ? '切换中' : '登记中',
+            timeoutLabel: switchingUser ? '切换用户' : '登记'
+          });
+          if (success && switchingUser) setRegistrationSwitchOpen(false);
+        }}
+      />
+    );
+  }
+
   return (
     <>
       <AppShell
         page={page}
         usageMode={usageMode}
-        inert={snapshotLoaded && !registered}
         onPageChange={setPage}
         onAdvancedUnlock={handleAdvancedUnlockClick}
+        onRegistrationRequest={openRegistrationSwitch}
       >
         {page === 'home' && (
           <Home
@@ -543,18 +580,6 @@ export function App() {
           />
         )}
       </AppShell>
-      {snapshotLoaded && !registered && (
-        <RegistrationGate
-          busy={busy}
-          message={message}
-          onRegister={(input) =>
-            runAction((api) => api.registerTrafficIdentity(input), '已登记', {
-              workingMessage: '登记中',
-              timeoutLabel: '登记'
-            })
-          }
-        />
-      )}
       {busyLabel === '修复中' && (
         <div className="busy-overlay" aria-live="polite" aria-label="修复中">
           <div className="busy-spinner" />
@@ -709,17 +734,25 @@ function isOperationCancelled(error: unknown): boolean {
 export function RegistrationGate({
   busy,
   message,
-  onRegister
+  mode = 'initial',
+  initialName = '',
+  onRegister,
+  onCancel
 }: {
   busy: boolean;
   message: string;
-  onRegister: (input: TrafficRegistrationInput) => void;
+  mode?: 'initial' | 'switch';
+  initialName?: string;
+  onRegister: (input: TrafficRegistrationInput) => void | Promise<void>;
+  onCancel?: () => void;
 }) {
-  const [name, setName] = useState('');
+  const [name, setName] = useState(initialName);
   const [passphrase, setPassphrase] = useState('');
   const dialogRef = useRef<HTMLElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const canSubmit = Boolean(name.trim() && passphrase.trim());
+  const switchingUser = mode === 'switch';
+  const statusIsError = !busy && isActionErrorMessage(message);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
@@ -729,7 +762,7 @@ export function RegistrationGate({
 
   function submit() {
     if (busy || !canSubmit) return;
-    onRegister({ name: name.trim(), passphrase: passphrase.trim() });
+    void onRegister({ name: name.trim(), passphrase: passphrase.trim() });
   }
 
   function trapFocus(event: ReactKeyboardEvent<HTMLElement>) {
@@ -759,8 +792,8 @@ export function RegistrationGate({
     >
       <section ref={dialogRef} className="registration-dialog" aria-busy={busy} onKeyDown={trapFocus}>
         <div>
-          <h1 id="registration-title">使用登记</h1>
-          <p id="registration-description">填写姓名和口令后开始使用</p>
+          <h1 id="registration-title">{switchingUser ? '重新登记' : '使用登记'}</h1>
+          <p id="registration-description">{switchingUser ? '输入姓名和口令以切换用户' : '填写姓名和口令后开始使用'}</p>
         </div>
         <form
           className="registration-form"
@@ -795,12 +828,24 @@ export function RegistrationGate({
               required
             />
           </label>
-          <button type="submit" className="wide-button" disabled={busy || !canSubmit}>
-            登记
-          </button>
-          <div id="registration-status" className="registration-status" aria-live="polite" aria-atomic="true">
+          <div className={`registration-actions${switchingUser ? ' has-cancel' : ''}`}>
+            {switchingUser && (
+              <button type="button" className="secondary-button" disabled={busy} onClick={onCancel}>
+                取消
+              </button>
+            )}
+            <button type="submit" className="wide-button" disabled={busy || !canSubmit}>
+              {switchingUser ? '切换' : '登记'}
+            </button>
+          </div>
+          <div
+            id="registration-status"
+            className={`registration-status${statusIsError ? ' is-error' : ''}`}
+            aria-live="polite"
+            aria-atomic="true"
+          >
             {busy && <span className="registration-spinner" aria-hidden="true" />}
-            <span>{busy ? '登记中' : message}</span>
+            <span>{busy ? (switchingUser ? '切换中' : '登记中') : message}</span>
           </div>
         </form>
       </section>

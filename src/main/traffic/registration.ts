@@ -11,8 +11,20 @@ type TrafficRegistrationStore = {
 };
 
 export type TrafficRegistrationCoordinator = {
-  register: (input: TrafficRegistrationInput) => Promise<void>;
+  register: (
+    input: TrafficRegistrationInput,
+    options?: TrafficRegistrationOptions
+  ) => Promise<TrafficRegistrationResult>;
   activatePending: () => Promise<boolean>;
+};
+
+export type TrafficRegistrationOptions = {
+  preserveExistingIdentity?: boolean;
+};
+
+export type TrafficRegistrationResult = {
+  committed: boolean;
+  postCommitError?: unknown;
 };
 
 export type TemporaryRuntimeRelease = () => Promise<void>;
@@ -150,20 +162,21 @@ export function createTrafficRegistrationCoordinator(deps: {
   }
 
   return {
-    async register(input) {
+    async register(input, options = {}) {
       try {
         await deps.reporter.register(input, {
           proxyUrl: deps.getProxyUrl()
         });
-        return;
+        return { committed: true };
       } catch (directError) {
         if (!shouldRetryRegistrationViaProxy(directError, formatError)) {
           throw directError;
         }
 
         if (!(await deps.hasSubscription())) {
+          if (options.preserveExistingIdentity) throw directError;
           await storePending(input, directError);
-          return;
+          return { committed: false };
         }
 
         log(`登记请求失败，准备通过代理重试：${formatError(directError)}`);
@@ -171,16 +184,20 @@ export function createTrafficRegistrationCoordinator(deps: {
         try {
           releaseTemporaryRuntime = await deps.acquireTemporaryRuntime();
         } catch (startError) {
+          if (options.preserveExistingIdentity) throw startError;
           await storePending(input, startError);
-          return;
+          return { committed: false };
         }
 
         let registrationError: unknown;
+        let activationCommitted = false;
+        let postCommitError: unknown;
         try {
           await deps.reporter.register(input, { proxyUrl: deps.getProxyUrl() });
+          activationCommitted = true;
         } catch (proxyError) {
           log(`登记代理重试失败：${formatError(proxyError)}`);
-          if (isPermanentTrafficActivationFailure(proxyError, formatError)) {
+          if (options.preserveExistingIdentity || isPermanentTrafficActivationFailure(proxyError, formatError)) {
             registrationError = proxyError;
           } else {
             try {
@@ -195,9 +212,11 @@ export function createTrafficRegistrationCoordinator(deps: {
           await releaseTemporaryRuntime();
         } catch (releaseError) {
           log(`临时代理释放失败：${formatError(releaseError)}`);
-          registrationError ??= releaseError;
+          if (activationCommitted) postCommitError = releaseError;
+          else registrationError ??= releaseError;
         }
         if (registrationError) throw registrationError;
+        return { committed: activationCommitted, postCommitError };
       }
     },
 

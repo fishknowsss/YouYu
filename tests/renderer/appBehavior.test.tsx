@@ -233,6 +233,88 @@ describe('renderer action behavior', () => {
     expect(exportDiagnostics).toHaveBeenCalledOnce();
     expect(container.textContent).toContain('已导出');
   });
+
+  it('shows only the centered re-registration view after the advanced version entry is clicked', async () => {
+    window.history.replaceState({}, '', '/?mode=advanced&page=settings');
+    const snapshot = createRegisteredRendererSnapshot();
+    const api = {
+      getSnapshot: vi.fn(async () => snapshot),
+      onSnapshotUpdated: vi.fn(() => () => undefined),
+      cancelOperation: vi.fn(async () => undefined)
+    } as unknown as NonNullable<Window['youyu']>;
+    Object.defineProperty(window, 'youyu', { configurable: true, value: api });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<App />));
+    await act(async () => Promise.resolve());
+    const versionEntry = container.querySelector<HTMLButtonElement>('.version-chip');
+    expect(versionEntry).toBeTruthy();
+    versionEntry?.focus();
+    expect(document.activeElement).toBe(versionEntry);
+
+    await act(async () => versionEntry?.click());
+
+    expect(container.querySelector('.app-shell')).toBeNull();
+    expect(container.querySelector('.sidebar')).toBeNull();
+    expect(container.querySelector('.main-surface')).toBeNull();
+    expect(container.querySelector('.registration-gate')).toBeTruthy();
+    expect(container.textContent).toContain('重新登记');
+    expect(container.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe('测试用户');
+
+    const cancel = [...container.querySelectorAll('button')].find((button) => button.textContent === '取消');
+    await act(async () => cancel?.click());
+    const restoredVersionEntry = container.querySelector<HTMLButtonElement>('.version-chip');
+    expect(container.querySelector('.app-shell')).toBeTruthy();
+    expect(container.querySelector('.registration-gate')).toBeNull();
+    expect(document.activeElement).toBe(restoredVersionEntry);
+  });
+
+  it('keeps the re-registration view open and marks a rejected switch as an error', async () => {
+    window.history.replaceState({}, '', '/?mode=advanced&page=settings');
+    const snapshot = createRegisteredRendererSnapshot();
+    const registerTrafficIdentity = vi.fn(async () => {
+      throw new Error('traffic activation failed: 403');
+    });
+    const api = {
+      getSnapshot: vi.fn(async () => snapshot),
+      onSnapshotUpdated: vi.fn(() => () => undefined),
+      cancelOperation: vi.fn(async () => undefined),
+      registerTrafficIdentity
+    } as unknown as NonNullable<Window['youyu']>;
+    Object.defineProperty(window, 'youyu', { configurable: true, value: api });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<App />));
+    await act(async () => Promise.resolve());
+    await act(async () => container.querySelector<HTMLButtonElement>('.version-chip')?.click());
+
+    const passphrase = container.querySelector<HTMLInputElement>('input[name="registration-passphrase"]')!;
+    await act(async () => {
+      setControlledInputValue(passphrase, 'wrong-passphrase');
+    });
+    const switchButton = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent === '切换'
+    );
+    expect(switchButton?.disabled).toBe(false);
+
+    await act(async () => {
+      switchButton?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(registerTrafficIdentity).toHaveBeenCalledOnce();
+    expect(container.querySelector('.app-shell')).toBeNull();
+    expect(container.querySelector('.registration-gate')).toBeTruthy();
+    const status = container.querySelector('.registration-status');
+    expect(status?.classList.contains('is-error')).toBe(true);
+    expect(status?.textContent).toContain('口令不对');
+    expect(container.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe('测试用户');
+  });
 });
 
 function createRegisteredRendererSnapshot(): AppSnapshot {
@@ -286,6 +368,12 @@ function createRegisteredRendererSnapshot(): AppSnapshot {
   };
 }
 
+function setControlledInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 describe('RegistrationGate', () => {
   it('renders a labelled modal form that requires both fields', () => {
     const html = renderToStaticMarkup(<RegistrationGate busy={false} message="" onRegister={() => undefined} />);
@@ -306,6 +394,25 @@ describe('RegistrationGate', () => {
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain('aria-atomic="true"');
     expect(html).toContain('登记中');
+  });
+
+  it('renders a focused user-switch form with a cancel action and current name', () => {
+    const html = renderToStaticMarkup(
+      <RegistrationGate
+        busy={false}
+        message=""
+        mode="switch"
+        initialName="已有用户"
+        onRegister={() => undefined}
+        onCancel={() => undefined}
+      />
+    );
+
+    expect(html).toContain('重新登记');
+    expect(html).toContain('输入姓名和口令以切换用户');
+    expect(html).toContain('value="已有用户"');
+    expect(html).toContain('>取消<');
+    expect(html).toContain('>切换<');
   });
 
   it('focuses the first field and traps forward and reverse tab navigation', async () => {
@@ -341,6 +448,48 @@ describe('RegistrationGate', () => {
     const shell = container.querySelector('.app-shell');
     expect(shell?.hasAttribute('inert')).toBe(true);
     expect(shell?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('marks only the selected advanced navigation item as the current page', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <AppShell page="settings" usageMode="advanced" onPageChange={() => undefined}>
+          <main>设置内容</main>
+        </AppShell>
+      )
+    );
+
+    const currentItems = container.querySelectorAll('.nav-list button[aria-current="page"]');
+    expect(currentItems).toHaveLength(1);
+    expect(currentItems[0]?.textContent).toBe('设置');
+  });
+
+  it('uses the advanced version chip as the hidden re-registration entry', async () => {
+    const onRegistrationRequest = vi.fn();
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <AppShell
+          page="settings"
+          usageMode="advanced"
+          onPageChange={() => undefined}
+          onRegistrationRequest={onRegistrationRequest}
+        >
+          <main>设置内容</main>
+        </AppShell>
+      )
+    );
+
+    const entry = container.querySelector<HTMLButtonElement>('.version-chip');
+    expect(entry?.tagName).toBe('BUTTON');
+    expect(entry?.getAttribute('aria-label')).toContain('重新登记');
+    entry?.click();
+    expect(onRegistrationRequest).toHaveBeenCalledOnce();
   });
 });
 

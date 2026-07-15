@@ -8,6 +8,10 @@ const forbiddenTrackedPathRules = [
   [/(^|\/)__pycache__\//i, 'Python bytecode cache'],
   [/\.(?:pyc|pyo)$/i, 'Python bytecode'],
   [/(^|\/)(?:release|release-archive|out|dist|coverage|node_modules)\//i, 'generated output'],
+  [
+    /(^|\/)(?:team-builds|local-subscription-builds|\.team-builds-previous|\.team-builds-staging-[^/]+)\//i,
+    'private team build'
+  ],
   [/^resources\/generated\//i, 'generated package resource'],
   [/^resources\/default-subscription\.in\.txt$/i, 'private bundled subscription'],
   [/(^|\/)\.env(?:\.|$)/i, 'local environment secrets'],
