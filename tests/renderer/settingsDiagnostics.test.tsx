@@ -23,7 +23,8 @@ describe('settings diagnostic export', () => {
       />
     );
 
-    expect(html).toContain('class="network-status-item settings-diagnostics-count"');
+    expect(html).toContain('class="settings-diagnostics-bar"');
+    expect(html).toContain('class="settings-diagnostics-summary" role="status" aria-live="polite" aria-atomic="true"');
     expect(html).toContain('诊断日志');
     expect(html).toContain('37 条');
     expect(html).toContain('class="secondary-button settings-control-button settings-diagnostics-export"');
@@ -32,15 +33,18 @@ describe('settings diagnostic export', () => {
     expect(html).toContain('DNS 异常 · 点击修复');
   });
 
-  it('locks the export action into the fourth-row right columns', async () => {
+  it('keeps the three control rows rhythmic and gives diagnostics a full-width footer', async () => {
     const styles = await readFile('src/renderer/styles.css', 'utf8');
-    const countRule = getRule(styles, '.settings-diagnostics-count');
+    const controlsRule = getRule(styles, '.settings-controls-grid');
+    const barRule = getRule(styles, '.settings-diagnostics-bar');
     const exportRule = getRule(styles, '.settings-diagnostics-export');
 
-    expect(countRule).toContain('grid-column: 2');
-    expect(countRule).toContain('grid-row: 4');
-    expect(exportRule).toContain('grid-column: 3');
-    expect(exportRule).toContain('grid-row: 4');
+    expect(controlsRule).toContain('grid-template-rows: repeat(3, var(--settings-row-height))');
+    expect(controlsRule).not.toContain('var(--settings-control-height)');
+    expect(barRule).toContain('grid-template-columns: minmax(0, 1fr) var(--settings-action-width)');
+    expect(barRule).toContain('column-gap: 16px');
+    expect(exportRule).toContain('grid-column: 2');
+    expect(controlsRule).not.toContain('grid-row: 4');
   });
 
   it('shows a disabled in-progress export action', () => {
@@ -60,8 +64,29 @@ describe('settings diagnostic export', () => {
       />
     );
 
-    expect(html).toContain('disabled=""');
-    expect(html).toContain('>导出中</button>');
+    expect(html).toMatch(
+      /<button class="secondary-button settings-control-button settings-diagnostics-export" disabled="">导出中<\/button>/
+    );
+  });
+
+  it.each([0, 200])('keeps an exact exportable count at the supported boundary: %s', (logCount) => {
+    const snapshot = createSnapshot(logCount);
+    snapshot.diagnostics.issueKind = undefined;
+
+    expect(renderSettings('', snapshot)).toContain(`${logCount} 条`);
+  });
+
+  it('caps a long diagnostic status without moving the log count or export action', async () => {
+    const longMessage = `无法连接后台：${'网络路径仍不可用'.repeat(12)}`;
+    const html = renderSettings(longMessage, createSnapshot(200));
+    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const statusRule = getRule(styles, '.settings-action-status');
+
+    expect(html).toContain(longMessage);
+    expect(html).toContain('200 条');
+    expect(html).toContain('>导出</button>');
+    expect(statusRule).toContain('-webkit-line-clamp: 2');
+    expect(statusRule).toContain('overflow: hidden');
   });
 
   it.each(['请重新登记', '没有可用节点'])('shows the current action error before a diagnostic issue: %s', (message) => {
@@ -88,6 +113,43 @@ describe('settings diagnostic export', () => {
     expect(html).toContain('class="settings-action-status"');
     expect(html).toContain('已修复');
     expect(html).not.toContain('class="settings-action-status is-error"');
+  });
+
+  it.each(['net::ERR_NAME_NOT_RESOLVED', 'fetch failed (ENOTFOUND)'])(
+    'shows a concise GitHub connection failure for update transport error: %s',
+    (message) => {
+      const snapshot = createSnapshot(0);
+      snapshot.diagnostics.issueKind = undefined;
+      snapshot.update = {
+        ...snapshot.update,
+        status: 'failed',
+        message
+      };
+
+      expect(renderSettings('', snapshot)).toContain('失败：无法连接 GitHub');
+    }
+  );
+
+  it('announces update progress without making the rest of the page wait for visual polling', () => {
+    const snapshot = createSnapshot(0);
+    snapshot.update = {
+      ...snapshot.update,
+      status: 'downloading',
+      availableVersion: '1.6.0',
+      percent: 37,
+      downloadPhase: 'downloading'
+    };
+
+    const html = renderSettings('', snapshot);
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain('class="update-copy" role="status" aria-live="polite" aria-atomic="true"');
+    expect(html).toContain('正在下载更新包 1.6.0 37%');
+  });
+
+  it('does not apply the secondary hover surface to disabled buttons', async () => {
+    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    expect(styles).toContain('.secondary-button:hover:not(:disabled)');
+    expect(styles).not.toContain('.secondary-button:hover,');
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildDiagnosticReport,
   classifyDiagnosticIssue,
+  createDiagnosticExportDefaultPath,
   createDiagnosticExportFileName,
   exportDiagnosticReport,
   isDiagnosticIssueResolvedByOperation,
@@ -212,6 +213,12 @@ describe('diagnostic export', () => {
   it('uses a sortable filesystem-safe default filename', () => {
     expect(createDiagnosticExportFileName('1.5.11', new Date('2026-07-15T04:05:06.000Z'))).toBe(
       'YouYu-diagnostics-1.5.11-20260715-040506.txt'
+    );
+  });
+
+  it('places the save dialog in the supplied Downloads directory by default', () => {
+    expect(createDiagnosticExportDefaultPath('C:\\Users\\Alice\\Downloads', 'YouYu-diagnostics.txt')).toBe(
+      'C:\\Users\\Alice\\Downloads\\YouYu-diagnostics.txt'
     );
   });
 

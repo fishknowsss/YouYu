@@ -4,6 +4,7 @@ import { connect as tlsConnect } from 'node:tls';
 import { join } from 'node:path';
 import type { RemoteControlConfig, RuleProfile, StrategyKey } from '../shared/ipc';
 import { createDeviceAuthHeaders } from './deviceAuth';
+import { runNetworkFallback, type FetchLike, type NetworkRoute } from './networkFallback';
 import type { TrafficStore } from './traffic/store';
 import { readJsonFile, writeJsonFileAtomic } from './storage/jsonFile';
 
@@ -13,6 +14,7 @@ type RemoteConfigClientOptions = {
   appVersion: string;
   store: TrafficStore;
   requestTimeoutMs?: number;
+  fetch?: FetchLike;
 };
 
 type SyncOptions = {
@@ -24,7 +26,11 @@ type JsonResponse = {
   ok: boolean;
   status: number;
   body: unknown;
+  route: NetworkRoute;
+  directOutcome?: string;
 };
+
+type RawJsonResponse = Omit<JsonResponse, 'route' | 'directOutcome'>;
 
 type RemoteConfigIdentity = {
   userId: string;
@@ -117,16 +123,17 @@ export class RemoteConfigClient {
       createDeviceAuthHeaders('GET', url.toString(), '', secret),
       options.proxyUrl,
       this.options.requestTimeoutMs,
-      options.signal
+      options.signal,
+      this.options.fetch
     );
     if (!response.ok) {
-      throw new Error(`remote config failed: ${response.status}`);
+      throw new Error(`remote config failed: ${response.status} (${responseRouteDetails(response)})`);
     }
 
     const body = isRecord(response.body) && isRecord(response.body.config) ? response.body.config : response.body;
     const next = normalizeRemoteConfig(body);
     if (!next) {
-      throw new Error('remote config response invalid');
+      throw new Error(`remote config response invalid (${responseRouteDetails(response)})`);
     }
     const latestIdentity = await this.getCurrentIdentity();
     if (!sameIdentity(latestIdentity, identity)) {
@@ -296,27 +303,36 @@ async function getJson(
   headers: Record<string, string>,
   proxyUrl?: string,
   timeoutMs = 12000,
-  operationSignal?: AbortSignal
+  operationSignal?: AbortSignal,
+  fetch?: FetchLike
 ): Promise<JsonResponse> {
-  if (proxyUrl) {
-    return getJsonViaProxy(url, headers, proxyUrl, timeoutMs, operationSignal);
-  }
+  const result = await runNetworkFallback<RawJsonResponse>({
+    scope: 'remote config request',
+    proxyUrl,
+    timeoutMs,
+    signal: operationSignal,
+    fetch,
+    getStatus: (response) => response.status,
+    direct: async ({ fetch: directFetch, signal }) => {
+      const response = await directFetch(url, {
+        headers: { accept: 'application/json', ...headers },
+        signal
+      });
+      return {
+        ok: response.ok,
+        status: response.status,
+        body: parseJson(await response.text())
+      };
+    },
+    proxy: ({ proxyUrl: fallbackProxyUrl, timeoutMs: remainingMs, signal }) =>
+      getJsonViaProxy(url, headers, fallbackProxyUrl, remainingMs, signal)
+  });
+  return { ...result.response, route: result.route, directOutcome: result.directOutcome };
+}
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error('remote config request timed out')), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      headers: { accept: 'application/json', ...headers },
-      signal: operationSignal ? AbortSignal.any([controller.signal, operationSignal]) : controller.signal
-    });
-    return {
-      ok: response.ok,
-      status: response.status,
-      body: parseJson(await response.text())
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
+function responseRouteDetails(response: JsonResponse): string {
+  const current = `route=${response.route} status=${response.status}`;
+  return response.directOutcome ? `${current} direct=${response.directOutcome} proxy=HTTP_${response.status}` : current;
 }
 
 async function getJsonViaProxy(
@@ -325,7 +341,7 @@ async function getJsonViaProxy(
   proxyUrl: string,
   timeoutMs: number,
   signal?: AbortSignal
-): Promise<JsonResponse> {
+): Promise<RawJsonResponse> {
   const target = new URL(url);
   const proxy = new URL(proxyUrl);
   if (target.protocol !== 'https:') {
@@ -337,7 +353,7 @@ async function getJsonViaProxy(
     let settled = false;
     let tunneledRequest: ReturnType<typeof httpsRequest> | undefined;
     const cleanup = () => signal?.removeEventListener('abort', abort);
-    const resolveOnce = (response: JsonResponse) => {
+    const resolveOnce = (response: RawJsonResponse) => {
       if (settled) return;
       settled = true;
       cleanup();
@@ -416,7 +432,7 @@ async function getJsonViaHttpProxy(
   authHeaders: Record<string, string>,
   timeoutMs: number,
   signal?: AbortSignal
-): Promise<JsonResponse> {
+): Promise<RawJsonResponse> {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
     let req: ReturnType<typeof httpRequest> | undefined;
@@ -424,7 +440,7 @@ async function getJsonViaHttpProxy(
     let settled = false;
 
     const cleanupAbort = () => signal?.removeEventListener('abort', abort);
-    const resolveOnce = (value: JsonResponse) => {
+    const resolveOnce = (value: RawJsonResponse) => {
       if (settled) return;
       settled = true;
       cleanupAbort();
@@ -473,7 +489,7 @@ async function getJsonViaHttpProxy(
 
 function consumeProxyJsonResponse(
   response: IncomingMessage,
-  resolveOnce: (response: JsonResponse) => void,
+  resolveOnce: (response: RawJsonResponse) => void,
   rejectOnce: (error: unknown) => void
 ): void {
   const chunks: Buffer[] = [];

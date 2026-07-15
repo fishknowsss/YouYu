@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   dialog,
   Menu,
+  session as electronSession,
   Tray,
   ipcMain as electronIpcMain,
   safeStorage,
@@ -69,17 +70,32 @@ import { buildProxyRelaunchArguments, resumeProxyAfterRelaunchArgument } from '.
 import { clearMihomoRepairCache, runNetworkRepair, type NetworkRepairOptions } from './networkRepair';
 import {
   classifyDiagnosticIssue,
+  createDiagnosticExportDefaultPath,
   exportDiagnosticReport,
   isDiagnosticIssueResolvedByOperation,
   redactDiagnosticText
 } from './diagnostics';
 import { getTargetedNetworkRepairActions, runTargetedNetworkRepair } from './targetedNetworkRepair';
+import {
+  createHostResolverOptions,
+  createUpdateFeedConfig,
+  prepareUpdateNetworkSession,
+  runUpdateCheckWithNetworkFallback,
+  runUpdateDownloadWithNetworkFallback
+} from './updateNetwork';
+import { formatErrorWithCause } from './errorDetails';
+import type { FetchLike } from './networkFallback';
 
 declare const __YOUYU_DISABLE_PET__: boolean;
 declare const __YOUYU_BUILD_CHANNEL__: string;
 
 const appId = 'studio.youyu.proxy';
+const directNetworkPartition = 'youyu-direct-network';
 const isDev = !app.isPackaged;
+const directNetworkFetch: FetchLike = async (input, init) => {
+  const response = await electronSession.fromPartition(directNetworkPartition, { cache: false }).fetch(input, init);
+  return response as Response;
+};
 const startHidden = process.argv.includes('--hidden') || process.argv.includes('--startup');
 const shutdownForInstall = process.argv.includes('--shutdown-for-install');
 const resumeProxyAfterRelaunch = process.argv.includes(resumeProxyAfterRelaunchArgument);
@@ -136,7 +152,9 @@ let remoteConfigSyncTimer: ReturnType<typeof setInterval> | undefined;
 let remoteConfigSyncRunning = false;
 let updateCheckTimer: ReturnType<typeof setTimeout> | undefined;
 let updateCheckRunning = false;
+let updateDownloadRunning = false;
 let autoUpdatesConfigured = false;
+let suppressedUpdateNetworkFailureCount = 0;
 let updateInstallerLaunchPending = false;
 let updateInstallerLaunchFailed = false;
 let updateInstallerLaunchStarted = false;
@@ -256,7 +274,8 @@ const remoteConfigClient = new RemoteConfigClient({
   baseDir: app.getPath('userData'),
   endpoint: readOptionalText(trafficApiUrlPath),
   appVersion,
-  store: trafficStore
+  store: trafficStore,
+  fetch: directNetworkFetch
 });
 const remoteSubscriptionCoordinator = createRemoteSubscriptionCoordinator({
   readSettings: () => settingsStore.read(),
@@ -273,6 +292,7 @@ const trafficReporter = new TrafficReporter({
   endpoint: readOptionalText(trafficApiUrlPath),
   appVersion,
   intervalMs: 2 * 60 * 1000,
+  fetch: directNetworkFetch,
   getProxyUrl: getRuntimeTrafficProxyUrl,
   onIdentityInvalidated: handleTrafficIdentityInvalidated,
   onError: (error) => {
@@ -409,8 +429,7 @@ function trimFoldedMihomoDialWarnings() {
 }
 
 function formatError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
+  return formatErrorWithCause(error);
 }
 
 function recordError(context: string, error: unknown) {
@@ -448,7 +467,7 @@ async function exportCurrentDiagnostics() {
       chooseFile: async (defaultFileName) => {
         const options: SaveDialogOptions = {
           title: '导出诊断日志',
-          defaultPath: join(app.getPath('documents'), defaultFileName),
+          defaultPath: createDiagnosticExportDefaultPath(app.getPath('downloads'), defaultFileName),
           filters: [{ name: '文本文件', extensions: ['txt'] }],
           properties: ['createDirectory', 'showOverwriteConfirmation', 'dontAddToRecent']
         };
@@ -629,9 +648,10 @@ function setupAutoUpdates() {
   if (autoUpdatesConfigured) return;
   autoUpdatesConfigured = true;
 
-  autoUpdater.autoDownload = true;
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.allowPrerelease = false;
+  autoUpdater.setFeedURL(createUpdateFeedConfig());
   autoUpdater.channel = appUpdateChannel;
   autoUpdater.allowDowngrade = false;
 
@@ -685,6 +705,7 @@ function setupAutoUpdates() {
       recoverFromUpdateInstallerLaunchFailure(error);
       return;
     }
+    if (suppressedUpdateNetworkFailureCount > 0) return;
     setUpdateFailure(error);
   });
 
@@ -750,27 +771,83 @@ async function checkForUpdatesNow(userInitiated = true): Promise<AppSnapshot> {
     return createSnapshot();
   }
 
-  if (updateSnapshot.status === 'downloaded' || updateCheckRunning) {
+  if (updateSnapshot.status === 'downloaded' || updateCheckRunning || updateDownloadRunning) {
     return createSnapshot();
   }
 
   updateCheckRunning = true;
+  suppressedUpdateNetworkFailureCount += 1;
+  let checkResult: Awaited<ReturnType<typeof autoUpdater.checkForUpdates>> | undefined;
+  let checkFailure: unknown;
+  let checkFailed = false;
   try {
-    await autoUpdater.checkForUpdates();
+    checkResult = await runUpdateCheckWithNetworkFallback({
+      session: autoUpdater.netSession,
+      check: () => autoUpdater.checkForUpdates(),
+      proxyUrl: getRuntimeTrafficProxyUrl(),
+      onRetry: (route, detail) => {
+        appendLog(
+          route === 'local-proxy'
+            ? `检查更新直连失败，改用本地代理重试 (${detail})`
+            : `检查更新直连失败，刷新 DNS 后重试 (${detail})`
+        );
+      }
+    });
   } catch (error) {
-    setUpdateFailure(error);
+    checkFailure = error;
+    checkFailed = true;
   } finally {
+    suppressedUpdateNetworkFailureCount = Math.max(0, suppressedUpdateNetworkFailureCount - 1);
     updateCheckRunning = false;
     scheduleUpdateCheck(updatePeriodicIntervalMs);
+  }
+
+  if (checkFailed) {
+    setUpdateFailure(checkFailure);
+  } else if (checkResult?.isUpdateAvailable) {
+    void downloadUpdateInBackground();
   }
 
   return createSnapshot();
 }
 
-function setUpdateFailure(error: unknown) {
+async function downloadUpdateInBackground(): Promise<void> {
+  if (updateDownloadRunning || updateSnapshot.status === 'downloaded') return;
+
+  updateDownloadRunning = true;
+  suppressedUpdateNetworkFailureCount += 1;
+  let downloadFailure: unknown;
+  let downloadFailed = false;
+  try {
+    await runUpdateDownloadWithNetworkFallback({
+      session: autoUpdater.netSession,
+      download: () => autoUpdater.downloadUpdate(),
+      proxyUrl: getRuntimeTrafficProxyUrl(),
+      onRetry: (route, detail) => {
+        appendLog(
+          route === 'local-proxy'
+            ? `更新下载直连失败，改用本地代理重试 (${detail})`
+            : `更新下载直连失败，刷新 DNS 后重试 (${detail})`
+        );
+      }
+    });
+  } catch (error) {
+    downloadFailure = error;
+    downloadFailed = true;
+  } finally {
+    suppressedUpdateNetworkFailureCount = Math.max(0, suppressedUpdateNetworkFailureCount - 1);
+    updateDownloadRunning = false;
+  }
+
+  if (downloadFailed) {
+    setUpdateFailure(downloadFailure, '更新下载');
+  }
+}
+
+function setUpdateFailure(error: unknown, context = '检查更新') {
   const message = formatError(error);
   if (updateSnapshot.status !== 'failed' || updateSnapshot.message !== message) {
-    appendLog(`检查更新失败: ${message}`);
+    appendLog(`${context}失败: ${message}`);
   }
   setUpdateSnapshot({
     status: 'failed',
@@ -3216,6 +3293,14 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
   app
     .whenReady()
     .then(async () => {
+      try {
+        app.configureHostResolver(createHostResolverOptions());
+      } catch (error) {
+        appendLog(`应用内 DNS 配置失败，继续使用系统解析: ${formatError(error)}`);
+      }
+      await prepareUpdateNetworkSession(electronSession.fromPartition(directNetworkPartition, { cache: false })).catch(
+        (error) => appendLog(`后台直连会话初始化失败: ${formatError(error)}`)
+      );
       await systemProxy.restore().catch((error) => appendLog(`恢复遗留系统代理失败: ${formatError(error)}`));
       await allocateRuntimePorts();
       registerIpc();

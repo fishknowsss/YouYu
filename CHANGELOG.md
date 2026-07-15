@@ -2,6 +2,39 @@
 
 本文件记录 YouYu 的重要版本变化。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，分类参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.6.0] - 2026-07-15
+
+### 修复
+
+- 修复专业模式设置页加入诊断导出后行列节奏断裂、按钮权重过重和状态内容挤压的问题；诊断工具现在使用独立整行，三行主设置与右侧动作保持统一间距和边缘。
+- 修复后台登记、远程配置同步和流量上报在 Mihomo 已运行时始终复用本地代理，导致本地代理本身异常时无法尝试可用直连的问题。
+- 修复 Node/Electron 网络错误只显示 `fetch failed`、丢失嵌套 DNS 或连接错误码的问题；诊断日志现在保留脱敏后的错误类型，便于区分 DNS、超时和拒绝连接。
+- 修复更新保底只覆盖 `latest*.yml`、安装包或 `.blockmap` 下载失败后不会换路的问题；元数据检查和安装包下载现在分别执行连接保底。
+
+### 改进
+
+- 诊断栏统一容纳常见问题提示、当前会话日志条数和低权重“导出”动作；在 `900×600` 下覆盖无异常、长错误、0/200 条日志、导出中和更新下载状态，页面不产生滚动或错位。
+- 诊断日志保存对话框默认打开用户“下载”文件夹，仍允许用户自行改名或选择其他位置。
+- 后台通信使用不继承系统代理的应用内独立会话：先直连 Cloudflare Worker，只有可恢复的传输故障或临时网关故障才尝试正在运行的本地 Mihomo；鉴权、限流、无效响应和用户取消不会换路。
+- Cloudflare Worker 增加由 Cloudflare 托管 DNS 与证书的 `youyu-api.fishknowsss.com` 生产自定义域名，客户端不再把 `workers.dev` 作为唯一后台入口。
+- 直连与本地代理共用一次总超时预算，并为第二条线路预留时间；重试复用同一请求体、报告 ID、设备种子和签名，最终诊断只记录两条线路的脱敏结果。
+- 启用 Electron 内置解析器、Happy Eyeballs 和 secure DNS，并配置 DNSPod、阿里云与 Cloudflare 四个 DoH 入口；解析保底只作用于 YouYu，不修改 Windows DNS 或 Hosts，也不接受被污染的系统解析结果。
+- 自动更新改用 GitHub `releases/latest/download` 的稳定通道入口，标准版、内部通道版和无桌宠版仍分别读取 `latest.yml`、`latest-in.yml` 和 `latest-no.yml`。检查和后台下载都先直连，连接失败时刷新应用内 DNS，并在本地 Mihomo 可用时换路重试。
+- 诊断状态和软件更新状态增加常驻读屏播报区域；禁用按钮不再出现可点击的悬停反馈。
+
+### 安全与边界
+
+- 不写入固定 GitHub 或 Cloudflare IP，不修改系统 Hosts，不关闭 TLS 证书校验，也不执行系统级 DNS 重置。
+- 生产自定义域名与旧 `workers.dev` 入口指向同一 Cloudflare Worker，并非跨服务商镜像；新的保底不能绕过域名、SNI 或整个 Cloudflare 网络被完全封锁的情况。
+- 本地交付继续只留存带私有订阅的 `-in`、`-no` 双包；公开三个更新通道全部使用空内置订阅构建。
+
+### 验证
+
+- 为后台直连优先、代理回退、共享超时、取消竞态、双线路脱敏错误、请求体与签名复用、更新元数据与下载双阶段回退补充回归覆盖。
+- 为诊断栏结构、0/200 条边界、长状态、导出忙碌态、更新状态播报、禁用悬停和下载目录补充回归覆盖。
+- 设置页在 `900×600` 下完成常规、错误、压力和下载状态多轮浏览器验收，右侧动作边缘一致且无横向或纵向溢出。
+- 发布闭环覆盖桌面端与 Worker 校验、Windows 三通道构建、私有双包反向校验、公开包空订阅检查、安装包冒烟测试以及远端 `latest*.yml` 与资产哈希复核。
+
 ## [1.5.11] - 2026-07-15
 
 ### 修复
@@ -89,6 +122,7 @@
 - 三个公开更新通道的安装包、`.blockmap` 和 `latest*.yml` 均由同一次 `dist:win:release` 构建产生并通过空内置订阅校验。
 - 本版本未修改 `src/renderer` 或前端样式，界面与交互保持不变。
 
+[1.6.0]: https://github.com/fishknowsss/YouYu/releases/tag/v1.6.0
 [1.5.11]: https://github.com/fishknowsss/YouYu/releases/tag/v1.5.11
 [1.5.10]: https://github.com/fishknowsss/YouYu/releases/tag/v1.5.10
 [1.5.9]: https://github.com/fishknowsss/YouYu/releases/tag/v1.5.9

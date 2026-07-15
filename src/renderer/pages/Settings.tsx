@@ -170,27 +170,37 @@ export function Settings({
             <button className="secondary-button settings-control-button" disabled={busy} onClick={onRepair}>
               {repairing ? '修复中' : '修复'}
             </button>
-            {actionStatus && (
-              <div className={`settings-action-status${actionStatusIsError ? ' is-error' : ''}`} aria-live="polite">
-                {actionStatus}
-              </div>
-            )}
-            <NetworkStatus className="settings-diagnostics-count" label="诊断日志" value={`${diagnosticLogCount} 条`} />
-            <button
-              className="secondary-button settings-control-button settings-diagnostics-export"
-              disabled={busy}
-              onClick={onExportDiagnostics}
-            >
-              {exporting ? '导出中' : '导出'}
-            </button>
           </div>
 
-          <UpdatePanel
-            snapshot={snapshot}
-            busy={busy}
-            onCheckUpdate={onCheckUpdate}
-            onInstallUpdate={onInstallUpdate}
-          />
+          <div className="settings-footer">
+            <div className="settings-diagnostics-bar">
+              <div className="settings-diagnostics-summary" role="status" aria-live="polite" aria-atomic="true">
+                {actionStatus && (
+                  <span className={`settings-action-status${actionStatusIsError ? ' is-error' : ''}`}>
+                    {actionStatus}
+                  </span>
+                )}
+                <span className="settings-diagnostics-meta">
+                  <span className="settings-diagnostics-label">诊断日志</span>
+                  <strong className="settings-diagnostics-count">{diagnosticLogCount} 条</strong>
+                </span>
+              </div>
+              <button
+                className="secondary-button settings-control-button settings-diagnostics-export"
+                disabled={busy}
+                onClick={onExportDiagnostics}
+              >
+                {exporting ? '导出中' : '导出'}
+              </button>
+            </div>
+
+            <UpdatePanel
+              snapshot={snapshot}
+              busy={busy}
+              onCheckUpdate={onCheckUpdate}
+              onInstallUpdate={onInstallUpdate}
+            />
+          </div>
         </div>
       </section>
     </div>
@@ -280,8 +290,9 @@ function UpdatePanel({
       className={`update-row ${waiting ? 'is-busy' : ''} ${downloading ? 'is-downloading' : ''} ${
         update.status === 'failed' ? 'is-failed' : ''
       }`}
+      aria-busy={waiting}
     >
-      <div className="update-copy">
+      <div className="update-copy" role="status" aria-live="polite" aria-atomic="true">
         <span>软件更新</span>
         <strong title={statusText}>{statusText}</strong>
         {downloading && <em>{formatUpdateTransfer(update)}</em>}
@@ -345,7 +356,14 @@ function formatUpdateFailure(message: string | undefined): string {
   const channelFile = message.match(/(latest(?:-in|-no)?\.yml)/)?.[1];
   if (message.includes('Cannot find') && channelFile) return `失败：GitHub Release 缺少 ${channelFile}`;
   if (message.includes('404')) return '失败：GitHub Release 未发布或资源不存在';
-  if (message.includes('ENOTFOUND') || message.includes('EAI_AGAIN')) return '失败：无法连接 GitHub';
+  if (
+    message.includes('ENOTFOUND') ||
+    message.includes('EAI_AGAIN') ||
+    message.includes('ERR_NAME_NOT_RESOLVED') ||
+    message.includes('fetch failed')
+  ) {
+    return '失败：无法连接 GitHub';
+  }
   if (message.includes('net::ERR_INTERNET_DISCONNECTED')) return '失败：网络未连接';
   return '失败：请稍后重试';
 }

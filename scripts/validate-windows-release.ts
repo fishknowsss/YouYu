@@ -94,6 +94,9 @@ const trafficApiUrl = (await readFile(trafficApiUrlPath, 'utf8')).trim();
 if (!/^https:\/\/\S+$/i.test(trafficApiUrl)) {
   throw new Error('Windows installer is missing a valid traffic API URL');
 }
+if (trafficApiUrl !== 'https://youyu-api.fishknowsss.com') {
+  throw new Error('Windows installer must use the production traffic API Custom Domain');
+}
 
 if (noPetBuild) {
   const rendererAssets = await readdir(join(root, 'out', 'renderer', 'assets'));

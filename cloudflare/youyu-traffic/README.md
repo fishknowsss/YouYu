@@ -42,7 +42,9 @@ It does not deploy the Worker.
 
 Use your own private value for `REGISTRATION_PASSPHRASE`.
 
-After deploy, put the Worker URL into:
+The production Worker is exposed through the `youyu-api.fishknowsss.com` Custom Domain declared in `wrangler.toml`.
+Cloudflare manages its DNS record and certificate; the existing `workers.dev` address remains available for legacy
+diagnostics. After deploy, put the production Custom Domain URL into:
 
 ```text
 resources/traffic-api-url.txt

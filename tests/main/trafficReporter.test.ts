@@ -23,6 +23,10 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+async function rejectDirectFetch(): Promise<Response> {
+  throw new TypeError('direct route unavailable');
+}
+
 describe('TrafficReporter', () => {
   it('marks traffic reporting as not configured when the endpoint is missing', async () => {
     const store = new TrafficStore(dir);
@@ -83,6 +87,102 @@ describe('TrafficReporter', () => {
     });
   });
 
+  it('uses the injected direct fetch before a configured proxy without changing the activation body', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ userId: 'user_1', deviceId: 'device_1', name: 'Alice' }), { status: 200 })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, traffic: { totalUpload: 0, totalDownload: 0 } }), { status: 200 })
+      );
+    const store = new TrafficStore(dir);
+    const reporter = new TrafficReporter({
+      store,
+      endpoint: 'https://traffic.example.com',
+      appVersion: '1.6.0',
+      fetch,
+      getProxyUrl: () => 'http://127.0.0.1:1'
+    });
+
+    await expect(
+      reporter.register({ name: ' Alice ', passphrase: ' secret ' }, { proxyUrl: 'http://127.0.0.1:1' })
+    ).resolves.toMatchObject({ userId: 'user_1', deviceId: 'device_1' });
+
+    const activation = fetch.mock.calls[0];
+    expect(activation?.[0]).toBe('https://traffic.example.com/api/activate');
+    expect(JSON.parse(String(activation?.[1]?.body))).toMatchObject({
+      name: 'Alice',
+      passphrase: 'secret',
+      deviceSeed: expect.any(String),
+      appVersion: '1.6.0'
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses the exact activation body and device seed when a retryable direct response falls back', async () => {
+    let proxiedBody: Record<string, unknown> | undefined;
+    const proxyUrl = await startJsonServer(async (body, request) => {
+      expect(request.url).toBe('http://traffic.invalid/api/activate');
+      proxiedBody = body;
+      return {
+        status: 200,
+        body: { userId: 'user_1', deviceId: 'device_1', name: 'Alice' }
+      };
+    });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'temporary' }), { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, traffic: { totalUpload: 0, totalDownload: 0 } }), { status: 200 })
+      );
+    const reporter = new TrafficReporter({
+      store: new TrafficStore(dir),
+      endpoint: 'http://traffic.invalid',
+      appVersion: '1.6.0',
+      fetch
+    });
+
+    await reporter.register({ name: 'Alice', passphrase: 'secret' }, { proxyUrl });
+
+    const directBody = String(fetch.mock.calls[0]?.[1]?.body);
+    expect(JSON.parse(directBody)).toEqual(proxiedBody);
+    expect(proxiedBody).toMatchObject({
+      name: 'Alice',
+      passphrase: 'secret',
+      deviceSeed: expect.any(String),
+      appVersion: '1.6.0'
+    });
+  });
+
+  it('reports both HTTP route outcomes without exposing the activation request', async () => {
+    const proxyUrl = await startJsonServer(async () => ({
+      status: 502,
+      body: { error: 'gateway unavailable' }
+    }));
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ error: 'service unavailable' }), { status: 503 }));
+    const reporter = new TrafficReporter({
+      store: new TrafficStore(dir),
+      endpoint: 'http://traffic.invalid',
+      appVersion: '1.6.0',
+      fetch
+    });
+
+    let error: unknown;
+    try {
+      await reporter.register({ name: 'Sensitive Name', passphrase: 'Sensitive Passphrase' }, { proxyUrl });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('direct=HTTP_503');
+    expect((error as Error).message).toContain('proxy=HTTP_502');
+    expect((error as Error).message).not.toContain('traffic.invalid');
+    expect((error as Error).message).not.toContain('Sensitive Name');
+    expect((error as Error).message).not.toContain('Sensitive Passphrase');
+  });
+
   it('keeps the activation error detail returned by the backend', async () => {
     const endpoint = await startJsonServer(async () => ({
       status: 403,
@@ -124,7 +224,8 @@ describe('TrafficReporter', () => {
       store: new TrafficStore(dir),
       endpoint: 'http://traffic.invalid',
       appVersion: '1.5.8',
-      requestTimeoutMs: 200
+      requestTimeoutMs: 200,
+      fetch: rejectDirectFetch
     });
 
     await expect(within(reporter.register({ name: 'Alice', passphrase: 'secret' }, { proxyUrl }))).rejects.toThrow(
@@ -139,7 +240,8 @@ describe('TrafficReporter', () => {
       store: new TrafficStore(dir),
       endpoint: `https://agent1:${origin.port}`,
       appVersion: '1.5.8',
-      requestTimeoutMs: 500
+      requestTimeoutMs: 500,
+      fetch: rejectDirectFetch
     });
 
     try {
@@ -243,6 +345,58 @@ describe('TrafficReporter', () => {
         reportStatus: 'synced'
       }
     });
+  });
+
+  it('reuses the exact signed report body and report id on proxy fallback', async () => {
+    let proxiedBody: Record<string, unknown> | undefined;
+    let proxiedSignature: string | string[] | undefined;
+    let proxiedTimestamp: string | string[] | undefined;
+    const proxyUrl = await startJsonServer(async (body, request) => {
+      expect(request.url).toBe('http://traffic.invalid/api/traffic/report');
+      proxiedBody = body;
+      proxiedSignature = request.headers['x-youyu-signature'];
+      proxiedTimestamp = request.headers['x-youyu-timestamp'];
+      return {
+        status: 200,
+        body: { ok: true, traffic: { totalUpload: 100, totalDownload: 200 } }
+      };
+    });
+    const fetch = vi.fn(
+      async (_input: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ error: 'temporary' }), { status: 503 })
+    );
+    const store = new TrafficStore(dir);
+    await store.createDeviceSeed();
+    await store.registerIdentity({
+      userId: 'user_1',
+      deviceId: 'device_1',
+      name: 'Alice',
+      deviceName: 'DESKTOP'
+    });
+    await store.addTraffic(100, 200);
+    const reporter = new TrafficReporter({
+      store,
+      endpoint: 'http://traffic.invalid',
+      appVersion: '1.6.0',
+      fetch,
+      getProxyUrl: () => proxyUrl
+    });
+
+    await reporter.reportPending();
+
+    const directInit = fetch.mock.calls[0]?.[1];
+    const directHeaders = directInit?.headers as Record<string, string>;
+    const directBody = String(directInit?.body);
+    expect(directBody).toBe(JSON.stringify(proxiedBody));
+    expect(proxiedBody?.reportId).toEqual(expect.any(String));
+    expect(proxiedBody).toMatchObject({
+      userId: 'user_1',
+      deviceId: 'device_1',
+      uploadDelta: 100,
+      downloadDelta: 200
+    });
+    expect(directHeaders['x-youyu-signature']).toBe(proxiedSignature);
+    expect(directHeaders['x-youyu-timestamp']).toBe(proxiedTimestamp);
   });
 
   it('refreshes backend totals even when no local traffic is pending', async () => {
@@ -385,7 +539,7 @@ describe('TrafficReporter', () => {
         pendingUpload: 100,
         pendingDownload: 200,
         reportStatus: 'failed',
-        reportError: 'traffic report failed: 403 unknown device'
+        reportError: 'traffic report failed: 403 unknown device (route=direct status=403)'
       }
     });
   });
@@ -403,7 +557,10 @@ describe('TrafficReporter', () => {
     await expect(reporter.reportPending()).rejects.toThrow('traffic report failed: 403 stale request');
     await expect(store.getSnapshot()).resolves.toMatchObject({
       identity: { userId: 'u', deviceId: 'd' },
-      stats: { reportStatus: 'failed', reportError: 'traffic report failed: 403 stale request' }
+      stats: {
+        reportStatus: 'failed',
+        reportError: 'traffic report failed: 403 stale request (route=direct status=403)'
+      }
     });
   });
 

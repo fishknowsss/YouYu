@@ -4,6 +4,7 @@ import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import type { TrafficRegistrationInput } from '../../shared/ipc';
 import { createDeviceAuthHeaders } from '../deviceAuth';
+import { runNetworkFallback, type FetchLike, type NetworkRoute } from '../networkFallback';
 import type { TrafficStore } from './store';
 
 type TrafficReporterOptions = {
@@ -12,6 +13,7 @@ type TrafficReporterOptions = {
   appVersion: string;
   intervalMs?: number;
   requestTimeoutMs?: number;
+  fetch?: FetchLike;
   getProxyUrl?: () => string | undefined;
   onIdentityInvalidated?: () => void | Promise<void>;
   onError?: (error: unknown) => void;
@@ -82,17 +84,21 @@ export class TrafficReporter {
         platform: process.platform
       },
       options.proxyUrl,
-      this.options.requestTimeoutMs
+      this.options.requestTimeoutMs,
+      undefined,
+      this.options.fetch
     );
 
     if (!response.ok) {
       const detail = getResponseError(response.body);
-      throw new Error(`traffic activation failed: ${response.status}${detail ? ` ${detail}` : ''}`);
+      throw new Error(
+        `traffic activation failed: ${response.status}${detail ? ` ${detail}` : ''} (${responseRouteDetails(response)})`
+      );
     }
 
     const data = response.body as ActivateResponse;
     if (!data.userId || !data.deviceId) {
-      throw new Error('traffic activation response invalid');
+      throw new Error(`traffic activation response invalid (${responseRouteDetails(response)})`);
     }
 
     const identity = await this.options.store.registerIdentity({
@@ -157,12 +163,13 @@ export class TrafficReporter {
       body,
       this.options.getProxyUrl?.(),
       this.options.requestTimeoutMs,
-      (bodyText, url) => createDeviceAuthHeaders('POST', url, bodyText, secret)
+      (bodyText, url) => createDeviceAuthHeaders('POST', url, bodyText, secret),
+      this.options.fetch
     );
 
     if (!response.ok) {
       const detail = getResponseError(response.body);
-      const message = `traffic report failed: ${response.status}${detail ? ` ${detail}` : ''}`;
+      const message = `traffic report failed: ${response.status}${detail ? ` ${detail}` : ''} (${responseRouteDetails(response)})`;
       if (response.status === 403 && detail.trim().toLowerCase() === 'unknown device') {
         const cleared = await this.options.store.clearIdentityIfCurrent(identityKey, report.id, message);
         if (cleared) {
@@ -201,38 +208,50 @@ type JsonResponse = {
   ok: boolean;
   status: number;
   body: unknown;
+  route: NetworkRoute;
+  directOutcome?: string;
 };
+
+type RawJsonResponse = Omit<JsonResponse, 'route' | 'directOutcome'>;
 
 async function postJson(
   url: string,
   value: unknown,
   proxyUrl?: string,
   timeoutMs = 15000,
-  createAuthHeaders?: (body: string, url: string) => Record<string, string>
+  createAuthHeaders?: (body: string, url: string) => Record<string, string>,
+  fetch?: FetchLike
 ): Promise<JsonResponse> {
   const body = JSON.stringify(value);
   const authHeaders = createAuthHeaders?.(body, url) ?? {};
-  if (!proxyUrl) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error('traffic request timed out')), timeoutMs);
-    try {
-      const response = await fetch(url, {
+  const result = await runNetworkFallback<RawJsonResponse>({
+    scope: 'traffic request',
+    proxyUrl,
+    timeoutMs,
+    fetch,
+    getStatus: (response) => response.status,
+    direct: async ({ fetch: directFetch, signal }) => {
+      const response = await directFetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...authHeaders },
         body,
-        signal: controller.signal
+        signal
       });
       return {
         ok: response.ok,
         status: response.status,
         body: parseJson(await response.text())
       };
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
+    },
+    proxy: ({ proxyUrl: fallbackProxyUrl, timeoutMs: remainingMs, signal }) =>
+      postJsonViaProxy(url, body, fallbackProxyUrl, remainingMs, authHeaders, signal)
+  });
+  return { ...result.response, route: result.route, directOutcome: result.directOutcome };
+}
 
-  return postJsonViaProxy(url, body, proxyUrl, timeoutMs, authHeaders);
+function responseRouteDetails(response: JsonResponse): string {
+  const current = `route=${response.route} status=${response.status}`;
+  return response.directOutcome ? `${current} direct=${response.directOutcome} proxy=HTTP_${response.status}` : current;
 }
 
 async function postJsonViaProxy(
@@ -240,8 +259,9 @@ async function postJsonViaProxy(
   body: string,
   proxyUrl: string,
   timeoutMs: number,
-  authHeaders: Record<string, string>
-): Promise<JsonResponse> {
+  authHeaders: Record<string, string>,
+  signal?: AbortSignal
+): Promise<RawJsonResponse> {
   const target = new URL(url);
   const proxy = new URL(proxyUrl);
   const headers = {
@@ -251,26 +271,30 @@ async function postJsonViaProxy(
   };
 
   if (target.protocol === 'https:') {
-    return postHttpsJsonViaProxy(target, body, proxy, headers, timeoutMs);
+    return postHttpsJsonViaProxy(target, body, proxy, headers, timeoutMs, signal);
   }
 
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
     let req: ClientRequest | undefined;
     let response: IncomingMessage | undefined;
     let settled = false;
 
-    const resolveOnce = (value: JsonResponse) => {
+    const resolveOnce = (value: RawJsonResponse) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', abort);
       resolve(value);
     };
     const rejectOnce = (error: unknown) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', abort);
       response?.destroy();
       req?.destroy();
       reject(error);
     };
+    const abort = () => rejectOnce(signal?.reason instanceof Error ? signal.reason : new Error('operation canceled'));
     const onRequestError = (error: Error) => rejectOnce(error);
 
     req = httpRequest(
@@ -289,6 +313,7 @@ async function postJsonViaProxy(
     );
 
     req.setTimeout(timeoutMs, () => req.destroy(new Error('traffic request timed out')));
+    signal?.addEventListener('abort', abort, { once: true });
     req.on('error', onRequestError);
     req.once('close', () => req?.removeListener('error', onRequestError));
     req.write(body);
@@ -301,10 +326,13 @@ async function postHttpsJsonViaProxy(
   body: string,
   proxy: URL,
   headers: Record<string, string>,
-  timeoutMs: number
-): Promise<JsonResponse> {
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<RawJsonResponse> {
   const port = target.port || '443';
   const socket = await new Promise<import('node:net').Socket>((resolve, reject) => {
+    signal?.throwIfAborted();
+    let settled = false;
     const connectReq = httpRequest({
       protocol: proxy.protocol,
       hostname: proxy.hostname,
@@ -313,18 +341,40 @@ async function postHttpsJsonViaProxy(
       path: `${target.hostname}:${port}`
     });
 
+    const cleanup = () => signal?.removeEventListener('abort', abort);
+    const rejectOnce = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      connectReq.destroy();
+      reject(error);
+    };
+    const abort = () => rejectOnce(signal?.reason instanceof Error ? signal.reason : new Error('operation canceled'));
+
     connectReq.setTimeout(timeoutMs, () => connectReq.destroy(new Error('traffic proxy connect timed out')));
     connectReq.once('connect', (res, rawSocket) => {
-      if ((res.statusCode ?? 0) < 200 || (res.statusCode ?? 0) >= 300) {
+      if (settled) {
         rawSocket.destroy();
-        reject(new Error(`traffic proxy connect failed: ${res.statusCode ?? 0}`));
         return;
       }
+      if ((res.statusCode ?? 0) < 200 || (res.statusCode ?? 0) >= 300) {
+        rawSocket.destroy();
+        rejectOnce(new Error(`traffic proxy connect failed: ${res.statusCode ?? 0}`));
+        return;
+      }
+      settled = true;
+      cleanup();
       resolve(rawSocket);
     });
-    connectReq.once('error', reject);
+    signal?.addEventListener('abort', abort, { once: true });
+    connectReq.once('error', rejectOnce);
     connectReq.end();
   });
+
+  if (signal?.aborted) {
+    socket.destroy();
+    signal.throwIfAborted();
+  }
 
   const tlsSocket = tlsConnect({
     socket,
@@ -336,23 +386,27 @@ async function postHttpsJsonViaProxy(
     let response: IncomingMessage | undefined;
     let settled = false;
 
-    const resolveOnce = (value: JsonResponse) => {
+    const resolveOnce = (value: RawJsonResponse) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', abort);
       tlsSocket.setTimeout(0);
       resolve(value);
     };
     const rejectOnce = (error: unknown) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', abort);
       response?.destroy();
       req?.destroy();
       tlsSocket.destroy();
       socket.destroy();
       reject(error);
     };
+    const abort = () => rejectOnce(signal?.reason instanceof Error ? signal.reason : new Error('operation canceled'));
     const onTlsError = (error: Error) => rejectOnce(error);
 
+    signal?.addEventListener('abort', abort, { once: true });
     tlsSocket.setTimeout(timeoutMs, () => rejectOnce(new Error('traffic request timed out')));
     tlsSocket.on('error', onTlsError);
     tlsSocket.once('close', () => tlsSocket.removeListener('error', onTlsError));
@@ -389,7 +443,7 @@ async function postHttpsJsonViaProxy(
 
 function consumeJsonResponse(
   response: IncomingMessage,
-  resolveOnce: (response: JsonResponse) => void,
+  resolveOnce: (response: RawJsonResponse) => void,
   rejectOnce: (error: unknown) => void
 ) {
   const chunks: Buffer[] = [];

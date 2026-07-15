@@ -1,6 +1,12 @@
 name = "youyu-traffic"
 main = "src/index.ts"
 compatibility_date = "2026-05-01"
+workers_dev = true
+preview_urls = false
+
+[[routes]]
+pattern = "youyu-api.fishknowsss.com"
+custom_domain = true
 
 [triggers]
 crons = ["17 */6 * * *"]

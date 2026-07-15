@@ -43,6 +43,10 @@ function createRegisteredStore(): TrafficStore {
   } as unknown as TrafficStore;
 }
 
+async function rejectDirectFetch(): Promise<Response> {
+  throw new TypeError('direct route unavailable');
+}
+
 async function listen(server: NetServer): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -384,6 +388,35 @@ describe('RemoteConfigClient cache', () => {
     });
   });
 
+  it('uses the injected direct fetch before a configured proxy', async () => {
+    const remoteConfig = {
+      version: 6,
+      enabled: true,
+      directRules: [],
+      proxyRules: []
+    };
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ config: remoteConfig }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+    );
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.6.0',
+      store: createRegisteredStore(),
+      fetch
+    });
+
+    await expect(client.sync({ proxyUrl: 'http://127.0.0.1:1' })).resolves.toMatchObject({
+      changed: true,
+      config: remoteConfig
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it('discards a response when the registered identity changes while the request is in flight', async () => {
     await writeFile(join(dir, 'remote-config.json'), JSON.stringify(cacheEnvelope()), 'utf8');
     let identity = { userId: 'user-1', deviceId: 'device-1', verificationStatus: 'verified' as const };
@@ -494,7 +527,8 @@ describe('RemoteConfigClient cache', () => {
       endpoint: `https://agent1:${origin.port}`,
       appVersion: '1.5.8',
       requestTimeoutMs: 1000,
-      store: createRegisteredStore()
+      store: createRegisteredStore(),
+      fetch: rejectDirectFetch
     });
 
     try {
@@ -511,6 +545,32 @@ describe('RemoteConfigClient cache', () => {
     }
   });
 
+  it('does not trust an unknown TLS certificate merely because the request uses the local proxy', async () => {
+    const origin = await startTlsOrigin((socket) => {
+      writeChunkedJson(socket, {
+        config: { version: 5, enabled: true, directRules: [], proxyRules: [] }
+      });
+    });
+    const proxy = await startConnectProxy(origin.port);
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: `https://agent1:${origin.port}`,
+      appVersion: '1.6.0',
+      requestTimeoutMs: 1000,
+      store: createRegisteredStore(),
+      fetch: rejectDirectFetch
+    });
+
+    try {
+      await expect(client.sync({ proxyUrl: proxy.url })).rejects.toThrow(
+        /route=proxy code=(?:DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE)/
+      );
+    } finally {
+      await proxy.close();
+      await origin.close();
+    }
+  });
+
   it('rejects a truncated response from an HTTP proxy without hanging', async () => {
     const proxy = await startTruncatedHttpProxy();
     const client = new RemoteConfigClient({
@@ -518,7 +578,8 @@ describe('RemoteConfigClient cache', () => {
       endpoint: 'http://config.invalid',
       appVersion: '1.5.8',
       requestTimeoutMs: 200,
-      store: createRegisteredStore()
+      store: createRegisteredStore(),
+      fetch: rejectDirectFetch
     });
 
     try {
@@ -549,7 +610,8 @@ describe('RemoteConfigClient cache', () => {
       endpoint: `https://agent1:${origin.port}`,
       appVersion: '1.5.8',
       requestTimeoutMs: 5000,
-      store: createRegisteredStore()
+      store: createRegisteredStore(),
+      fetch: rejectDirectFetch
     });
 
     try {
@@ -585,7 +647,8 @@ describe('RemoteConfigClient cache', () => {
       endpoint: `https://agent1:${origin.port}`,
       appVersion: '1.5.8',
       requestTimeoutMs: 50,
-      store: createRegisteredStore()
+      store: createRegisteredStore(),
+      fetch: rejectDirectFetch
     });
 
     try {
@@ -608,12 +671,13 @@ describe('RemoteConfigClient cache', () => {
       endpoint: 'https://config.invalid',
       appVersion: '1.5.8',
       requestTimeoutMs: 50,
-      store: createRegisteredStore()
+      store: createRegisteredStore(),
+      fetch: rejectDirectFetch
     });
 
     try {
       await expect(within(client.sync({ proxyUrl: proxy.url, signal: controller.signal }))).rejects.toThrow(
-        'remote config proxy connect timed out'
+        /route=proxy code=TIMEOUT/
       );
       expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
     } finally {

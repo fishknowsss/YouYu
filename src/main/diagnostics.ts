@@ -1,3 +1,6 @@
+import { join } from 'node:path';
+import type { DiagnosticIssueKind } from '../shared/ipc';
+
 export type DiagnosticReportInput = {
   exportedAt: Date;
   appVersion: string;
@@ -159,6 +162,10 @@ export function createDiagnosticExportFileName(appVersion: string, exportedAt = 
   return `YouYu-diagnostics-${version}-${timestamp}.txt`;
 }
 
+export function createDiagnosticExportDefaultPath(downloadsDirectory: string, defaultFileName: string): string {
+  return join(downloadsDirectory, defaultFileName);
+}
+
 export async function exportDiagnosticReport(
   input: DiagnosticReportInput,
   dependencies: DiagnosticExportDependencies
@@ -193,4 +200,3 @@ function toSingleSafeLine(value: string): string {
 function formatEnabled(enabled: boolean): string {
   return enabled ? '开启' : '关闭';
 }
-import type { DiagnosticIssueKind } from '../shared/ipc';
