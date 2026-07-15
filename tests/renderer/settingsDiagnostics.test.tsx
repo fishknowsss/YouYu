@@ -43,7 +43,9 @@ describe('settings diagnostic export', () => {
     const footerActionRule = getRule(styles, '.settings-footer-action');
     const updateRule = getRule(styles, '.update-row');
 
-    expect(controlsRule).toContain('grid-template-rows: repeat(3, var(--settings-row-height))');
+    expect(controlsRule).toContain(
+      'grid-template-rows: repeat(2, var(--settings-row-height)) var(--settings-compact-row-height)'
+    );
     expect(controlsRule).not.toContain('var(--settings-control-height)');
     expect(barRule).toContain('grid-template-columns: minmax(0, 1fr) var(--settings-action-width)');
     expect(barRule).toContain('column-gap: 16px');

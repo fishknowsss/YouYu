@@ -59,9 +59,15 @@ export function PetSprite({ state, scale = 0.78, animated = true, className = ''
     <span className={classNames} style={style} aria-hidden="true">
       {showsSideSleepZs ? (
         <span className="pet-side-sleep-zs">
-          <span className="pet-side-sleep-z">Z</span>
-          <span className="pet-side-sleep-z">Z</span>
-          <span className="pet-side-sleep-z">Z</span>
+          <span className="pet-side-sleep-z">
+            <span className="pet-side-sleep-z-glyph">Z</span>
+          </span>
+          <span className="pet-side-sleep-z">
+            <span className="pet-side-sleep-z-glyph">Z</span>
+          </span>
+          <span className="pet-side-sleep-z">
+            <span className="pet-side-sleep-z-glyph">Z</span>
+          </span>
         </span>
       ) : null}
     </span>

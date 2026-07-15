@@ -18,10 +18,10 @@ afterEach(async () => {
 
 describe('node availability health', () => {
   it('calculates availability percent and threshold colors by probe ratio', () => {
-    expect(getAvailabilityTone(8, 16)).toBe('danger');
-    expect(getAvailabilityTone(10, 16)).toBe('warning');
-    expect(getAvailabilityTone(13, 16)).toBe('warning');
-    expect(getAvailabilityTone(14, 16)).toBe('success');
+    expect(getAvailabilityTone(8, 15)).toBe('danger');
+    expect(getAvailabilityTone(9, 15)).toBe('warning');
+    expect(getAvailabilityTone(12, 15)).toBe('warning');
+    expect(getAvailabilityTone(13, 15)).toBe('success');
 
     const record = createAvailabilityRecord(
       'JP Tokyo',
@@ -78,7 +78,7 @@ describe('node availability health', () => {
     await expect(store.getTodayAvailability('US West', checkedAt)).resolves.toBeDefined();
   });
 
-  it('recalculates cached availability tone after probe thresholds change', async () => {
+  it('invalidates the legacy 16-site cache after the probe catalog changes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'youyu-node-health-'));
     tempDirs.push(dir);
     await writeFile(
@@ -101,11 +101,7 @@ describe('node availability health', () => {
     );
 
     const store = new NodeHealthStore(dir);
-    await expect(store.getTodayAvailability('JP Tokyo', new Date(2026, 6, 3, 23))).resolves.toMatchObject({
-      availableCount: 9,
-      totalCount: 16,
-      tone: 'danger'
-    });
+    await expect(store.getTodayAvailability('JP Tokyo', new Date(2026, 6, 3, 23))).resolves.toBeUndefined();
   });
 });
 

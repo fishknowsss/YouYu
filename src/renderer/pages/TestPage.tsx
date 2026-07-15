@@ -37,7 +37,6 @@ const services: Array<{
   { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai' },
   { key: 'flow', name: 'Flow', url: 'https://labs.google/fx/tools/flow', category: 'special' },
   { key: 'pixverse', name: 'PixVerse', url: 'https://app.pixverse.ai', category: 'ai' },
-  { key: 'github', name: 'GitHub', url: 'https://github.com', category: 'global' },
   { key: 'microsoftStore', name: 'Microsoft 商店', url: 'https://apps.microsoft.com', category: 'special' },
   { key: 'discord', name: 'Discord', url: 'https://discord.com', category: 'special' },
   { key: 'turnstile', name: 'Cloudflare 验证', url: 'https://challenges.cloudflare.com', category: 'special' },
@@ -360,6 +359,10 @@ function setCacheEntry(cacheKey: string, entry: { results: TestResults; activeKe
 
 export function resetConnectivityCacheForTests(): void {
   connectivityCache.clear();
+}
+
+export function getConnectivityTestServiceKeysForTests(): ConnectivityServiceKey[] {
+  return services.map((service) => service.key);
 }
 
 export function getConnectivityCacheKeysForTests(): string[] {

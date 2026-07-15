@@ -23,7 +23,7 @@ type NodeHealthFile = {
 };
 
 const nodeHealthFileName = 'node-health.json';
-const currentNodeHealthVersion = 1;
+const currentNodeHealthVersion = 2;
 
 export class NodeHealthStore {
   private readonly filePath: string;
@@ -119,7 +119,7 @@ export function availabilitySnapshotFromRecord(record: StoredNodeAvailability): 
   };
 }
 
-export function getAvailabilityTone(availableCount: number, totalCount = 10): NodeAvailabilityTone {
+export function getAvailabilityTone(availableCount: number, totalCount: number): NodeAvailabilityTone {
   const normalizedTotal = Math.max(1, Math.floor(totalCount));
   const percent = Math.round((Math.max(0, Math.floor(availableCount)) / normalizedTotal) * 100);
   if (percent < 60) return 'danger';

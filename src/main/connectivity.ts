@@ -123,15 +123,6 @@ export const connectivityServices: ConnectivityService[] = [
     kind: 'http'
   },
   {
-    key: 'github',
-    name: 'GitHub',
-    url: 'https://github.com',
-    probeUrl: 'https://github.com',
-    host: 'github.com',
-    category: 'global',
-    kind: 'http'
-  },
-  {
     key: 'microsoftStore',
     name: 'Microsoft 商店',
     url: 'https://apps.microsoft.com',

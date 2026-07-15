@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createDevYouYuApi } from '../../src/renderer/devApi';
 import {
+  getConnectivityTestServiceKeysForTests,
   getConnectivityCacheKey,
   getConnectivityCacheKeysForTests,
   resetConnectivityCacheForTests,
@@ -9,6 +10,11 @@ import {
 
 describe('connectivity test cache context', () => {
   beforeEach(resetConnectivityCacheForTests);
+
+  it('uses the same 15-site catalog without GitHub on the test page', () => {
+    expect(getConnectivityTestServiceKeysForTests()).toHaveLength(15);
+    expect(getConnectivityTestServiceKeysForTests()).not.toContain('github');
+  });
   it('does not share same-name node results across subscriptions or registrations', async () => {
     const snapshot = await createDevYouYuApi().getSnapshot();
     const base = {

@@ -30,6 +30,9 @@ describe('createDevYouYuApi', () => {
 
     expect(selected.currentNode).toBe('日本 01');
     expect(selected.nodes.find((node) => node.name === '日本 01')?.active).toBe(true);
+    const connectivity = await api.testAllConnectivity();
+    expect(connectivity).toHaveLength(15);
+    expect(connectivity.map((result) => result.key)).not.toContain('github');
     await expect(api.cancelOperation('dev-operation')).resolves.toBe(false);
   });
 

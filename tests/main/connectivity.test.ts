@@ -42,7 +42,7 @@ describe('parseTraceData', () => {
 });
 
 describe('connectivityServices', () => {
-  it('keeps the availability list with gaming, AI, development, captcha, and global services', () => {
+  it('keeps the 15-site availability list with gaming, AI, captcha, and global services', () => {
     expect(connectivityServices[0]).toMatchObject({
       key: 'steam',
       name: 'Steam',
@@ -58,7 +58,7 @@ describe('connectivityServices', () => {
       name: 'Steam 云同步',
       host: 'steamcloud-ugc.storage.googleapis.com'
     });
-    expect(connectivityServices).toHaveLength(16);
+    expect(connectivityServices).toHaveLength(15);
     expect(connectivityServices).toContainEqual(
       expect.objectContaining({
         key: 'pixverse',
@@ -70,7 +70,6 @@ describe('connectivityServices', () => {
     );
     expect(connectivityServices).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ key: 'github', host: 'github.com' }),
         expect.objectContaining({ key: 'microsoftStore', host: 'apps.microsoft.com' }),
         expect.objectContaining({ key: 'discord', host: 'discord.com' }),
         expect.objectContaining({ key: 'turnstile', host: 'challenges.cloudflare.com' }),
@@ -79,7 +78,7 @@ describe('connectivityServices', () => {
       ])
     );
     expect(connectivityServices.map((service) => service.key)).not.toEqual(
-      expect.arrayContaining(['bytedance', 'runway', 'tencent', 'ehentai'])
+      expect.arrayContaining(['github', 'bytedance', 'runway', 'tencent', 'ehentai'])
     );
   });
 });

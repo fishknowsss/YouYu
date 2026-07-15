@@ -28,7 +28,7 @@ const emptySnapshot: AppSnapshot = {
     delayStatus: 'untested',
     availability: {
       status: 'untested',
-      totalCount: 10
+      totalCount: 15
     }
   },
   strategies: [

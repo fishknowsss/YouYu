@@ -1047,6 +1047,14 @@ select:focus-visible {
   animation: pet-side-sleep-z 2200ms ease-in-out infinite;
 }
 
+.pet-side-sleep-z-glyph {
+  display: block;
+}
+
+.pet-sprite-edgeRightSleep .pet-side-sleep-z-glyph {
+  transform: scaleX(-1);
+}
+
 .pet-side-sleep-z:nth-child(2) {
   left: calc(15px * var(--pet-scale));
   bottom: calc(14px * var(--pet-scale));
@@ -2273,7 +2281,9 @@ select:focus-visible {
 .settings-panel {
   --settings-row-height: 64px;
   --settings-control-height: 46px;
+  --settings-compact-row-height: 46px;
   --settings-footer-row-height: 54px;
+  --settings-row-gap: 16px;
   --settings-action-width: 130px;
   align-self: stretch;
   display: grid;
@@ -2288,12 +2298,10 @@ select:focus-visible {
   height: 100%;
   display: grid;
   grid-template-columns: 1fr;
-  grid-template-rows: minmax(var(--settings-row-height), auto) auto minmax(0, 1fr) minmax(
-      var(--settings-row-height),
-      auto
-    );
+  grid-template-rows: var(--settings-row-height) auto auto;
   align-items: start;
-  row-gap: 12px;
+  align-content: start;
+  row-gap: var(--settings-row-gap);
 }
 
 .settings-controls-grid {
@@ -2302,10 +2310,10 @@ select:focus-visible {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(300px, 1fr) 204px var(--settings-action-width);
-  grid-template-rows: repeat(3, var(--settings-row-height));
+  grid-template-rows: repeat(2, var(--settings-row-height)) var(--settings-compact-row-height);
   align-items: end;
   column-gap: 16px;
-  row-gap: 8px;
+  row-gap: var(--settings-row-gap);
 }
 
 .field-wide {
@@ -2348,11 +2356,11 @@ select:focus-visible {
 
 .settings-footer {
   grid-column: 1;
-  grid-row: 4;
-  align-self: end;
+  grid-row: 3;
+  align-self: start;
   min-width: 0;
   display: grid;
-  gap: 8px;
+  gap: var(--settings-row-gap);
 }
 
 .settings-diagnostics-bar {
@@ -2768,12 +2776,6 @@ select:focus-visible {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 92px;
   align-items: end;
-  gap: 10px;
-}
-
-.test-workspace {
-  width: min(100%, 1040px);
-  grid-template-rows: 52px minmax(0, 1fr);
   gap: 10px;
 }
 

@@ -77,7 +77,6 @@ const devConnectivity: Array<{
   { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai', totalMs: 248 },
   { key: 'flow', name: 'Flow', url: 'https://labs.google/fx/tools/flow', category: 'special', totalMs: 338 },
   { key: 'pixverse', name: 'PixVerse', url: 'https://app.pixverse.ai', category: 'ai', totalMs: 428 },
-  { key: 'github', name: 'GitHub', url: 'https://github.com', category: 'global', totalMs: 194 },
   {
     key: 'microsoftStore',
     name: 'Microsoft 商店',

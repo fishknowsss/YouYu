@@ -10,6 +10,26 @@ function getCssRule(source: string, selector: string): string {
 }
 
 describe('settings footer layout', () => {
+  it('uses one six-row rhythm without a flexible spacer between controls and footer', async () => {
+    const source = await readFile('src/renderer/styles.css', 'utf8');
+    const settingsPanel = getCssRule(source, '.settings-panel');
+    const formGrid = getCssRule(source, '.settings-form-grid');
+    const controlsGrid = getCssRule(source, '.settings-controls-grid');
+    const footer = getCssRule(source, '.settings-footer');
+
+    expect(settingsPanel).toContain('--settings-row-gap: 16px;');
+    expect(settingsPanel).toContain('--settings-compact-row-height: 46px;');
+    expect(formGrid).toContain('grid-template-rows: var(--settings-row-height) auto auto;');
+    expect(formGrid).toContain('row-gap: var(--settings-row-gap);');
+    expect(formGrid).not.toContain('minmax(0, 1fr)');
+    expect(controlsGrid).toContain(
+      'grid-template-rows: repeat(2, var(--settings-row-height)) var(--settings-compact-row-height);'
+    );
+    expect(controlsGrid).toContain('row-gap: var(--settings-row-gap);');
+    expect(footer).toContain('grid-row: 3;');
+    expect(footer).toContain('gap: var(--settings-row-gap);');
+  });
+
   it('uses one shared row height for diagnostics and software updates', async () => {
     const source = await readFile('src/renderer/styles.css', 'utf8');
     const settingsPanel = getCssRule(source, '.settings-panel');

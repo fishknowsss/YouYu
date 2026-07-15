@@ -152,7 +152,6 @@ export type ConnectivityServiceKey =
   | 'gemini'
   | 'flow'
   | 'pixverse'
-  | 'github'
   | 'microsoftStore'
   | 'discord'
   | 'turnstile'
