@@ -234,7 +234,7 @@ describe('renderer action behavior', () => {
     expect(container.textContent).toContain('已导出');
   });
 
-  it('shows only the centered re-registration view after the advanced version entry is clicked', async () => {
+  it('shows only the centered re-registration view after the advanced version entry is clicked seven times', async () => {
     window.history.replaceState({}, '', '/?mode=advanced&page=settings');
     const snapshot = createRegisteredRendererSnapshot();
     const api = {
@@ -254,7 +254,7 @@ describe('renderer action behavior', () => {
     versionEntry?.focus();
     expect(document.activeElement).toBe(versionEntry);
 
-    await act(async () => versionEntry?.click());
+    await act(async () => clickVersionEntry(versionEntry));
 
     expect(container.querySelector('.app-shell')).toBeNull();
     expect(container.querySelector('.sidebar')).toBeNull();
@@ -290,7 +290,7 @@ describe('renderer action behavior', () => {
 
     await act(async () => root?.render(<App />));
     await act(async () => Promise.resolve());
-    await act(async () => container.querySelector<HTMLButtonElement>('.version-chip')?.click());
+    await act(async () => clickVersionEntry(container.querySelector<HTMLButtonElement>('.version-chip')));
 
     const passphrase = container.querySelector<HTMLInputElement>('input[name="registration-passphrase"]')!;
     await act(async () => {
@@ -372,6 +372,10 @@ function setControlledInputValue(input: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   setter?.call(input, value);
   input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function clickVersionEntry(entry: HTMLButtonElement | null | undefined): void {
+  for (let count = 0; count < 7; count += 1) entry?.click();
 }
 
 describe('RegistrationGate', () => {
@@ -487,7 +491,10 @@ describe('RegistrationGate', () => {
 
     const entry = container.querySelector<HTMLButtonElement>('.version-chip');
     expect(entry?.tagName).toBe('BUTTON');
-    expect(entry?.getAttribute('aria-label')).toContain('重新登记');
+    expect(entry?.getAttribute('aria-label')).toContain('当前版本 v');
+    expect(entry?.getAttribute('aria-label')).not.toContain('重新登记');
+    for (let count = 0; count < 6; count += 1) entry?.click();
+    expect(onRegistrationRequest).not.toHaveBeenCalled();
     entry?.click();
     expect(onRegistrationRequest).toHaveBeenCalledOnce();
   });

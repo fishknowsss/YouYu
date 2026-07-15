@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { BrandMark } from './BrandMark';
 
 declare const __YOUYU_APP_VERSION__: string;
@@ -37,6 +37,15 @@ export function AppShell({
     navItems.splice(3, 0, { key: 'petPreview', label: '桌宠' });
   }
   const versionLabel = getVersionLabel(__YOUYU_APP_VERSION__, __YOUYU_BUILD_CHANNEL__);
+  const registrationUnlockClicks = useRef(0);
+
+  function handleRegistrationUnlockClick() {
+    registrationUnlockClicks.current += 1;
+    if (registrationUnlockClicks.current < 7) return;
+
+    registrationUnlockClicks.current = 0;
+    onRegistrationRequest?.();
+  }
 
   return (
     <div
@@ -68,8 +77,8 @@ export function AppShell({
           <button
             type="button"
             className="version-chip"
-            aria-label={`重新登记，当前版本 ${versionLabel}`}
-            onClick={onRegistrationRequest}
+            aria-label={`当前版本 ${versionLabel}`}
+            onClick={handleRegistrationUnlockClick}
           >
             <span>{versionLabel}</span>
           </button>

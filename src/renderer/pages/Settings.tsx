@@ -95,20 +95,22 @@ export function Settings({
       </div>
       <section className="panel settings-panel">
         <div className="settings-form-grid">
-          <label className="field settings-subscription-field">
-            <span>订阅</span>
-            <input
-              value={subscriptionUrl}
-              disabled={busy || remoteManaged}
-              onChange={(event) => {
-                setSettingsDirty(true);
-                setSubscriptionUrl(event.target.value);
-              }}
-              placeholder="https://..."
-            />
-          </label>
+          <div className="settings-row settings-subscription-row">
+            <label className="field settings-subscription-field">
+              <span>订阅</span>
+              <input
+                value={subscriptionUrl}
+                disabled={busy || remoteManaged}
+                onChange={(event) => {
+                  setSettingsDirty(true);
+                  setSubscriptionUrl(event.target.value);
+                }}
+                placeholder="https://..."
+              />
+            </label>
+          </div>
 
-          <div className="settings-controls-grid">
+          <div className="settings-row settings-control-row">
             <label className="field settings-control-field">
               <span>规则来源</span>
               <select
@@ -129,7 +131,9 @@ export function Settings({
             <button className="wide-button settings-save-button" disabled={busy} onClick={save}>
               {saving ? '保存中' : '保存'}
             </button>
+          </div>
 
+          <div className="settings-row settings-control-row">
             <label className="field settings-control-field">
               <span>后台刷新</span>
               <select
@@ -150,7 +154,9 @@ export function Settings({
             <button className="secondary-button settings-control-button" disabled={busy} onClick={onSyncRemoteConfig}>
               {syncing ? '同步中' : '同步'}
             </button>
+          </div>
 
+          <div className="settings-row settings-control-row">
             <label className="network-route-toggle settings-route-toggle">
               <span className="network-route-main">
                 <input
@@ -172,7 +178,7 @@ export function Settings({
             </button>
           </div>
 
-          <div className="settings-footer">
+          <div className="settings-row settings-diagnostics-row">
             <div className="settings-diagnostics-bar">
               <div className="settings-diagnostics-summary" role="status" aria-live="polite" aria-atomic="true">
                 {actionStatus && (
@@ -193,7 +199,9 @@ export function Settings({
                 {exporting ? '导出中' : '导出'}
               </button>
             </div>
+          </div>
 
+          <div className="settings-row settings-update-track">
             <UpdatePanel
               snapshot={snapshot}
               busy={busy}

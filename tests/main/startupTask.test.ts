@@ -7,6 +7,7 @@ import {
 } from '../../src/main/platform/startupTask';
 
 const executablePath = String.raw`C:\Program Files\You & Yu\YouYu.exe`;
+const interactiveUserSid = 'S-1-5-21-1000-1000-1000-1001';
 
 function taskXml(
   command: string,
@@ -14,6 +15,13 @@ function taskXml(
   runLevel = 'LeastPrivilege',
   options: {
     taskEnabled?: boolean;
+    omitSettings?: boolean;
+    omitTaskEnabled?: boolean;
+    omitRunLevel?: boolean;
+    principalUserId?: string;
+    groupId?: string;
+    logonType?: string;
+    requiredPrivileges?: boolean;
     triggerName?: 'LogonTrigger' | 'TimeTrigger';
     triggerEnabled?: boolean;
     additionalAction?: boolean;
@@ -29,7 +37,10 @@ function taskXml(
   </Triggers>
   <Principals>
     <Principal>
-      <RunLevel>${runLevel}</RunLevel>
+      ${options.groupId ? `<GroupId>${options.groupId}</GroupId>` : `<UserId>${options.principalUserId ?? interactiveUserSid}</UserId>`}
+      <LogonType>${options.logonType ?? 'InteractiveToken'}</LogonType>
+      ${options.omitRunLevel ? '' : `<RunLevel>${runLevel}</RunLevel>`}
+      ${options.requiredPrivileges ? '<RequiredPrivileges><Privilege>SeDebugPrivilege</Privilege></RequiredPrivileges>' : ''}
     </Principal>
   </Principals>
   <Actions Context="Author">
@@ -39,9 +50,13 @@ function taskXml(
     </Exec>
     ${options.additionalAction ? '<Exec><Command>C:\\Other.exe</Command><Arguments></Arguments></Exec>' : ''}
   </Actions>
-  <Settings>
-    <Enabled>${options.taskEnabled === false ? 'false' : 'true'}</Enabled>
-  </Settings>
+  ${
+    options.omitSettings
+      ? ''
+      : `<Settings>
+    ${options.omitTaskEnabled ? '' : `<Enabled>${options.taskEnabled === false ? 'false' : 'true'}</Enabled>`}
+  </Settings>`
+  }
 </Task>`;
 }
 
@@ -98,6 +113,35 @@ describe('Windows startup task', () => {
     expect(task.isEnabled()).toBe(true);
   });
 
+  it('accepts Windows default values when task XML omits RunLevel and Enabled', async () => {
+    const runner = runnerSequence(
+      successful(
+        taskXml(executablePath, '--hidden', 'LeastPrivilege', {
+          omitRunLevel: true,
+          omitTaskEnabled: true
+        })
+      ),
+      failed()
+    );
+    const task = createWindowsStartupTask({ executablePath, runner });
+
+    await expect(task.reconcile(false)).resolves.toBe('current');
+
+    expect(task.isEnabled()).toBe(true);
+    expect(runner).toHaveBeenCalledOnce();
+  });
+
+  it('accepts Windows defaults when the optional Settings container is omitted', async () => {
+    const runner = runnerSequence(
+      successful(taskXml(executablePath, '--hidden', 'LeastPrivilege', { omitSettings: true }))
+    );
+    const task = createWindowsStartupTask({ executablePath, runner });
+
+    await expect(task.reconcile(false)).resolves.toBe('current');
+    expect(task.isEnabled()).toBe(true);
+    expect(runner).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['a different executable', String.raw`C:\Old\YouYu.exe`, '--hidden', 'LeastPrivilege'],
     ['different arguments', executablePath, '--startup', 'LeastPrivilege'],
@@ -140,6 +184,24 @@ describe('Windows startup task', () => {
     expect(task.isEnabled()).toBe(true);
     expect(runner).toHaveBeenCalledTimes(2);
     expect(runner).toHaveBeenNthCalledWith(2, expect.arrayContaining(['/Create', '/TN', 'YouYu', '/SC', 'ONLOGON']));
+  });
+
+  it.each([
+    ['the SYSTEM account', { principalUserId: 'S-1-5-18', logonType: 'ServiceAccount' }],
+    ['the built-in Administrator account', { principalUserId: 'S-1-5-21-1-2-3-500' }],
+    ['an administrators group', { groupId: 'S-1-5-32-544' }],
+    ['a non-interactive logon', { logonType: 'Password' }],
+    ['required privileges', { requiredPrivileges: true }]
+  ])('rebuilds a task that uses %s even when its executable matches', async (_reason, options) => {
+    const runner = runnerSequence(
+      successful(taskXml(executablePath, '--hidden', 'LeastPrivilege', options)),
+      successful()
+    );
+    const task = createWindowsStartupTask({ executablePath, runner });
+
+    await expect(task.reconcile(false)).resolves.toBe('stale');
+    expect(runner).toHaveBeenCalledTimes(2);
+    expect(runner).toHaveBeenNthCalledWith(2, expect.arrayContaining(['/Create', '/TN', 'YouYu', '/RL', 'LIMITED']));
   });
 
   it('migrates a legacy login item only when the task is missing', async () => {

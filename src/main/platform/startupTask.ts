@@ -93,6 +93,10 @@ function isCurrentTask(xml: string, executablePath: string): boolean {
   const logonTrigger = triggers === undefined ? undefined : readXmlRawElement(triggers, 'LogonTrigger');
   const command = execAction === undefined ? undefined : readXmlElement(execAction, 'Command');
   const argumentsValue = execAction === undefined ? undefined : readXmlElement(execAction, 'Arguments');
+  const userId = principal === undefined ? undefined : readXmlElement(principal, 'UserId');
+  const groupId = principal === undefined ? undefined : readXmlElement(principal, 'GroupId');
+  const logonType = principal === undefined ? undefined : readXmlElement(principal, 'LogonType');
+  const requiredPrivileges = principal === undefined ? undefined : readXmlRawElement(principal, 'RequiredPrivileges');
   const runLevel = principal === undefined ? undefined : readXmlElement(principal, 'RunLevel');
   const taskEnabled = settings === undefined ? undefined : readXmlElement(settings, 'Enabled');
   const triggerEnabled = logonTrigger === undefined ? undefined : readXmlElement(logonTrigger, 'Enabled');
@@ -100,8 +104,10 @@ function isCurrentTask(xml: string, executablePath: string): boolean {
     actions === undefined ||
     command === undefined ||
     argumentsValue === undefined ||
-    runLevel === undefined ||
-    taskEnabled === undefined ||
+    userId === undefined ||
+    logonType === undefined ||
+    principals === undefined ||
+    principal === undefined ||
     triggers === undefined ||
     logonTrigger === undefined
   ) {
@@ -111,11 +117,27 @@ function isCurrentTask(xml: string, executablePath: string): boolean {
   return (
     normalizeWindowsCommand(command) === normalizeWindowsCommand(executablePath) &&
     argumentsValue.trim() === hiddenArgument &&
-    runLevel.trim().toLowerCase() === 'leastprivilege' &&
-    taskEnabled.trim().toLowerCase() === 'true' &&
+    isInteractiveUserPrincipal(userId, logonType) &&
+    groupId === undefined &&
+    requiredPrivileges === undefined &&
+    (runLevel === undefined || runLevel.trim().toLowerCase() === 'leastprivilege') &&
+    (taskEnabled === undefined || taskEnabled.trim().toLowerCase() === 'true') &&
     (triggerEnabled === undefined || triggerEnabled.trim().toLowerCase() === 'true') &&
     hasOnlyExpectedExecAction(actions) &&
     hasOnlyExpectedTrigger(triggers)
+  );
+}
+
+function isInteractiveUserPrincipal(userId: string, logonType: string): boolean {
+  const normalizedUserId = userId.trim().toLowerCase();
+  if (!normalizedUserId || logonType.trim().toLowerCase() !== 'interactivetoken') return false;
+
+  return (
+    !['s-1-5-18', 's-1-5-19', 's-1-5-20'].includes(normalizedUserId) &&
+    !normalizedUserId.startsWith('s-1-5-80-') &&
+    !(normalizedUserId.startsWith('s-') && normalizedUserId.endsWith('-500')) &&
+    !normalizedUserId.endsWith('\\system') &&
+    normalizedUserId !== 'system'
   );
 }
 

@@ -35,18 +35,17 @@ describe('settings diagnostic export', () => {
     expect(html).toContain('DNS 异常 · 点击修复');
   });
 
-  it('keeps the three control rows rhythmic and gives diagnostics a full-width footer', async () => {
+  it('keeps all six settings rows on one grid and gives diagnostics a full-width action', async () => {
     const styles = await readFile('src/renderer/styles.css', 'utf8');
-    const controlsRule = getRule(styles, '.settings-controls-grid');
+    const formRule = getRule(styles, '.settings-form-grid');
+    const rowRule = getRule(styles, '.settings-row');
     const barRule = getRule(styles, '.settings-diagnostics-bar');
     const exportRule = getRule(styles, '.settings-diagnostics-export');
     const footerActionRule = getRule(styles, '.settings-footer-action');
     const updateRule = getRule(styles, '.update-row');
 
-    expect(controlsRule).toContain(
-      'grid-template-rows: repeat(2, var(--settings-row-height)) var(--settings-compact-row-height)'
-    );
-    expect(controlsRule).not.toContain('var(--settings-control-height)');
+    expect(formRule).toContain('grid-template-rows: repeat(6, var(--settings-row-height))');
+    expect(rowRule).toContain('grid-template-columns: subgrid');
     expect(barRule).toContain('grid-template-columns: minmax(0, 1fr) var(--settings-action-width)');
     expect(barRule).toContain('column-gap: 16px');
     expect(exportRule).toContain('grid-column: 2');
@@ -55,7 +54,8 @@ describe('settings diagnostic export', () => {
     expect(barRule).toContain('height: var(--settings-footer-row-height)');
     expect(updateRule).toContain('min-height: var(--settings-footer-row-height)');
     expect(updateRule).toContain('padding: 4px 0 4px 14px');
-    expect(controlsRule).not.toContain('grid-row: 4');
+    expect(styles).not.toContain('.settings-controls-grid {');
+    expect(styles).not.toContain('.settings-footer {');
   });
 
   it('shows a disabled in-progress export action', () => {
@@ -172,6 +172,17 @@ describe('settings diagnostic export', () => {
     expect(styles).toContain('.nav-list button:not(.active):hover:not(:disabled)');
     expect(selectedHoverRule).toContain('background: var(--accent-strong)');
     expect(styles).not.toContain('.nav-list button:hover:not(:disabled),');
+  });
+
+  it('keeps the hidden version entry visually inert and lifted from the bottom edge', async () => {
+    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const versionRule = getRule(styles, '.version-chip');
+
+    expect(versionRule).toContain('width: var(--sidebar-version-width);');
+    expect(versionRule).toContain('var(--sidebar-block-padding)');
+    expect(versionRule).not.toContain('transition:');
+    expect(styles).not.toContain('.version-chip:hover:not(:disabled)');
+    expect(styles).not.toContain('.version-chip:active:not(:disabled)');
   });
 });
 

@@ -8,7 +8,13 @@
 
 YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新和桌宠交互。
 
-当前源码版本与最新公开发布版本均为 [`1.6.3`](https://github.com/fishknowsss/YouYu/releases/tag/v1.6.3)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)，本次完整说明见 [v1.6.3 迭代说明](docs/releases/v1.6.3.md)。
+当前源码版本与最新公开发布版本均为 [`1.6.4`](https://github.com/fishknowsss/YouYu/releases/tag/v1.6.4)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)，本次完整说明见 [v1.6.4 迭代说明](docs/releases/v1.6.4.md)。
+
+## 1.6.4 迭代重点
+
+- 修复 Windows 计划任务省略默认 `RunLevel`、`Enabled` 字段时被误判为旧任务，进而尝试重写并显示“同步开机自启失败”的问题；符合当前应用、隐藏启动参数和普通交互用户边界的任务现在直接沿用。
+- 专业模式左下角版本号改为真正的隐藏入口：无悬停或按压外观变化，连续点击 7 次才进入重新登记；版本号外侧左距与下距在不同侧栏宽度下保持一致。
+- 设置页改为唯一父级控制的六行网格，六个 64px 轨道与五处 8px 间距连续排列；订阅、三行设置、诊断日志和软件更新不再分别由多组布局控制。
 
 ## 1.6.3 迭代重点
 

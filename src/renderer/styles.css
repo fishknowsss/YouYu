@@ -135,10 +135,14 @@ select:focus-visible {
 }
 
 .app-shell {
+  --sidebar-width: clamp(148px, 16.8vw, 168px);
+  --sidebar-version-width: 72px;
+  --sidebar-block-padding: 16px;
+  --sidebar-divider-width: 1px;
   width: 100%;
   height: 100dvh;
   display: grid;
-  grid-template-columns: clamp(148px, 16.8vw, 168px) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   padding-top: 30px;
   background: var(--surface);
   -webkit-app-region: drag;
@@ -154,8 +158,8 @@ select:focus-visible {
   display: grid;
   grid-template-rows: 58px minmax(0, 1fr) auto;
   gap: 14px;
-  padding: 16px clamp(10px, 1.2vw, 12px);
-  border-right: 1px solid var(--line);
+  padding: var(--sidebar-block-padding) clamp(10px, 1.2vw, 12px);
+  border-right: var(--sidebar-divider-width) solid var(--line);
   background: var(--surface-raised);
   overflow: hidden;
   -webkit-app-region: no-drag;
@@ -307,6 +311,11 @@ select:focus-visible {
   align-self: end;
   min-width: 0;
   justify-self: center;
+  width: var(--sidebar-version-width);
+  margin-bottom: calc(
+    (var(--sidebar-width) - var(--sidebar-divider-width) - var(--sidebar-version-width)) / 2 -
+      var(--sidebar-block-padding)
+  );
   min-height: 28px;
   display: inline-flex;
   align-items: center;
@@ -322,20 +331,6 @@ select:focus-visible {
   letter-spacing: 0;
   line-height: 1;
   cursor: default;
-  transition:
-    color 140ms ease,
-    border-color 140ms ease,
-    background 140ms ease;
-}
-
-.version-chip:hover:not(:disabled) {
-  color: var(--accent-strong);
-  border-color: rgb(143 88 215 / 42%);
-  background: rgb(143 88 215 / 7%);
-}
-
-.version-chip:active:not(:disabled) {
-  transform: translateY(1px);
 }
 
 .version-chip span {
@@ -2281,15 +2276,14 @@ select:focus-visible {
 .settings-panel {
   --settings-row-height: 64px;
   --settings-control-height: 46px;
-  --settings-compact-row-height: 46px;
   --settings-footer-row-height: 54px;
-  --settings-row-gap: 16px;
+  --settings-row-gap: 8px;
   --settings-action-width: 130px;
   align-self: stretch;
   display: grid;
   min-height: 0;
   height: 100%;
-  padding: 20px 14px 14px;
+  padding: 16px;
 }
 
 .settings-form-grid {
@@ -2297,23 +2291,20 @@ select:focus-visible {
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-columns: 1fr;
-  grid-template-rows: var(--settings-row-height) auto auto;
-  align-items: start;
-  align-content: start;
+  grid-template-columns: minmax(300px, 1fr) 204px var(--settings-action-width);
+  grid-template-rows: repeat(6, var(--settings-row-height));
+  align-content: center;
+  column-gap: 16px;
   row-gap: var(--settings-row-gap);
 }
 
-.settings-controls-grid {
-  grid-column: 1;
-  grid-row: 2;
+.settings-row {
+  grid-column: 1 / -1;
   min-width: 0;
+  min-height: 0;
   display: grid;
-  grid-template-columns: minmax(300px, 1fr) 204px var(--settings-action-width);
-  grid-template-rows: repeat(2, var(--settings-row-height)) var(--settings-compact-row-height);
+  grid-template-columns: subgrid;
   align-items: end;
-  column-gap: 16px;
-  row-gap: var(--settings-row-gap);
 }
 
 .field-wide {
@@ -2321,9 +2312,10 @@ select:focus-visible {
 }
 
 .settings-subscription-field {
-  grid-column: 1;
-  grid-row: 1;
+  grid-column: 1 / -1;
   min-width: 0;
+  height: var(--settings-row-height);
+  align-content: end;
 }
 
 .settings-control-field {
@@ -2354,16 +2346,9 @@ select:focus-visible {
   font-size: 18px;
 }
 
-.settings-footer {
-  grid-column: 1;
-  grid-row: 3;
-  align-self: start;
-  min-width: 0;
-  display: grid;
-  gap: var(--settings-row-gap);
-}
-
 .settings-diagnostics-bar {
+  grid-column: 1 / -1;
+  align-self: end;
   min-width: 0;
   height: var(--settings-footer-row-height);
   display: grid;
