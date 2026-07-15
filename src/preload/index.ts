@@ -39,6 +39,7 @@ const api: YouYuApi = {
   saveSettings: (settings, request) => ipcRenderer.invoke(ipcChannels.saveSettings, settings, request),
   registerTrafficIdentity: (input) => ipcRenderer.invoke(ipcChannels.registerTrafficIdentity, input),
   syncRemoteConfig: (request) => ipcRenderer.invoke(ipcChannels.syncRemoteConfig, request),
+  exportDiagnostics: () => ipcRenderer.invoke(ipcChannels.exportDiagnostics),
   cancelOperation: (requestId) => ipcRenderer.invoke(ipcChannels.cancelOperation, requestId),
   checkForUpdates: () => ipcRenderer.invoke(ipcChannels.checkForUpdates),
   installUpdate: () => ipcRenderer.invoke(ipcChannels.installUpdate)

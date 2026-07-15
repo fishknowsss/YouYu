@@ -69,11 +69,40 @@ npm run smoke
 Remove-Item -LiteralPath $archive -Recurse -Force
 ```
 
-`release/`、`release-archive/` 和 `resources/generated/` 都不应该提交。
+`release/`、`release-archive/`、`local-subscription-builds/` 和 `resources/generated/` 都不应该提交。
+
+## 私有双包留存规则
+
+每个新版本完成 `npm run dist:win:local` 后，必须另存一份仅供本机或内部分发的带订阅双包：
+
+```text
+local-subscription-builds/<version>/YouYu-<version>-x64-in.exe
+local-subscription-builds/<version>/YouYu-<version>-x64-in.exe.blockmap
+local-subscription-builds/<version>/YouYu-<version>-x64-no.exe
+local-subscription-builds/<version>/YouYu-<version>-x64-no.exe.blockmap
+```
+
+- 这里只保留内置私有订阅的 `-in` 和 `-no` 两版，不复制标准无后缀版。
+- 文件必须来自 `npm run dist:win:local` 的最终本地产物，不能使用 `npm run dist:win:release` 生成的同名空订阅公开更新包。
+- 复制前应确认 `-in`、`-no` 安装包内的 `resources/default-subscription.txt` 非空，并与本机 `resources/default-subscription.in.txt` 一致。
+- `local-subscription-builds/` 整体由 `.gitignore` 排除，只在本机保存；不得提交、上传 GitHub Release、放入 Actions artifact 或作为公开更新资产来源。
+- 该目录按版本分文件夹长期保留，不套用 `release-archive/` 的“当前版本加前两个版本”清理规则。
+
+PowerShell 留存命令：
+
+```powershell
+$version = node -p "require('./package.json').version"
+$target = Join-Path 'local-subscription-builds' $version
+New-Item -ItemType Directory -Force -Path $target | Out-Null
+Copy-Item "release/YouYu-$version-x64-in.exe" $target -Force
+Copy-Item "release/YouYu-$version-x64-in.exe.blockmap" $target -Force
+Copy-Item "release/YouYu-$version-x64-no.exe" $target -Force
+Copy-Item "release/YouYu-$version-x64-no.exe.blockmap" $target -Force
+```
 
 ## 本地归档规则
 
-`release-archive/` 只用于本机备份，不用于打包中转，也不提交到 Git。
+`release-archive/` 只用于本机备份公开更新产物，不用于打包中转，也不提交到 Git。带私有订阅的 `-in`、`-no` 双包只进入 `local-subscription-builds/<version>/`，避免与同名公开空订阅包混淆。
 
 归档保留范围：
 
@@ -196,7 +225,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    node -p "require('./package.json').version"
    ```
 
-   只提交本次源码、文档、版本号和测试改动。不要提交 `release/`、`release-archive/`、`out/`、`resources/generated/` 或本机私有订阅文件。
+   只提交本次源码、文档、版本号和测试改动。不要提交 `release/`、`release-archive/`、`local-subscription-builds/`、`out/`、`resources/generated/` 或本机私有订阅文件。
 
 2. 运行本地验证。
 
@@ -213,7 +242,17 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
    如果改动包含 UI，必须额外做关键尺寸或关键页面验证。优先覆盖最小窗口、断点附近窗口和本次改动页面；可以使用截图、DOM 快照或等价的可重复检查，并在最终说明中写明验证过的尺寸和页面。
 
-3. 生成公开更新资产。
+3. 生成并留存本地私有双包，再生成公开更新资产。
+
+   先生成标准空订阅版以及带订阅的 `-in`、`-no` 本地产物：
+
+   ```powershell
+   npm run dist:win:local
+   ```
+
+   反向确认 `-in`、`-no` 的内置订阅与 `resources/default-subscription.in.txt` 一致后，立即按“私有双包留存规则”复制到 `local-subscription-builds/<version>/`。这个留存动作必须在下一条公开打包命令前完成，因为公开打包会用空订阅同名文件覆盖 `release/`。
+
+   再生成三通道公开更新资产：
 
    ```powershell
    npm run dist:win:release
@@ -237,7 +276,9 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
 4. 维护本地归档。
 
-   `release-archive/` 只保留当前版本和前两个构建版本。归档当前版本时至少保留三个安装包和对应 `.blockmap`；可以同时保留 `<version>-latest.yml` 方便本机追溯。删除旧版本前先确认目标路径在 `release-archive/` 内。
+   `release-archive/` 只保留当前版本和前两个构建版本的公开更新产物。归档当前版本时至少保留三个公开空订阅安装包和对应 `.blockmap`；可以同时保留 `<version>-latest.yml` 方便本机追溯。删除旧版本前先确认目标路径在 `release-archive/` 内。
+
+   确认 `local-subscription-builds/<version>/` 已在公开打包前留存本地内置订阅的 `-in`、`-no` 安装包及对应 `.blockmap`。不要从当前公开 `release/` 重新覆盖该目录；私有双包目录不包含标准版，不上传 GitHub，也不按三版本策略清理。
 
 5. 提交源码改动。
 
@@ -321,4 +362,5 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 - `release/YouYu-<version>-x64.exe` 存在。
 - `release/YouYu-<version>-x64-in.exe` 存在。
 - `release/YouYu-<version>-x64-no.exe` 存在。
+- `local-subscription-builds/<version>/` 中已另存带订阅的 `-in`、`-no` 两版及对应 `.blockmap`，且没有标准无后缀版。
 - 上传 GitHub 时使用 `npm run dist:win:release` 生成的三通道公开更新产物，并确认 `latest.yml`、`latest-in.yml`、`latest-no.yml` 都存在。

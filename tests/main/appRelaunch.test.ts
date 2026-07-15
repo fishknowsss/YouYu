@@ -38,4 +38,67 @@ describe('application relaunch safety', () => {
     expect(initialization).toContain('if (resumeProxyAfterRelaunch)');
     expect(initialization).toContain('void startProxy()');
   });
+
+  it('runs one complete tray repair before relaunching without an intermediate core restart', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const combinedRepair = source.slice(
+      source.indexOf('async function repairNetworkAndRestartApp'),
+      source.indexOf('function registerIpc')
+    );
+    const trayMenu = source.slice(
+      source.indexOf('function refreshTrayMenu'),
+      source.indexOf('async function runTrayAction')
+    );
+
+    expect(combinedRepair.indexOf('await repairProxy(undefined, { resumeRuntime: false })')).toBeLessThan(
+      combinedRepair.indexOf('return restartKernelAndApp(snapshot)')
+    );
+    expect(trayMenu).toContain("label: '网络修复'");
+    expect(trayMenu).not.toContain("label: '重启内核并重启软件'");
+    expect(trayMenu).not.toContain("label: '重型网络修复'");
+  });
+
+  it('blocks competing core starts while repair owns the lifecycle queue', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const guardedStart = source.slice(
+      source.indexOf('async function startLifecycleWithRepairRetry'),
+      source.indexOf('async function startLifecycleForUser')
+    );
+    const guardedRestart = source.slice(
+      source.indexOf('async function restartLifecycleForIntent'),
+      source.indexOf('function runtimeActionsForIntent')
+    );
+    const repair = source.slice(
+      source.indexOf('async function repairProxy'),
+      source.indexOf('async function registerTrafficIdentity')
+    );
+
+    expect(guardedStart.match(/throwIfNetworkRepairInProgress/g)).toHaveLength(3);
+    expect(guardedRestart.match(/throwIfNetworkRepairInProgress/g)).toHaveLength(3);
+    expect(repair).toContain('allowDuringNetworkRepair: true');
+    expect(repair).toContain('if (handingOffToRelaunch) lifecycle.suspendStarts()');
+    expect(repair).toContain('scheduleSubscriptionRefresh()');
+  });
+
+  it('selects a low-risk diagnostic repair before the complete repair chain', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const targetedRepair = source.slice(
+      source.indexOf('async function runIssueTargetedRepair'),
+      source.indexOf('async function repairProxy')
+    );
+    const repair = source.slice(
+      source.indexOf('async function repairProxy'),
+      source.indexOf('async function registerTrafficIdentity')
+    );
+
+    expect(targetedRepair).toContain('runTargetedNetworkRepair');
+    expect(targetedRepair).toContain('disableSystemProxy');
+    expect(targetedRepair).toContain('flushDns');
+    expect(targetedRepair).toContain('stopKernel');
+    expect(targetedRepair).toContain('refreshSubscription');
+    expect(repair).toContain('issueKind: options.issueKind ?? classifyDiagnosticIssue(lastError)');
+    expect(repair.indexOf('runTargetedRepair: runIssueTargetedRepair')).toBeLessThan(
+      repair.indexOf('repairLifecycle:')
+    );
+  });
 });

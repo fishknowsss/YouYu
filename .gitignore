@@ -2,6 +2,7 @@ node_modules/
 out/
 release/
 release-archive/
+local-subscription-builds/
 .playwright-mcp/
 .codex/
 .agents/

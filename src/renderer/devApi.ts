@@ -153,7 +153,8 @@ export function createDevYouYuApi(): YouYuApi {
       status: 'idle'
     },
     diagnostics: {
-      logs: []
+      logs: [],
+      logCount: 0
     }
   };
 
@@ -435,6 +436,12 @@ export function createDevYouYuApi(): YouYuApi {
         remoteSubscriptionUrl: snapshot.remoteSubscriptionUrl,
         subscriptionUrl: snapshot.subscriptionUrl
       });
+    },
+    async exportDiagnostics() {
+      return {
+        canceled: false,
+        exportedCount: snapshot.diagnostics.logCount ?? snapshot.diagnostics.logs.length
+      };
     },
     async cancelOperation() {
       return false;

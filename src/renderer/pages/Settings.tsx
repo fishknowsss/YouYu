@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppSettingsInput, AppSnapshot, RuleProfile } from '../../shared/ipc';
+import { isActionErrorMessage } from '../actionMessages';
 
 type SettingsProps = {
   snapshot: AppSnapshot;
@@ -10,6 +11,7 @@ type SettingsProps = {
   onRepair: () => void;
   onSave: (settings: AppSettingsInput) => void;
   onSyncRemoteConfig: () => void;
+  onExportDiagnostics: () => void;
   onCheckUpdate: () => void;
   onInstallUpdate: () => void;
 };
@@ -23,6 +25,7 @@ export function Settings({
   onRepair,
   onSave,
   onSyncRemoteConfig,
+  onExportDiagnostics,
   onCheckUpdate,
   onInstallUpdate
 }: SettingsProps) {
@@ -38,6 +41,12 @@ export function Settings({
   const saving = busy && busyLabel === '保存中';
   const syncing = busy && busyLabel === '同步中';
   const repairing = busy && busyLabel === '修复中';
+  const exporting = busy && busyLabel === '导出中';
+  const diagnosticLogCount = snapshot.diagnostics.logCount ?? snapshot.diagnostics.logs.length;
+  const diagnosticIssue = getDiagnosticIssueCopy(snapshot.diagnostics.issueKind);
+  const actionMessageIsError = isActionErrorMessage(message);
+  const actionStatus = actionMessageIsError ? message : diagnosticIssue || message;
+  const actionStatusIsError = actionMessageIsError || Boolean(diagnosticIssue);
 
   useEffect(() => {
     const snapshotSettingsKey = getSnapshotSettingsKey(snapshot);
@@ -161,11 +170,19 @@ export function Settings({
             <button className="secondary-button settings-control-button" disabled={busy} onClick={onRepair}>
               {repairing ? '修复中' : '修复'}
             </button>
-            {message && (
-              <div className={`settings-action-status ${isErrorMessage(message) ? 'is-error' : ''}`} aria-live="polite">
-                {message}
+            {actionStatus && (
+              <div className={`settings-action-status${actionStatusIsError ? ' is-error' : ''}`} aria-live="polite">
+                {actionStatus}
               </div>
             )}
+            <NetworkStatus className="settings-diagnostics-count" label="诊断日志" value={`${diagnosticLogCount} 条`} />
+            <button
+              className="secondary-button settings-control-button settings-diagnostics-export"
+              disabled={busy}
+              onClick={onExportDiagnostics}
+            >
+              {exporting ? '导出中' : '导出'}
+            </button>
           </div>
 
           <UpdatePanel
@@ -180,23 +197,38 @@ export function Settings({
   );
 }
 
-function isErrorMessage(message: string): boolean {
-  return (
-    message.includes('失败') ||
-    message.includes('超时') ||
-    message.includes('不可用') ||
-    message.includes('未加载') ||
-    message.includes('先')
-  );
-}
-
 function formatEnabled(enabled: boolean): string {
   return enabled ? '开启' : '关闭';
 }
 
-function NetworkStatus({ label, value }: { label: string; value: string }) {
+function getDiagnosticIssueCopy(issueKind: AppSnapshot['diagnostics']['issueKind']): string {
+  switch (issueKind) {
+    case 'system-proxy':
+      return '系统代理异常 · 点击修复';
+    case 'dns':
+      return 'DNS 异常 · 点击修复';
+    case 'kernel':
+      return '内核异常 · 点击修复';
+    case 'network':
+      return '网络连接异常 · 点击修复';
+    case 'subscription':
+      return '订阅异常 · 检查后保存';
+    case 'permission':
+      return '权限异常 · 管理员重启';
+    case 'backend':
+      return '后台异常 · 稍后同步';
+    case 'registration':
+      return '登记异常 · 重新登记';
+    case 'unknown':
+      return '运行异常 · 导出日志';
+    default:
+      return '';
+  }
+}
+
+function NetworkStatus({ label, value, className = '' }: { label: string; value: string; className?: string }) {
   return (
-    <div className="network-status-item">
+    <div className={`network-status-item${className ? ` ${className}` : ''}`}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>

@@ -324,6 +324,167 @@ describe('createLifecycleController', () => {
     expect(controller.getStatus()).toBe('stopped');
   });
 
+  it('stops mihomo after disabling the proxy and before repairing the remaining network state', async () => {
+    const calls: string[] = [];
+    const controller = createLifecycleController({
+      proxy: {
+        enable: vi.fn(async () => undefined),
+        restore: vi.fn(async () => undefined),
+        repair: vi.fn(async () => {
+          calls.push('proxy.repair');
+        }),
+        disableForRepair: vi.fn(async () => {
+          calls.push('proxy.disableForRepair');
+        }),
+        repairSystemNetwork: vi.fn(async () => {
+          calls.push('proxy.repairSystemNetwork');
+        })
+      },
+      mihomo: {
+        start: vi.fn(async () => undefined),
+        stop: vi.fn(async () => {
+          calls.push('mihomo.stop');
+        })
+      },
+      onStatusChange(status) {
+        calls.push(`status.${status}`);
+      }
+    });
+    await controller.start();
+    calls.length = 0;
+
+    await controller.repair();
+
+    expect(calls).toEqual(['proxy.disableForRepair', 'mihomo.stop', 'status.stopped', 'proxy.repairSystemNetwork']);
+  });
+
+  it('leaves mihomo running and marks repair failed when the proxy cannot be disabled', async () => {
+    const calls: string[] = [];
+    const stop = vi.fn(async () => {
+      calls.push('mihomo.stop');
+    });
+    const repairSystemNetwork = vi.fn(async () => {
+      calls.push('proxy.repairSystemNetwork');
+    });
+    const controller = createLifecycleController({
+      proxy: {
+        enable: vi.fn(async () => undefined),
+        restore: vi.fn(async () => undefined),
+        repair: vi.fn(async () => undefined),
+        disableForRepair: vi.fn(async () => {
+          calls.push('proxy.disableForRepair');
+          throw new Error('proxy disable failed');
+        }),
+        repairSystemNetwork
+      },
+      mihomo: { start: vi.fn(async () => undefined), stop },
+      onStatusChange(status) {
+        calls.push(`status.${status}`);
+      }
+    });
+
+    await expect(controller.repair()).rejects.toThrow('proxy disable failed');
+
+    expect(calls).toEqual(['proxy.disableForRepair', 'status.failed']);
+    expect(controller.getStatus()).toBe('failed');
+    expect(stop).not.toHaveBeenCalled();
+    expect(repairSystemNetwork).not.toHaveBeenCalled();
+  });
+
+  it('does not continue network repair or start a replacement when mihomo cannot stop', async () => {
+    const calls: string[] = [];
+    const start = vi.fn(async () => {
+      calls.push('mihomo.start');
+    });
+    const repairSystemNetwork = vi.fn(async () => {
+      calls.push('proxy.repairSystemNetwork');
+    });
+    const controller = createLifecycleController({
+      proxy: {
+        enable: vi.fn(async () => undefined),
+        restore: vi.fn(async () => undefined),
+        repair: vi.fn(async () => undefined),
+        disableForRepair: vi.fn(async () => {
+          calls.push('proxy.disableForRepair');
+        }),
+        repairSystemNetwork
+      },
+      mihomo: {
+        start,
+        stop: vi.fn(async () => {
+          calls.push('mihomo.stop');
+          throw new Error('mihomo stop failed');
+        })
+      },
+      onStatusChange(status) {
+        calls.push(`status.${status}`);
+      }
+    });
+
+    await expect(controller.repair()).rejects.toThrow('mihomo stop failed');
+
+    expect(calls).toEqual(['proxy.disableForRepair', 'mihomo.stop', 'status.failed']);
+    expect(controller.getStatus()).toBe('failed');
+    expect(start).not.toHaveBeenCalled();
+    expect(repairSystemNetwork).not.toHaveBeenCalled();
+  });
+
+  it('keeps the stopped status when the remaining network repair fails', async () => {
+    const calls: string[] = [];
+    const controller = createLifecycleController({
+      proxy: {
+        enable: vi.fn(async () => undefined),
+        restore: vi.fn(async () => undefined),
+        repair: vi.fn(async () => undefined),
+        disableForRepair: vi.fn(async () => {
+          calls.push('proxy.disableForRepair');
+        }),
+        repairSystemNetwork: vi.fn(async () => {
+          calls.push('proxy.repairSystemNetwork');
+          throw new Error('network repair failed');
+        })
+      },
+      mihomo: {
+        start: vi.fn(async () => undefined),
+        stop: vi.fn(async () => {
+          calls.push('mihomo.stop');
+        })
+      },
+      onStatusChange(status) {
+        calls.push(`status.${status}`);
+      }
+    });
+    await controller.start();
+    calls.length = 0;
+
+    await expect(controller.repair()).rejects.toThrow('network repair failed');
+
+    expect(calls).toEqual(['proxy.disableForRepair', 'mihomo.stop', 'status.stopped', 'proxy.repairSystemNetwork']);
+    expect(controller.getStatus()).toBe('stopped');
+  });
+
+  it('uses the legacy repair once when only one staged repair method is available', async () => {
+    const repair = vi.fn(async () => undefined);
+    const repairSystemNetwork = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => undefined);
+    const controller = createLifecycleController({
+      proxy: {
+        enable: vi.fn(async () => undefined),
+        restore: vi.fn(async () => undefined),
+        repair,
+        repairSystemNetwork
+      },
+      mihomo: { start: vi.fn(async () => undefined), stop }
+    });
+
+    await controller.repair();
+
+    expect(repair).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(repairSystemNetwork).not.toHaveBeenCalled();
+    expect(controller.getStatus()).toBe('stopped');
+  });
+
   it('allows repair after shutdown cannot restore the proxy', async () => {
     const restore = vi
       .fn<() => Promise<void>>()

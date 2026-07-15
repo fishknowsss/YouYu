@@ -3,6 +3,7 @@ import type { AppSnapshot, MihomoMode, StrategyKey } from '../../shared/ipc';
 import type { UsageMode } from '../components/AppShell';
 import { BrandMark } from '../components/BrandMark';
 import { PowerButton } from '../components/PowerButton';
+import { isActionErrorMessage } from '../actionMessages';
 
 type HomeProps = {
   usageMode: UsageMode;
@@ -162,7 +163,8 @@ function AdvancedHome(props: HomeProps) {
   const diagnosticsLogs = props.snapshot.diagnostics.logs;
   const logLines = diagnosticsLogs.slice(-7);
   const diagnosticsLogRef = useRef<HTMLDivElement>(null);
-  const diagnosticMessage = props.message || props.snapshot.diagnostics.lastError;
+  const diagnosticMessage =
+    (isActionErrorMessage(props.message) ? props.message : undefined) || props.snapshot.diagnostics.lastError;
 
   useEffect(() => {
     const diagnosticsLog = diagnosticsLogRef.current;
@@ -422,8 +424,4 @@ function getAvailabilityToneClass(availability: AppSnapshot['nodeHealth']['avail
   if (availability.tone === 'warning') return 'is-warning';
   if (availability.tone === 'danger') return 'is-danger';
   return 'is-muted';
-}
-
-function isActionErrorMessage(message: string): boolean {
-  return /失败|超时|错误|不可用|未加载|先/.test(message);
 }

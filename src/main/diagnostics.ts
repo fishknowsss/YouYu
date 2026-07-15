@@ -1,0 +1,196 @@
+export type DiagnosticReportInput = {
+  exportedAt: Date;
+  appVersion: string;
+  buildChannel: string;
+  status: string;
+  platform: NodeJS.Platform;
+  architecture: string;
+  osRelease: string;
+  features?: {
+    systemProxyEnabled: boolean;
+    dnsEnhanced: boolean;
+    snifferEnabled: boolean;
+    tunEnabled: boolean;
+  };
+  runtimePorts?: {
+    mixedPort: number;
+    controllerPort: number;
+    dnsPort: number;
+  };
+  lastError?: string;
+  logs: string[];
+};
+
+export type DiagnosticExportDependencies = {
+  chooseFile: (defaultFileName: string) => Promise<string | undefined>;
+  writeFile: (filePath: string, contents: string) => Promise<void>;
+};
+
+const quotedDiagnosticValue = String.raw`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`;
+const redactedDiagnosticValue = String.raw`\[已隐藏\]`;
+const lineSensitiveKeyPattern = new RegExp(
+  String.raw`(["']?)((?:proxy[_ -]?)?authorization|(?:set[_ -]?)?cookies?|proxy[_ -]?(?:server(?:\(s\))?|override))(["']?)\s*([:=：])\s*(${quotedDiagnosticValue}|${redactedDiagnosticValue}|[^|\r\n}]+)`,
+  'gi'
+);
+const sensitiveKeyPattern = new RegExp(
+  String.raw`(["']?)((?:(?:controller|client|device|private|shared)[_ -]?)?secret|(?:(?:access|refresh|session|auth)[_ -]?)?token|credentials?|api[_ -]?key|(?:private|secret)[_ -]?key|passphrase|password|device[_ -]?(?:id|key|seed|name)|session[_ -]?id|user[_ -]?(?:id|name)|(?:remote[_ -]?)?subscription[_ -]?url|x[_ -]?device[_ -]?signature)(["']?)\s*([:=：])\s*(${quotedDiagnosticValue}|${redactedDiagnosticValue}|[^\s|,;}]+)`,
+  'gi'
+);
+
+export function redactDiagnosticText(input: string): string {
+  return input
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>|]+/gi, redactUrl)
+    .replace(/[\\/]{2,}[^\\/\r\n]+[\\/]+Users[\\/]+[^\\/\r\n]+/gi, '[已隐藏用户路径]')
+    .replace(/\b([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\r\n]+/gi, '$1[已隐藏]')
+    .replace(lineSensitiveKeyPattern, redactSensitiveKeyValue)
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi, 'Bearer [已隐藏]')
+    .replace(/\bBasic\s+[A-Za-z0-9+/_=-]{8,}/gi, 'Basic [已隐藏]')
+    .replace(sensitiveKeyPattern, redactSensitiveKeyValue)
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[已隐藏标识]')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '[已隐藏标识]')
+    .replace(/(?<![A-Za-z0-9+/_=-])(?:[A-Fa-f0-9]{32,}|[A-Za-z0-9+/_=-]{40,})(?![A-Za-z0-9+/_=-])/g, '[已隐藏标识]');
+}
+
+export function classifyDiagnosticIssue(message: string | undefined): DiagnosticIssueKind | undefined {
+  if (!message?.trim()) return undefined;
+  const value = message.toLowerCase();
+
+  if (/(?:operation canceled|node testing cancelled|aborterror|已取消)/i.test(value)) return undefined;
+  if (/(?:access (?:is )?denied|eacces|eperm|elevation|administrator|拒绝访问|权限|管理员)/i.test(value)) {
+    return 'permission';
+  }
+  if (
+    /(?:wininet|winhttp|proxyserver|proxyoverride|internetsetoption|checknetisolation|system proxy|系统代理|代理设置)/i.test(
+      value
+    )
+  ) {
+    return 'system-proxy';
+  }
+  if (/(?:\bdns\b|enotfound|eai_again|name resolution|lookup|resolve|域名解析|解析失败)/i.test(value)) {
+    return 'dns';
+  }
+  if (
+    /(?:mihomo|controller|lifecycle|kernel|runtime process|process exited|eaddrinuse|address already in use|内核|端口占用)/i.test(
+      value
+    )
+  ) {
+    return 'kernel';
+  }
+  if (/(?:traffic identity|signature|activation|重新登记|登记|身份验证|\b401\b)/i.test(value)) {
+    return 'registration';
+  }
+  if (
+    /(?:timed? ?out|econnrefused|econnreset|etimedout|fetch failed|failed to fetch|tls|certificate|connection|连接失败|网络异常)/i.test(
+      value
+    )
+  ) {
+    return 'network';
+  }
+  if (/(?:missing subscription|subscription|rule provider|ruleset|yaml|订阅|规则集|配置解析)/i.test(value)) {
+    return 'subscription';
+  }
+  if (/(?:traffic endpoint|remote config|后台|远程配置)/i.test(value)) {
+    return 'backend';
+  }
+  return 'unknown';
+}
+
+export type DiagnosticRecoveryOperation = 'subscription-refresh' | 'save-settings' | 'sync-settings';
+
+export function isDiagnosticIssueResolvedByOperation(
+  operation: DiagnosticRecoveryOperation,
+  issueKind: DiagnosticIssueKind | undefined
+): boolean {
+  if (!issueKind) return false;
+  if (operation === 'sync-settings') {
+    return ['backend', 'registration', 'network', 'dns', 'subscription'].includes(issueKind);
+  }
+  return ['subscription', 'dns', 'network'].includes(issueKind);
+}
+
+function redactSensitiveKeyValue(
+  _match: string,
+  openingQuote: string,
+  key: string,
+  closingQuote: string,
+  separator: string
+): string {
+  return `${openingQuote}${key}${closingQuote}${separator}[已隐藏]`;
+}
+
+export function buildDiagnosticReport(input: DiagnosticReportInput): string {
+  const safeLogs = input.logs.map(toSingleSafeLine);
+  const lines = [
+    'YouYu 诊断日志',
+    `导出时间: ${input.exportedAt.toISOString()}`,
+    `版本: ${toSingleSafeLine(input.appVersion)}`,
+    `通道: ${toSingleSafeLine(input.buildChannel)}`,
+    `状态: ${toSingleSafeLine(input.status)}`,
+    `系统: ${toSingleSafeLine(input.platform)} ${toSingleSafeLine(input.architecture)} ${toSingleSafeLine(input.osRelease)}`,
+    `日志条数: ${safeLogs.length}`
+  ];
+
+  if (input.features) {
+    lines.push(
+      `系统代理: ${formatEnabled(input.features.systemProxyEnabled)}`,
+      `DNS 增强: ${formatEnabled(input.features.dnsEnhanced)}`,
+      `流量识别: ${formatEnabled(input.features.snifferEnabled)}`,
+      `TUN: ${formatEnabled(input.features.tunEnabled)}`
+    );
+  }
+  if (input.runtimePorts) {
+    lines.push(
+      `运行端口: mixed=${input.runtimePorts.mixedPort}, controller=${input.runtimePorts.controllerPort}, dns=${input.runtimePorts.dnsPort}`
+    );
+  }
+
+  lines.push('', `最近错误: ${input.lastError ? toSingleSafeLine(input.lastError) : '无'}`, '', '日志:');
+  if (safeLogs.length === 0) {
+    lines.push('（无）');
+  } else {
+    safeLogs.forEach((line, index) => lines.push(`[${String(index + 1).padStart(3, '0')}] ${line}`));
+  }
+  return `${lines.join('\r\n')}\r\n`;
+}
+
+export function createDiagnosticExportFileName(appVersion: string, exportedAt = new Date()): string {
+  const version = appVersion.replace(/[^0-9A-Za-z._-]+/g, '_') || 'unknown';
+  const timestamp = exportedAt.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  return `YouYu-diagnostics-${version}-${timestamp}.txt`;
+}
+
+export async function exportDiagnosticReport(
+  input: DiagnosticReportInput,
+  dependencies: DiagnosticExportDependencies
+): Promise<{ canceled: boolean; exportedCount: number }> {
+  const filePath = await dependencies.chooseFile(createDiagnosticExportFileName(input.appVersion, input.exportedAt));
+  if (!filePath) return { canceled: true, exportedCount: 0 };
+  await dependencies.writeFile(filePath, `\uFEFF${buildDiagnosticReport(input)}`);
+  return { canceled: false, exportedCount: input.logs.length };
+}
+
+function redactUrl(value: string): string {
+  const trailingMatch = value.match(/[).,;!?，。；！）]+$/);
+  const trailing = trailingMatch?.[0] ?? '';
+  const candidate = trailing ? value.slice(0, -trailing.length) : value;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return `[已隐藏连接]${trailing}`;
+    const hasPrivatePart = Boolean(url.username || url.password || url.search || url.hash || url.pathname !== '/');
+    return `${url.protocol}//${url.host}${hasPrivatePart ? '/[已隐藏]' : ''}${trailing}`;
+  } catch {
+    return `[已隐藏网址]${trailing}`;
+  }
+}
+
+function toSingleSafeLine(value: string): string {
+  const line = redactDiagnosticText(String(value))
+    .replace(/[\r\n]+/g, ' ↩ ')
+    .trim();
+  return line.length > 8192 ? `${line.slice(0, 8191)}…` : line;
+}
+
+function formatEnabled(enabled: boolean): string {
+  return enabled ? '开启' : '关闭';
+}
+import type { DiagnosticIssueKind } from '../shared/ipc';

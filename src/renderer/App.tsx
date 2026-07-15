@@ -1,5 +1,5 @@
 ﻿import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
+import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, SetStateAction } from 'react';
 import type {
   AppSettingsInput,
   AppSnapshot,
@@ -152,6 +152,9 @@ export function App() {
     testingAllNodesRef.current = testingAllNodes;
   }, [testingAllNodes]);
 
+  useEffect(() => scheduleTransientMessageClear(message, setMessage), [message]);
+  useEffect(() => scheduleTransientMessageClear(settingsMessage, setSettingsMessage), [settingsMessage]);
+
   useEffect(() => {
     const advancedSequence = [
       'ArrowUp',
@@ -210,8 +213,8 @@ export function App() {
     } = options;
     const api = window.youyu;
     if (!api) {
-      setMessage('核心接口未加载');
-      messageSink?.('核心接口未加载');
+      if (messageSink) messageSink('核心接口未加载');
+      else setMessage('核心接口未加载');
       return;
     }
 
@@ -219,8 +222,8 @@ export function App() {
     const snapshotGeneration = snapshotGenerationRef.current;
     setBusy(true);
     setBusyLabel(workingMessage);
-    setMessage('');
-    messageSink?.('');
+    if (messageSink) messageSink('');
+    else setMessage('');
     try {
       const actionPromise = action(api, request);
       const next = await withTimeout(actionPromise, timeoutMs, timeoutLabel, () => {
@@ -228,8 +231,8 @@ export function App() {
         onTimeout?.(api);
       });
       commitSnapshot(next, snapshotGeneration);
-      setMessage(doneMessage);
-      messageSink?.(doneMessage);
+      if (messageSink) messageSink(doneMessage);
+      else setMessage(doneMessage);
     } catch (error) {
       if (error instanceof ActionTimeoutError && request) {
         await api.cancelOperation(request.requestId).catch(() => false);
@@ -237,20 +240,41 @@ export function App() {
       const next = await api.getSnapshot().catch(() => snapshotRef.current);
       commitSnapshot(next, snapshotGeneration);
       const errorMessage = getActionErrorMessage(error);
-      setMessage(errorMessage);
-      messageSink?.(errorMessage);
+      if (messageSink) messageSink(errorMessage);
+      else setMessage(errorMessage);
     } finally {
       setBusy(false);
       setBusyLabel('');
     }
   }
 
-  function handleInstallUpdate() {
+  function handleInstallUpdate(messageSink?: (message: string) => void) {
     void runAction((api) => api.installUpdate(), '', {
       workingMessage: '安装中',
       timeoutLabel: '安装更新',
-      messageSink: setSettingsMessage
+      messageSink
     });
+  }
+
+  async function handleExportDiagnostics() {
+    const api = window.youyu;
+    if (!api) {
+      setSettingsMessage('核心接口未加载');
+      return;
+    }
+
+    setBusy(true);
+    setBusyLabel('导出中');
+    setSettingsMessage('');
+    try {
+      const result = await api.exportDiagnostics();
+      if (!result.canceled) setSettingsMessage('已导出');
+    } catch {
+      setSettingsMessage('导出失败');
+    } finally {
+      setBusy(false);
+      setBusyLabel('');
+    }
   }
 
   async function quickStart(subscriptionUrl: string) {
@@ -440,7 +464,7 @@ export function App() {
             onStrategyChange={(strategy) => runAction((api) => api.selectStrategy(strategy), '已切换')}
             onOpenNodes={() => setPage('nodes')}
             onUsageModeChange={changeUsageMode}
-            onInstallUpdate={handleInstallUpdate}
+            onInstallUpdate={() => handleInstallUpdate()}
           />
         )}
         {page === 'nodes' && (
@@ -514,7 +538,8 @@ export function App() {
                 messageSink: setSettingsMessage
               })
             }
-            onInstallUpdate={handleInstallUpdate}
+            onInstallUpdate={() => handleInstallUpdate(setSettingsMessage)}
+            onExportDiagnostics={() => void handleExportDiagnostics()}
           />
         )}
       </AppShell>
@@ -538,6 +563,31 @@ export function App() {
       )}
     </>
   );
+}
+
+const transientMessages = new Set([
+  '已启动',
+  '已停止',
+  '已修复',
+  '已切换',
+  '已更新',
+  '已保存',
+  '已同步',
+  '已导出',
+  '测速完成',
+  '模式已切换',
+  '已登记'
+]);
+
+function scheduleTransientMessageClear(
+  message: string,
+  setMessage: Dispatch<SetStateAction<string>>
+): (() => void) | undefined {
+  if (!transientMessages.has(message)) return undefined;
+  const timer = window.setTimeout(() => {
+    setMessage((current) => (current === message ? '' : current));
+  }, 3000);
+  return () => window.clearTimeout(timer);
 }
 
 function readUsageMode(): UsageMode {

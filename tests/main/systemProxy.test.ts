@@ -21,6 +21,21 @@ describe('createSystemProxyAdapter', () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
+  it('exposes a DNS-only low-risk step for diagnostic-targeted repair', async () => {
+    const calls: string[] = [];
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        calls.push(`${command.file} ${command.args.join(' ')}`);
+        return '';
+      }
+    });
+
+    await proxy.flushDnsForRepair();
+
+    expect(calls).toEqual(['ipconfig.exe /flushdns']);
+  });
+
   it('enables and restores current-user Windows proxy settings', async () => {
     const calls: string[] = [];
     let proxyEnabled = false;
@@ -119,15 +134,53 @@ describe('createSystemProxyAdapter', () => {
         'reg.exe query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings /v ProxyEnable'
       )
     );
-    expect(proxyEnableQueriesBeforeRestore).toHaveLength(1);
+    expect(proxyEnableQueriesBeforeRestore).toHaveLength(2);
 
     await proxy.restore();
 
     expect(calls.some((call) => call.includes('ProxyServer /t REG_SZ /d old:8080'))).toBe(true);
   });
 
+  it('rejects enable when the applied proxy cannot be verified after notification', async () => {
+    const calls: string[] = [];
+    const proxyState = {
+      enabled: false,
+      server: 'old:8080',
+      override: 'old.local;<local>'
+    };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        calls.push(`${command.file} ${command.args.join(' ')}`);
+        if (command.file === 'reg.exe' && command.args[0] === 'add') return '';
+        return mutableCommands(command);
+      }
+    });
+
+    await expect(proxy.enable()).rejects.toThrow(
+      'Failed to verify current-user proxy after enable: ProxyEnable=false, ProxyServer="old:8080", ProxyOverride="old.local;<local>"'
+    );
+
+    const refreshIndex = calls.findIndex((call) => call.includes('InternetSetOption'));
+    const enableReadbacks = calls
+      .map((call, index) => ({ call, index }))
+      .filter(({ call, index }) => index > refreshIndex && call.includes('reg.exe query'));
+    expect(enableReadbacks.map(({ call }) => call)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('/v ProxyEnable'),
+        expect.stringContaining('/v ProxyServer'),
+        expect.stringContaining('/v ProxyOverride')
+      ])
+    );
+    expect(proxyState).toEqual({ enabled: false, server: 'old:8080', override: 'old.local;<local>' });
+    expect(calls.some((call) => call.includes('Get-AppxPackage'))).toBe(false);
+  });
+
   it('does not fail proxy enable when Store loopback exemption commands fail', async () => {
     const calls: string[] = [];
+    const proxyState = { enabled: false, server: '', override: '' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
     const proxy = createSystemProxyAdapter({
       platform: 'win32',
       runCommand: async (command) => {
@@ -138,10 +191,7 @@ describe('createSystemProxyAdapter', () => {
         if (command.file === 'CheckNetIsolation.exe') {
           throw new Error('AppContainer not found');
         }
-        if (command.args[0] === 'query' && command.args.includes('ProxyEnable')) {
-          return 'ProxyEnable    REG_DWORD    0x0';
-        }
-        return '';
+        return mutableCommands(command);
       }
     });
 
@@ -153,6 +203,8 @@ describe('createSystemProxyAdapter', () => {
 
   it('skips Store loopback exemptions when no matching Appx package is installed', async () => {
     const calls: string[] = [];
+    const proxyState = { enabled: false, server: '', override: '' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
     const proxy = createSystemProxyAdapter({
       platform: 'win32',
       runCommand: async (command) => {
@@ -160,10 +212,7 @@ describe('createSystemProxyAdapter', () => {
         if (isAppxPackageQuery(command)) {
           return '';
         }
-        if (command.args[0] === 'query' && command.args.includes('ProxyEnable')) {
-          return 'ProxyEnable    REG_DWORD    0x0';
-        }
-        return '';
+        return mutableCommands(command);
       }
     });
 
@@ -172,8 +221,293 @@ describe('createSystemProxyAdapter', () => {
     expect(calls.some((call) => call.includes('CheckNetIsolation.exe LoopbackExempt -a'))).toBe(false);
   });
 
+  it('disables and verifies the current-user proxy before clearing repair ownership', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const ownershipPath = join(dir, 'system-proxy-ownership.json');
+    const proxyState = {
+      enabled: false,
+      server: 'external:8080',
+      override: 'external.local;<local>'
+    };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    const repairCalls: string[] = [];
+    let captureRepairCalls = false;
+    const runCommand = async (command: { file: string; args: string[] }) => {
+      if (captureRepairCalls) repairCalls.push(`${command.file} ${command.args.join(' ')}`);
+      return mutableCommands(command);
+    };
+
+    try {
+      const proxy = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await proxy.enable();
+      await expect(access(ownershipPath)).resolves.toBeUndefined();
+      captureRepairCalls = true;
+
+      await proxy.disableForRepair();
+
+      expect(repairCalls).toHaveLength(3);
+      expect(repairCalls[0]).toContain('ProxyEnable /t REG_DWORD /d 0');
+      expect(repairCalls[1]).toContain('InternetSetOption');
+      expect(repairCalls[2]).toContain('reg.exe query');
+      expect(repairCalls[2]).toContain('ProxyEnable');
+      expect(proxyState).toEqual({
+        enabled: false,
+        server: '127.0.0.1:7890',
+        override: expect.stringContaining('*.cn')
+      });
+      await expect(access(ownershipPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps repair ownership when the current-user proxy cannot be verified as disabled', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const ownershipPath = join(dir, 'system-proxy-ownership.json');
+    const proxyState = { enabled: false, server: 'old:8080', override: 'old.local;<local>' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    let blockDisable = false;
+    const runCommand = async (command: { file: string; args: string[] }) => {
+      if (
+        blockDisable &&
+        command.file === 'reg.exe' &&
+        command.args[0] === 'add' &&
+        command.args.includes('ProxyEnable') &&
+        command.args[command.args.indexOf('/d') + 1] === '0'
+      ) {
+        return '';
+      }
+      return mutableCommands(command);
+    };
+
+    try {
+      const proxy = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await proxy.enable();
+      blockDisable = true;
+
+      await expect(proxy.disableForRepair()).rejects.toThrow(
+        'Failed to disable current-user proxy for repair: ProxyEnable is still enabled'
+      );
+
+      expect(proxyState.enabled).toBe(true);
+      await expect(access(ownershipPath)).resolves.toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs remaining Windows network state after the current-user proxy is disabled', async () => {
+    const calls: string[] = [];
+    const proxyState = {
+      enabled: false,
+      server: '127.0.0.1:7890',
+      override: 'app.local;<local>'
+    };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        calls.push(`${command.file} ${command.args.join(' ')}`);
+        if (isAppxPackageQuery(command)) return installedStorePackageFamilies;
+        return mutableCommands(command);
+      }
+    });
+
+    await proxy.repairSystemNetwork();
+
+    expect(proxyState).toEqual({ enabled: false, server: '', override: '' });
+    expect(calls.some((call) => call.includes('ProxyEnable /t REG_DWORD'))).toBe(false);
+    const refreshIndex = calls.findIndex((call) => call.includes('InternetSetOption'));
+    const proxyReadbackIndex = calls.findIndex(
+      (call, index) => index > refreshIndex && call.includes('reg.exe query') && !call.includes('/v ProxyEnable')
+    );
+    expect(refreshIndex).toBeGreaterThan(-1);
+    expect(proxyReadbackIndex).toBeGreaterThan(refreshIndex);
+    expect(calls.some((call) => call.includes('ipconfig.exe /flushdns'))).toBe(true);
+    expect(calls.some((call) => call.includes('netsh.exe winhttp reset proxy'))).toBe(true);
+    expect(
+      calls.some((call) =>
+        call.includes('CheckNetIsolation.exe LoopbackExempt -a -n="Microsoft.WindowsStore_8wekyb3d8bbwe"')
+      )
+    ).toBe(true);
+  });
+
+  it('does not hide Appx package query failures during elevated network repair', async () => {
+    const proxyState = { enabled: false, server: '127.0.0.1:7890', override: '<local>' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    const runElevatedCommand = vi.fn(async () => undefined);
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        if (isAppxPackageQuery(command)) throw new Error('Appx package query failed');
+        return mutableCommands(command);
+      },
+      runElevatedCommand
+    });
+
+    await expect(proxy.repairSystemNetwork()).rejects.toThrow('Appx package query failed');
+
+    expect(runElevatedCommand).not.toHaveBeenCalled();
+  });
+
+  it('checks every native command exit code in the elevated repair script', async () => {
+    const commandScripts: string[] = [];
+    const elevatedScripts: string[] = [];
+    const proxyState = { enabled: false, server: '127.0.0.1:7890', override: '<local>' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        if (command.file === 'powershell.exe') commandScripts.push(command.args.join(' '));
+        if (isAppxPackageQuery(command)) return installedStorePackageFamilies;
+        return mutableCommands(command);
+      },
+      runElevatedCommand: async (command) => {
+        elevatedScripts.push(command.args.join(' '));
+      }
+    });
+
+    await proxy.repairSystemNetwork();
+
+    const appxScript = commandScripts.find((script) => script.includes('Get-AppxPackage')) ?? '';
+    expect(appxScript).toContain("$ErrorActionPreference = 'Stop'");
+    expect(appxScript).toContain('-ErrorAction Stop');
+    expect(appxScript).not.toContain('SilentlyContinue');
+
+    const elevatedScript = elevatedScripts[0] ?? '';
+    expect(elevatedScript).toContain('& netsh.exe winhttp reset proxy');
+    expect(elevatedScript).toContain('& CheckNetIsolation.exe LoopbackExempt -a');
+    expect(elevatedScript.match(/if \(\$LASTEXITCODE -ne 0\)/g)).toHaveLength(3);
+    expect(elevatedScript).toContain('netsh winhttp reset proxy failed with exit code');
+    expect(elevatedScript).toContain('CheckNetIsolation LoopbackExempt failed for');
+  });
+
+  it('verifies elevated Store loopback exemptions after applying them', async () => {
+    let elevatedScript = '';
+    const proxyState = { enabled: false, server: '127.0.0.1:7890', override: '<local>' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        if (isAppxPackageQuery(command)) return installedStorePackageFamilies;
+        return mutableCommands(command);
+      },
+      runElevatedCommand: async (command) => {
+        elevatedScript = command.args.join(' ');
+      }
+    });
+
+    await proxy.repairSystemNetwork();
+
+    expect(elevatedScript).toContain('& CheckNetIsolation.exe LoopbackExempt -s');
+    expect(elevatedScript).toContain('$loopbackOutput');
+    expect(elevatedScript).toContain('if ($LASTEXITCODE -ne 0)');
+    expect(elevatedScript).toContain('$loopbackOutput.IndexOf($family, [StringComparison]::OrdinalIgnoreCase)');
+    expect(elevatedScript).toContain('Store loopback verification missing package family $family');
+  });
+
+  it('keeps repeated network repair idempotent when proxy strings are already absent', async () => {
+    const calls: string[] = [];
+    const proxyState = { enabled: false, server: '', override: '' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        calls.push(`${command.file} ${command.args.join(' ')}`);
+        if (isAppxPackageQuery(command)) return '';
+        if (command.file === 'reg.exe' && command.args[0] === 'delete') {
+          throw new Error('registry value not found');
+        }
+        return mutableCommands(command);
+      }
+    });
+
+    await expect(proxy.repairSystemNetwork()).resolves.toBeUndefined();
+
+    expect(calls.some((call) => call.includes('reg.exe delete'))).toBe(false);
+    expect(calls.some((call) => call.includes('ipconfig.exe /flushdns'))).toBe(true);
+    expect(calls.some((call) => call.includes('netsh.exe winhttp reset proxy'))).toBe(true);
+  });
+
+  it('attempts every network repair branch and aggregates multiple failures', async () => {
+    const calls: string[] = [];
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        calls.push(`${command.file} ${command.args.join(' ')}`);
+        if (command.file === 'reg.exe' && command.args[0] === 'query' && !command.args.includes('/v')) {
+          return ['ProxyServer    REG_SZ    127.0.0.1:7890', 'ProxyOverride    REG_SZ    <local>'].join('\n');
+        }
+        if (command.file === 'reg.exe' && command.args[0] === 'delete') {
+          if (command.args.includes('ProxyServer')) throw new Error('ProxyServer delete denied');
+          if (command.args.includes('ProxyOverride')) throw new Error('ProxyOverride delete denied');
+        }
+        if (command.file === 'ipconfig.exe') throw new Error('DNS flush failed');
+        if (isAppxPackageQuery(command)) throw new Error('Appx package query failed');
+        return '';
+      }
+    });
+
+    let repairError: unknown;
+    try {
+      await proxy.repairSystemNetwork();
+    } catch (error) {
+      repairError = error;
+    }
+
+    expect(repairError).toBeInstanceOf(AggregateError);
+    const messages = collectErrorMessages(repairError).join('\n');
+    expect(messages).toContain('ProxyServer delete denied');
+    expect(messages).toContain('ProxyOverride delete denied');
+    expect(messages).toContain('DNS flush failed');
+    expect(messages).toContain('Appx package query failed');
+    expect(calls.some((call) => call.includes('ProxyServer /f'))).toBe(true);
+    expect(calls.some((call) => call.includes('ProxyOverride /f'))).toBe(true);
+    expect(calls.some((call) => call.includes('ipconfig.exe /flushdns'))).toBe(true);
+    expect(calls.some((call) => call.includes('netsh.exe winhttp reset proxy'))).toBe(true);
+    expect(calls.some((call) => call.includes('Get-AppxPackage'))).toBe(true);
+  });
+
+  it('keeps compatible repair ordered as proxy disable followed by network repair', async () => {
+    const calls: string[] = [];
+    const proxyState = { enabled: true, server: '127.0.0.1:7890', override: '<local>' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        calls.push(`${command.file} ${command.args.join(' ')}`);
+        if (isAppxPackageQuery(command)) return '';
+        return mutableCommands(command);
+      }
+    });
+
+    await proxy.repair();
+
+    const disableWriteIndex = calls.findIndex((call) => call.includes('ProxyEnable /t REG_DWORD /d 0'));
+    const disableRefreshIndex = calls.findIndex(
+      (call, index) => index > disableWriteIndex && call.includes('InternetSetOption')
+    );
+    const disableVerifyIndex = calls.findIndex(
+      (call, index) => index > disableRefreshIndex && call.includes('reg.exe query') && call.includes('/v ProxyEnable')
+    );
+    const networkReadIndex = calls.findIndex(
+      (call, index) => index > disableVerifyIndex && call.includes('reg.exe query') && !call.includes('/v')
+    );
+    const serverDeleteIndex = calls.findIndex(
+      (call, index) => index > networkReadIndex && call.includes('ProxyServer /f')
+    );
+    expect(disableWriteIndex).toBeGreaterThan(-1);
+    expect(disableRefreshIndex).toBeGreaterThan(disableWriteIndex);
+    expect(disableVerifyIndex).toBeGreaterThan(disableRefreshIndex);
+    expect(networkReadIndex).toBeGreaterThan(disableVerifyIndex);
+    expect(serverDeleteIndex).toBeGreaterThan(networkReadIndex);
+    expect(proxyState).toEqual({ enabled: false, server: '', override: '' });
+  });
+
   it('repairs Windows proxy, WinHTTP proxy, and DNS cache', async () => {
     const calls: string[] = [];
+    const proxyState = { enabled: true, server: '127.0.0.1:7890', override: '<local>' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
     const proxy = createSystemProxyAdapter({
       platform: 'win32',
       runCommand: async (command) => {
@@ -181,7 +515,7 @@ describe('createSystemProxyAdapter', () => {
         if (isAppxPackageQuery(command)) {
           return installedStorePackageFamilies;
         }
-        return '';
+        return mutableCommands(command);
       }
     });
 
@@ -451,14 +785,13 @@ describe('createSystemProxyAdapter', () => {
 
   it('makes the WinINet refresh script fail when either native notification fails', async () => {
     const calls: string[] = [];
+    const proxyState = { enabled: false, server: '', override: '' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
     const proxy = createSystemProxyAdapter({
       platform: 'win32',
       runCommand: async (command) => {
         calls.push(command.args.join(' '));
-        if (command.args[0] === 'query' && command.args.includes('ProxyEnable')) {
-          return 'ProxyEnable    REG_DWORD    0x0';
-        }
-        return '';
+        return mutableCommands(command);
       }
     });
 
@@ -482,6 +815,15 @@ function createMutableProxyCommands(state: { enabled: boolean; server: string; o
     if (isAppxPackageQuery(command)) return '';
     if (command.file !== 'reg.exe') return '';
 
+    if (command.args[0] === 'query' && !command.args.includes('/v')) {
+      return [
+        state.server ? `ProxyServer    REG_SZ    ${state.server}` : '',
+        state.override ? `ProxyOverride    REG_SZ    ${state.override}` : ''
+      ]
+        .filter(Boolean)
+        .join('\n');
+    }
+
     const valueName = command.args[command.args.indexOf('/v') + 1];
     if (command.args[0] === 'query') {
       if (valueName === 'ProxyEnable') return `ProxyEnable    REG_DWORD    ${state.enabled ? '0x1' : '0x0'}`;
@@ -501,4 +843,11 @@ function createMutableProxyCommands(state: { enabled: boolean; server: string; o
     if (valueName === 'ProxyOverride') state.override = data;
     return '';
   };
+}
+
+function collectErrorMessages(error: unknown): string[] {
+  if (error instanceof AggregateError) {
+    return [error.message, ...error.errors.flatMap(collectErrorMessages)];
+  }
+  return [error instanceof Error ? error.message : String(error)];
 }

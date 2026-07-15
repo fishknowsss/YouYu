@@ -28,6 +28,8 @@
 ## Packaging Rules
 
 - Use `npm run dist:win:local` for a local three-installer delivery. It leaves the standard installer without a bundled subscription and leaves the `-in` and `-no` installers with the private bundled subscription.
+- After every new-version local build, copy only the bundled `-in` and `-no` installers plus their matching `.blockmap` files into `local-subscription-builds/<version>/`. Do not copy the standard no-suffix installer into this private two-package folder.
+- `local-subscription-builds/` is gitignored, local-only, and must never be committed, uploaded to GitHub, or used as the source of public update assets.
 - Never hand over the `-in` or `-no` installers produced by `npm run dist:win:release` as private local builds. Those same-named public update installers intentionally contain no bundled subscription.
 - Read [docs/release-packaging.md](docs/release-packaging.md) before changing packaging, release, subscription defaults, or versioning.
 - Public GitHub update builds must use `npm run dist:win:release` and produce standard, internal-channel, and no-pet-channel update assets plus `latest.yml`, `latest-in.yml`, and `latest-no.yml`.
@@ -36,6 +38,6 @@
 - Local no-desktop-pet builds must use `npm run dist:win:no` and produce `release/YouYu-<version>-x64-no.exe`.
 - The internal subscription source is `resources/default-subscription.in.txt`; it is local-only and gitignored. Never commit it.
 - `dist:win`, `dist:win:in`, and `dist:win:no` run `clean:release`, so each command deletes the previous `release/` output. If multiple installers are needed locally, copy each `.exe` and `.blockmap` pair aside before running the next build.
-- `release-archive/` is a local backup folder. Keep only the current build version and the previous two build versions there, including each kept installer and its matching `.blockmap` when present.
+- `release-archive/` is the local backup for public update artifacts. Keep only the current build version and the previous two build versions there, including each kept installer and its matching `.blockmap` when present. Private bundled `-in` and `-no` builds belong only in `local-subscription-builds/<version>/`.
 - If `release-archive/` does not yet satisfy the current-plus-previous-two policy, it can be left empty or partially populated until the next eligible packaging run.
 - When publishing a release, push the exact version tag explicitly. Do not rely on `git push --follow-tags` unless all local tags have been audited.

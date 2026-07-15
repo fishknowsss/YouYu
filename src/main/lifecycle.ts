@@ -2,6 +2,8 @@ export type SystemProxyAdapter = {
   enable: (signal?: AbortSignal) => Promise<void>;
   restore: () => Promise<void>;
   repair: (signal?: AbortSignal) => Promise<void>;
+  disableForRepair?: (signal?: AbortSignal) => Promise<void>;
+  repairSystemNetwork?: (signal?: AbortSignal) => Promise<void>;
 };
 
 export type MihomoRuntime = {
@@ -154,14 +156,24 @@ export function createLifecycleController(deps: {
       await enqueue(async () => {
         ensureOperationsAllowed();
         signal?.throwIfAborted();
+        const disableForRepair = deps.proxy.disableForRepair;
+        const repairSystemNetwork = deps.proxy.repairSystemNetwork;
+        const useStagedRepair = Boolean(disableForRepair && repairSystemNetwork);
         try {
-          await deps.proxy.repair(signal);
+          if (useStagedRepair && disableForRepair) {
+            await disableForRepair(signal);
+          } else {
+            await deps.proxy.repair(signal);
+          }
           await deps.mihomo.stop();
         } catch (error) {
           setStatus('failed');
           throw error;
         }
         setStatus('stopped');
+        if (useStagedRepair && repairSystemNetwork) {
+          await repairSystemNetwork(signal);
+        }
       });
     },
     async shutdown() {

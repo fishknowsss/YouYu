@@ -196,6 +196,24 @@ export type ConnectivityResult = {
 export type AppDiagnostics = {
   lastError?: string;
   logs: string[];
+  logCount?: number;
+  issueKind?: DiagnosticIssueKind;
+};
+
+export type DiagnosticIssueKind =
+  | 'system-proxy'
+  | 'dns'
+  | 'kernel'
+  | 'network'
+  | 'subscription'
+  | 'permission'
+  | 'backend'
+  | 'registration'
+  | 'unknown';
+
+export type DiagnosticExportResult = {
+  canceled: boolean;
+  exportedCount: number;
 };
 
 export type AppUpdateStatus =
@@ -294,6 +312,7 @@ export type YouYuApi = {
   saveSettings: (settings: AppSettingsInput, request?: OperationRequest) => Promise<AppSnapshot>;
   registerTrafficIdentity: (input: TrafficRegistrationInput) => Promise<AppSnapshot>;
   syncRemoteConfig: (request?: OperationRequest) => Promise<AppSnapshot>;
+  exportDiagnostics: () => Promise<DiagnosticExportResult>;
   cancelOperation: (requestId: string) => Promise<boolean>;
   checkForUpdates: () => Promise<AppSnapshot>;
   installUpdate: () => Promise<AppSnapshot>;
@@ -325,6 +344,7 @@ export const ipcChannels = {
   saveSettings: 'youyu:save-settings',
   registerTrafficIdentity: 'youyu:register-traffic-identity',
   syncRemoteConfig: 'youyu:sync-remote-config',
+  exportDiagnostics: 'youyu:export-diagnostics',
   cancelOperation: 'youyu:cancel-operation',
   checkForUpdates: 'youyu:check-for-updates',
   installUpdate: 'youyu:install-update'

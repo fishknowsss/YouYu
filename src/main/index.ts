@@ -1,17 +1,21 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   Menu,
   Tray,
   ipcMain as electronIpcMain,
   safeStorage,
   screen,
-  type Rectangle
+  type Rectangle,
+  type SaveDialogOptions
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFile as writeTextFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { release as getOsRelease } from 'node:os';
 import { createLifecycleController, type MihomoRuntime } from './lifecycle';
 import { IpcOperationRegistry } from './ipcOperations';
 import { connectivityServices, testAllConnectivity, testConnectivity } from './connectivity';
@@ -51,6 +55,7 @@ import {
   type AppSnapshot,
   type CurrentNodeHealth,
   type DesktopPetState,
+  type DiagnosticIssueKind,
   type OperationRequest,
   type ProxyNode,
   type RemoteControlConfig,
@@ -61,6 +66,14 @@ import { getUpdateDownloadPhase, normalizeUpdateBytes } from '../shared/updatePr
 import { deferUpdateInstallerLaunch } from './updateInstallHandoff';
 import { createRuntimeIntentController } from './runtimeIntent';
 import { buildProxyRelaunchArguments, resumeProxyAfterRelaunchArgument } from './appRelaunch';
+import { clearMihomoRepairCache, runNetworkRepair, type NetworkRepairOptions } from './networkRepair';
+import {
+  classifyDiagnosticIssue,
+  exportDiagnosticReport,
+  isDiagnosticIssueResolvedByOperation,
+  redactDiagnosticText
+} from './diagnostics';
+import { getTargetedNetworkRepairActions, runTargetedNetworkRepair } from './targetedNetworkRepair';
 
 declare const __YOUYU_DISABLE_PET__: boolean;
 declare const __YOUYU_BUILD_CHANNEL__: string;
@@ -151,6 +164,7 @@ let currentNodeAvailabilityNode = '';
 let runtimeRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let runtimeRecoveryRunning = false;
 let runtimeRecoveryFailures = 0;
+let networkRepairInProgress = false;
 let petDragStart:
   | {
       cursorX: number;
@@ -347,7 +361,8 @@ function appendLog(message: string) {
   const normalizedMessage = normalizeDiagnosticLog(message);
   if (!normalizedMessage) return;
 
-  const line = `${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ${normalizedMessage}`;
+  const safeMessage = redactDiagnosticText(normalizedMessage);
+  const line = `${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ${safeMessage}`;
   appLogs.push(line);
   if (appLogs.length > 200) {
     appLogs.splice(0, appLogs.length - 200);
@@ -399,8 +414,53 @@ function formatError(error: unknown): string {
 }
 
 function recordError(context: string, error: unknown) {
-  lastError = `${context}: ${formatError(error)}`;
+  lastError = redactDiagnosticText(`${context}: ${formatError(error)}`);
   appendLog(lastError);
+}
+
+async function exportCurrentDiagnostics() {
+  const settings = await settingsStore.read().catch(() => undefined);
+  const exportedAt = new Date();
+  const logs = [...appLogs];
+
+  return exportDiagnosticReport(
+    {
+      exportedAt,
+      appVersion,
+      buildChannel: appBuildChannel,
+      status: lifecycle.getStatus(),
+      platform: process.platform,
+      architecture: process.arch,
+      osRelease: getOsRelease(),
+      features: settings
+        ? {
+            systemProxyEnabled: settings.systemProxyEnabled,
+            dnsEnhanced: settings.dnsEnhanced,
+            snifferEnabled: settings.snifferEnabled,
+            tunEnabled: settings.tunEnabled
+          }
+        : undefined,
+      runtimePorts: { ...runtimePorts },
+      lastError,
+      logs
+    },
+    {
+      chooseFile: async (defaultFileName) => {
+        const options: SaveDialogOptions = {
+          title: '导出诊断日志',
+          defaultPath: join(app.getPath('documents'), defaultFileName),
+          filters: [{ name: '文本文件', extensions: ['txt'] }],
+          properties: ['createDirectory', 'showOverwriteConfirmation', 'dontAddToRecent']
+        };
+        const result =
+          mainWindow && !mainWindow.isDestroyed()
+            ? await dialog.showSaveDialog(mainWindow, options)
+            : await dialog.showSaveDialog(options);
+        return result.canceled ? undefined : result.filePath;
+      },
+      writeFile: (filePath, contents) => writeTextFile(filePath, contents, 'utf8')
+    }
+  );
 }
 
 function normalizeBuildChannel(channel: string | undefined): AppUpdateSnapshot['buildChannel'] {
@@ -455,6 +515,7 @@ async function syncRemoteConfig(
   const restartIfNeeded = async () => {
     if (
       options.restartIfRunning &&
+      !networkRepairInProgress &&
       lifecycle.getStatus() === 'running' &&
       options.intentGeneration !== undefined &&
       runtimeIntent.isCurrent(options.intentGeneration)
@@ -516,7 +577,7 @@ function stopRemoteConfigPolling() {
 }
 
 async function syncRemoteConfigInBackground(): Promise<void> {
-  if (remoteConfigSyncRunning || cleanupStarted || cleanupFinished || isQuitting) return;
+  if (remoteConfigSyncRunning || networkRepairInProgress || cleanupStarted || cleanupFinished || isQuitting) return;
   const intentGeneration = runtimeIntent.capture();
   remoteConfigSyncRunning = true;
   try {
@@ -556,6 +617,12 @@ function isRecoverableSyncError(error: unknown): boolean {
 
 function clearLastError() {
   lastError = undefined;
+}
+
+function clearLastErrorIfUnchanged(expected: string | undefined): boolean {
+  if (lastError !== expected) return false;
+  clearLastError();
+  return true;
 }
 
 function setupAutoUpdates() {
@@ -927,7 +994,7 @@ function clearSubscriptionRefreshTimer() {
 
 function scheduleSubscriptionRefresh() {
   clearSubscriptionRefreshTimer();
-  if (lifecycle.getStatus() !== 'running') return;
+  if (networkRepairInProgress || lifecycle.getStatus() !== 'running') return;
 
   void settingsStore
     .read()
@@ -950,6 +1017,7 @@ function scheduleSubscriptionRefresh() {
 }
 
 async function refreshSubscriptionInBackground() {
+  if (networkRepairInProgress) return;
   if (lifecycle.getStatus() !== 'running') {
     scheduleSubscriptionRefresh();
     return;
@@ -960,6 +1028,8 @@ async function refreshSubscriptionInBackground() {
     return;
   }
 
+  const lastErrorBeforeRefresh = lastError;
+  const issueBeforeRefresh = classifyDiagnosticIssue(lastErrorBeforeRefresh);
   try {
     appendLog('后台刷新订阅');
     await updateSubscriptionNodes({
@@ -970,8 +1040,10 @@ async function refreshSubscriptionInBackground() {
       createSnapshot
     });
     subscriptionRevision += 1;
+    if (isDiagnosticIssueResolvedByOperation('subscription-refresh', issueBeforeRefresh)) {
+      clearLastErrorIfUnchanged(lastErrorBeforeRefresh);
+    }
     sendSnapshotToWindows(await createSnapshot());
-    clearLastError();
   } catch (error) {
     recordError('后台刷新订阅失败', error);
     await broadcastSnapshot().catch((broadcastError) => console.error('broadcast snapshot failed', broadcastError));
@@ -1207,7 +1279,7 @@ function getRuntimeRecoveryDelay(): number {
 }
 
 function scheduleRuntimeRecovery(delayMs = getRuntimeRecoveryDelay()) {
-  if (isQuitting || cleanupStarted || cleanupFinished) return;
+  if (networkRepairInProgress || isQuitting || cleanupStarted || cleanupFinished) return;
   if (runtimeIntent.capture() === undefined) return;
   if (lifecycle.getStatus() === 'stopped') return;
 
@@ -1221,7 +1293,7 @@ function scheduleRuntimeRecovery(delayMs = getRuntimeRecoveryDelay()) {
 async function runRuntimeRecovery() {
   const intentGeneration = runtimeIntent.capture();
   if (intentGeneration === undefined) return;
-  if (runtimeRecoveryRunning || isQuitting || cleanupStarted || cleanupFinished) return;
+  if (runtimeRecoveryRunning || networkRepairInProgress || isQuitting || cleanupStarted || cleanupFinished) return;
   if (lifecycle.getStatus() === 'stopped') return;
 
   runtimeRecoveryRunning = true;
@@ -1415,7 +1487,9 @@ async function createSnapshot(): Promise<AppSnapshot> {
     update: updateSnapshot,
     diagnostics: {
       lastError,
-      logs: appLogs.slice(-80)
+      logs: appLogs.slice(-80),
+      logCount: appLogs.length,
+      issueKind: classifyDiagnosticIssue(lastError)
     }
   };
 }
@@ -1536,6 +1610,7 @@ async function withTrayRefresh<T>(task: () => Promise<T>): Promise<T> {
 
 async function startProxy(signal?: AbortSignal, requestedIntentGeneration?: number): Promise<AppSnapshot> {
   throwIfAborted(signal);
+  throwIfNetworkRepairInProgress();
   if (requestedIntentGeneration !== undefined) throwIfRuntimeIntentCanceled(requestedIntentGeneration);
   await requireTrafficIdentity();
   const intentGeneration = requestedIntentGeneration ?? runtimeIntent.requestStart();
@@ -1620,17 +1695,30 @@ async function requireTrafficIdentity(): Promise<void> {
   }
 }
 
-async function startLifecycleWithRepairRetry(signal?: AbortSignal, intentGeneration?: number): Promise<void> {
+function throwIfNetworkRepairInProgress(allowDuringNetworkRepair = false): void {
+  if (networkRepairInProgress && !allowDuringNetworkRepair) {
+    throw new Error('network repair already in progress');
+  }
+}
+
+async function startLifecycleWithRepairRetry(
+  signal?: AbortSignal,
+  intentGeneration?: number,
+  options: { allowDuringNetworkRepair?: boolean } = {}
+): Promise<void> {
+  throwIfNetworkRepairInProgress(options.allowDuringNetworkRepair);
   if (intentGeneration !== undefined) throwIfRuntimeIntentCanceled(intentGeneration);
   try {
     await lifecycle.start(signal);
   } catch (error) {
     throwIfAborted(signal);
+    throwIfNetworkRepairInProgress(options.allowDuringNetworkRepair);
     if (intentGeneration !== undefined) throwIfRuntimeIntentCanceled(intentGeneration);
     appendLog(`启动失败，自动修复后重试: ${formatError(error)}`);
     await lifecycle.repair(signal).catch((repairError) => {
       appendLog(`自动修复失败: ${formatError(repairError)}`);
     });
+    throwIfNetworkRepairInProgress(options.allowDuringNetworkRepair);
     if (intentGeneration !== undefined) throwIfRuntimeIntentCanceled(intentGeneration);
     await lifecycle.start(signal);
   }
@@ -1638,6 +1726,7 @@ async function startLifecycleWithRepairRetry(signal?: AbortSignal, intentGenerat
 }
 
 async function startLifecycleForUser(signal?: AbortSignal): Promise<void> {
+  throwIfNetworkRepairInProgress();
   const intentGeneration = runtimeIntent.requestStart();
   await startLifecycleWithRepairRetry(signal, intentGeneration);
 }
@@ -1649,16 +1738,19 @@ async function restartLifecycleForUser(signal?: AbortSignal): Promise<void> {
 }
 
 async function restartLifecycleForIntent(intentGeneration: number, signal?: AbortSignal): Promise<void> {
+  throwIfNetworkRepairInProgress();
   throwIfRuntimeIntentCanceled(intentGeneration);
   try {
     await lifecycle.restart(signal);
   } catch (error) {
     throwIfAborted(signal);
+    throwIfNetworkRepairInProgress();
     throwIfRuntimeIntentCanceled(intentGeneration);
     appendLog(`重启失败，自动修复后重试: ${formatError(error)}`);
     await lifecycle.repair(signal).catch((repairError) => {
       appendLog(`自动修复失败: ${formatError(repairError)}`);
     });
+    throwIfNetworkRepairInProgress();
     throwIfRuntimeIntentCanceled(intentGeneration);
     await lifecycle.start(signal);
   }
@@ -1699,31 +1791,94 @@ async function stopProxy(): Promise<AppSnapshot> {
   return createSnapshot();
 }
 
-async function repairProxy(signal?: AbortSignal): Promise<AppSnapshot> {
+async function runIssueTargetedRepair(issueKind: DiagnosticIssueKind, signal?: AbortSignal): Promise<void> {
+  const actions = getTargetedNetworkRepairActions(issueKind);
+  if (actions.length === 0) return;
+  appendLog(`按诊断执行针对性修复: ${issueKind}`);
+  await runTargetedNetworkRepair(
+    issueKind,
+    {
+      disableSystemProxy: (repairSignal) => systemProxy.disableForRepair(repairSignal),
+      flushDns: (repairSignal) => systemProxy.flushDnsForRepair(repairSignal),
+      stopKernel: () => mihomoRuntime.stop(),
+      async refreshSubscription(repairSignal) {
+        if (lifecycle.getStatus() !== 'running') return;
+        const settings = await settingsStore.read();
+        if (!settings.subscriptionUrl.trim()) throw new Error('missing subscription url');
+        await createRuntimeMihomoApi({ secret: settings.controllerSecret }).updateProvider({ signal: repairSignal });
+      }
+    },
+    signal
+  );
+}
+
+async function repairProxy(signal?: AbortSignal, options: NetworkRepairOptions = {}): Promise<AppSnapshot> {
   throwIfAborted(signal);
-  const wasRunning = lifecycle.getStatus() === 'running';
-  const intentGeneration = wasRunning ? (runtimeIntent.capture() ?? runtimeIntent.requestStart()) : undefined;
-  if (wasRunning) {
-    const settings = await settingsStore.read();
-    await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
-    await trafficReporter.reportPending().catch((error) => appendLog(`流量上报失败: ${formatError(error)}`));
-    await createRuntimeMihomoApi({ secret: settings.controllerSecret })
-      .closeConnections()
-      .catch(() => undefined);
+  if (networkRepairInProgress) throw new Error('network repair already in progress');
+  networkRepairInProgress = true;
+  const repairOptions: NetworkRepairOptions = {
+    ...options,
+    issueKind: options.issueKind ?? classifyDiagnosticIssue(lastError)
+  };
+  let handingOffToRelaunch = false;
+  try {
+    const snapshot = await runNetworkRepair(
+      {
+        getStatus: () => lifecycle.getStatus(),
+        captureRuntimeIntent: () => runtimeIntent.capture(),
+        isRuntimeIntentCurrent: (generation) => runtimeIntent.isCurrent(generation),
+        async prepareRunningRuntime() {
+          const settings = await settingsStore.read().catch((error) => {
+            appendLog(`读取设置失败，继续网络修复: ${formatError(error)}`);
+            return undefined;
+          });
+          await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
+          await trafficReporter.reportPending().catch((error) => appendLog(`流量上报失败: ${formatError(error)}`));
+          if (settings) {
+            await createRuntimeMihomoApi({ secret: settings.controllerSecret })
+              .closeConnections()
+              .catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+          }
+        },
+        pauseBackgroundWork() {
+          trafficTracker.stop();
+          trafficReporter.stop();
+          stopNodeHealthMonitor();
+          clearRuntimeRecoveryTimer();
+          clearSubscriptionRefreshTimer();
+          stopRemoteConfigPolling();
+        },
+        runTargetedRepair: runIssueTargetedRepair,
+        onTargetedRepairError: (issueKind, error) =>
+          appendLog(`针对性修复未完成，继续完整修复 (${issueKind}): ${formatError(error)}`),
+        repairLifecycle: (repairSignal) => lifecycle.repair(repairSignal),
+        clearRuntimeCache: () => clearMihomoRepairCache(userDataDir),
+        startRuntime: (startSignal, intentGeneration) =>
+          startLifecycleWithRepairRetry(startSignal, intentGeneration, { allowDuringNetworkRepair: true }),
+        resumeRunningWork() {
+          trafficTracker.start();
+          trafficReporter.start();
+          scheduleNodeHealthCheck(0);
+        },
+        async createSnapshot() {
+          clearLastError();
+          return createSnapshot();
+        }
+      },
+      repairOptions,
+      signal
+    );
+    handingOffToRelaunch = repairOptions.resumeRuntime === false;
+    if (handingOffToRelaunch) lifecycle.suspendStarts();
+    return snapshot;
+  } finally {
+    networkRepairInProgress = false;
+    if (!handingOffToRelaunch) {
+      startRemoteConfigPolling();
+      scheduleSubscriptionRefresh();
+    }
+    if (lifecycle.getStatus() === 'failed') scheduleRuntimeRecovery(runtimeRecoveryInitialDelayMs);
   }
-  trafficTracker.stop();
-  await lifecycle.repair(signal);
-  throwIfAborted(signal);
-  clearSubscriptionRefreshTimer();
-  clearLastError();
-  if (wasRunning && intentGeneration !== undefined) {
-    await startLifecycleWithRepairRetry(signal, intentGeneration);
-    throwIfAborted(signal);
-    trafficTracker.start();
-    trafficReporter.start();
-    scheduleNodeHealthCheck(0);
-  }
-  return createSnapshot();
 }
 
 async function registerTrafficIdentity(input: Parameters<TrafficReporter['register']>[0]): Promise<AppSnapshot> {
@@ -1774,15 +1929,21 @@ function throwIfRuntimeIntentCanceled(generation: number): void {
   }
 }
 
-async function restartKernelAndApp(): Promise<AppSnapshot> {
-  await requireTrafficIdentity();
+async function restartKernelAndApp(preparedSnapshot?: AppSnapshot): Promise<AppSnapshot> {
+  if (!preparedSnapshot) await requireTrafficIdentity();
   clearLastError();
-  const snapshot = await createSnapshot();
+  const snapshot = preparedSnapshot ?? (await createSnapshot());
   await cleanupBeforeExit({
     relaunchArgs: buildProxyRelaunchArguments(process.argv.slice(1)),
     throwOnFailure: true
   });
   return snapshot;
+}
+
+async function repairNetworkAndRestartApp(): Promise<AppSnapshot> {
+  await requireTrafficIdentity();
+  const snapshot = await repairProxy(undefined, { resumeRuntime: false });
+  return restartKernelAndApp(snapshot);
 }
 
 function registerIpc() {
@@ -2037,13 +2198,23 @@ function registerIpc() {
       request,
       async (signal) =>
         withTrayRefresh(async () => {
-          const snapshot = await saveSubscriptionSettings(
-            { settingsStore, lifecycle, runtime: userRuntimeActions, createSnapshot },
-            settings,
-            { signal }
-          );
-          scheduleSubscriptionRefresh();
-          return snapshot;
+          const lastErrorBeforeSave = lastError;
+          const issueBeforeSave = classifyDiagnosticIssue(lastErrorBeforeSave);
+          try {
+            await saveSubscriptionSettings(
+              { settingsStore, lifecycle, runtime: userRuntimeActions, createSnapshot },
+              settings,
+              { signal }
+            );
+            if (isDiagnosticIssueResolvedByOperation('save-settings', issueBeforeSave)) {
+              clearLastErrorIfUnchanged(lastErrorBeforeSave);
+            }
+            scheduleSubscriptionRefresh();
+            return createSnapshot();
+          } catch (error) {
+            recordError('保存设置失败', error);
+            throw error;
+          }
         }),
       cancelProxyStart
     );
@@ -2059,18 +2230,36 @@ function registerIpc() {
       request,
       async (signal) =>
         withTrayRefresh(async () => {
-          await requireTrafficIdentity();
-          await syncRemoteConfig({
-            proxyUrl: getRuntimeTrafficProxyUrl(),
-            restartIfRunning: true,
-            throwOnError: true,
-            signal,
-            intentGeneration: runtimeIntent.capture()
-          });
-          return createSnapshot();
+          const lastErrorBeforeSync = lastError;
+          const issueBeforeSync = classifyDiagnosticIssue(lastErrorBeforeSync);
+          try {
+            await requireTrafficIdentity();
+            await syncRemoteConfig({
+              proxyUrl: getRuntimeTrafficProxyUrl(),
+              restartIfRunning: true,
+              throwOnError: true,
+              signal,
+              intentGeneration: runtimeIntent.capture()
+            });
+            if (isDiagnosticIssueResolvedByOperation('sync-settings', issueBeforeSync)) {
+              clearLastErrorIfUnchanged(lastErrorBeforeSync);
+            }
+            return createSnapshot();
+          } catch (error) {
+            recordError('同步设置失败', error);
+            throw error;
+          }
         }),
       cancelProxyStart
     );
+  });
+  ipcMain.handle(ipcChannels.exportDiagnostics, async () => {
+    try {
+      return await exportCurrentDiagnostics();
+    } catch (error) {
+      recordError('导出诊断日志失败', error);
+      throw error;
+    }
   });
   ipcMain.handle(ipcChannels.cancelOperation, (event, requestId: string) => {
     return ipcOperations.cancel(event.sender.id, requestId);
@@ -2714,26 +2903,11 @@ function refreshTrayMenu() {
     {
       label: '网络修复',
       enabled: !trayBusy,
-      submenu: [
-        {
-          label: '重启内核并重启软件',
-          enabled: !trayBusy,
-          click: () => {
-            void runTrayAction('重启内核并重启软件', async () => {
-              return restartKernelAndApp();
-            });
-          }
-        },
-        {
-          label: '重型网络修复',
-          enabled: !trayBusy,
-          click: () => {
-            void runTrayAction('重型网络修复', async () => {
-              return repairProxy();
-            });
-          }
-        }
-      ]
+      click: () => {
+        void runTrayAction('网络修复', async () => {
+          return repairNetworkAndRestartApp();
+        });
+      }
     },
     { type: 'separator' },
     {

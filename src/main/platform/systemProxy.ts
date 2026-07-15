@@ -46,6 +46,12 @@ export type SystemProxyOptions = {
   stateDirectory?: string;
 };
 
+export type RepairableSystemProxyAdapter = SystemProxyAdapter & {
+  disableForRepair: (signal?: AbortSignal) => Promise<void>;
+  flushDnsForRepair: (signal?: AbortSignal) => Promise<void>;
+  repairSystemNetwork: (signal?: AbortSignal) => Promise<void>;
+};
+
 const proxyOwnershipFileName = 'system-proxy-ownership.json';
 
 const proxyOverride = [
@@ -95,9 +101,10 @@ const microsoftStoreLoopbackPackageNames = [
   'Microsoft.XboxIdentityProvider'
 ];
 const microsoftStoreLoopbackQueryScript = `
+$ErrorActionPreference = 'Stop';
 $names = @(${microsoftStoreLoopbackPackageNames.map((name) => `'${name}'`).join(',')});
 foreach ($name in $names) {
-  Get-AppxPackage -Name $name -ErrorAction SilentlyContinue |
+  Get-AppxPackage -Name $name -ErrorAction Stop |
     Select-Object -ExpandProperty PackageFamilyName -Unique
 }
 `;
@@ -119,7 +126,7 @@ function parseStringValue(output: string, valueName: string): string {
   return match?.[1]?.trim() ?? '';
 }
 
-export function createSystemProxyAdapter(options: SystemProxyOptions = {}): SystemProxyAdapter {
+export function createSystemProxyAdapter(options: SystemProxyOptions = {}): RepairableSystemProxyAdapter {
   const platform = options.platform ?? process.platform;
   const runCommand = options.runCommand ?? defaultRunCommand;
   const shouldManageProxy = options.shouldManageProxy ?? (async () => true);
@@ -155,6 +162,32 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
     };
   }
 
+  async function queryProxyEnabled(): Promise<boolean> {
+    return parseEnabled(await reg(['query', internetSettingsKey, '/v', 'ProxyEnable']));
+  }
+
+  async function verifyAppliedProxy(expected: PreviousProxyState): Promise<void> {
+    const current = await queryPrevious();
+    if (
+      current.enabled === expected.enabled &&
+      current.server === expected.server &&
+      current.override === expected.override
+    ) {
+      return;
+    }
+    throw new Error(
+      `Failed to verify current-user proxy after enable: ProxyEnable=${current.enabled}, ProxyServer=${JSON.stringify(current.server)}, ProxyOverride=${JSON.stringify(current.override)}`
+    );
+  }
+
+  async function queryProxyStrings(): Promise<Pick<PreviousProxyState, 'server' | 'override'>> {
+    const output = await reg(['query', internetSettingsKey]);
+    return {
+      server: parseStringValue(output, 'ProxyServer'),
+      override: parseStringValue(output, 'ProxyOverride')
+    };
+  }
+
   async function setProxyEnabled(enabled: boolean) {
     await reg(['add', internetSettingsKey, '/v', 'ProxyEnable', '/t', 'REG_DWORD', '/d', enabled ? '1' : '0', '/f']);
   }
@@ -177,16 +210,35 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
     await reg(['add', internetSettingsKey, '/v', 'ProxyOverride', '/t', 'REG_SZ', '/d', override, '/f']);
   }
 
-  async function setProxy(enabled: boolean, server?: string, override?: string) {
-    if (server !== undefined) {
-      await setProxyServer(server);
-    }
-    if (override !== undefined) {
-      await setProxyOverride(override);
+  async function clearProxyStringsForRepair(): Promise<void> {
+    const before = await queryProxyStrings();
+    const failures: unknown[] = [];
+    const deletions = await Promise.allSettled([
+      ...(before.server ? [reg(['delete', internetSettingsKey, '/v', 'ProxyServer', '/f'])] : []),
+      ...(before.override ? [reg(['delete', internetSettingsKey, '/v', 'ProxyOverride', '/f'])] : [])
+    ]);
+    failures.push(...rejectedReasons(deletions));
+
+    try {
+      await notifySettingsChanged();
+    } catch (error) {
+      failures.push(error);
     }
 
-    await setProxyEnabled(enabled);
-    await notifySettingsChanged();
+    try {
+      const current = await queryProxyStrings();
+      if (current.server || current.override) {
+        failures.push(
+          new Error(
+            `Proxy strings remain after repair: ProxyServer=${JSON.stringify(current.server)}, ProxyOverride=${JSON.stringify(current.override)}`
+          )
+        );
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+
+    throwCollectedFailures(failures, 'Failed to clear current-user proxy configuration for repair');
   }
 
   async function resetWinHttpProxy() {
@@ -198,8 +250,10 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
     await runCommand(command);
   }
 
-  async function flushDnsCache() {
+  async function flushDnsCache(signal?: AbortSignal) {
+    signal?.throwIfAborted();
     await runCommand({ file: 'ipconfig.exe', args: ['/flushdns'] });
+    signal?.throwIfAborted();
   }
 
   async function queryMicrosoftStorePackageFamilies(): Promise<string[]> {
@@ -276,17 +330,25 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
   async function runPrivilegedRepair(signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     if (!runElevatedCommand) {
-      await resetWinHttpProxy();
-      await ensureMicrosoftStoreLoopbackExemptions({ strict: true });
+      const results = await Promise.allSettled([
+        resetWinHttpProxy(),
+        ensureMicrosoftStoreLoopbackExemptions({ strict: true, signal })
+      ]);
+      throwCollectedFailures(rejectedReasons(results), 'Privileged network repair failed');
       return;
     }
 
-    const installedPackageFamilies = await queryMicrosoftStorePackageFamilies().catch(() => []);
+    const installedPackageFamilies = await queryMicrosoftStorePackageFamilies();
     const script = [
       "$ErrorActionPreference = 'Stop'",
+      '$failures = [System.Collections.Generic.List[string]]::new()',
       '& netsh.exe winhttp reset proxy | Out-Null',
+      'if ($LASTEXITCODE -ne 0) { $failures.Add("netsh winhttp reset proxy failed with exit code $LASTEXITCODE") }',
       `$families = @(${installedPackageFamilies.map((name) => `'${name}'`).join(',')})`,
-      'foreach ($family in $families) { & CheckNetIsolation.exe LoopbackExempt -a "-n=$family" | Out-Null }'
+      'foreach ($family in $families) { & CheckNetIsolation.exe LoopbackExempt -a "-n=$family" | Out-Null; if ($LASTEXITCODE -ne 0) { $failures.Add("CheckNetIsolation LoopbackExempt failed for $family with exit code $LASTEXITCODE") } }',
+      '$loopbackOutput = (& CheckNetIsolation.exe LoopbackExempt -s | Out-String)',
+      'if ($LASTEXITCODE -ne 0) { $failures.Add("CheckNetIsolation LoopbackExempt verification failed with exit code $LASTEXITCODE") } else { foreach ($family in $families) { if ($loopbackOutput.IndexOf($family, [StringComparison]::OrdinalIgnoreCase) -lt 0) { $failures.Add("Store loopback verification missing package family $family") } } }',
+      "if ($failures.Count -gt 0) { throw ($failures -join '; ') }"
     ].join('; ');
     await runElevatedCommand(
       {
@@ -355,6 +417,30 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
     if (ownership) await restoreOwnership(ownership);
   }
 
+  async function disableForRepair(signal?: AbortSignal): Promise<void> {
+    if (platform !== 'win32') return;
+    signal?.throwIfAborted();
+    await setProxyEnabled(false);
+    await notifySettingsChanged();
+    signal?.throwIfAborted();
+    if (await queryProxyEnabled()) {
+      throw new Error('Failed to disable current-user proxy for repair: ProxyEnable is still enabled');
+    }
+    await clearOwnershipState();
+    clearInMemoryOwnership();
+  }
+
+  async function repairSystemNetwork(signal?: AbortSignal): Promise<void> {
+    if (platform !== 'win32') return;
+    signal?.throwIfAborted();
+    const results = await Promise.allSettled([
+      clearProxyStringsForRepair(),
+      flushDnsCache(signal),
+      runPrivilegedRepair(signal)
+    ]);
+    throwCollectedFailures(rejectedReasons(results), 'System network repair failed');
+  }
+
   return {
     async enable(signal) {
       if (platform !== 'win32') return;
@@ -390,6 +476,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
         await writeOwnershipState(ownership);
         await setProxyEnabled(applied.enabled);
         await notifySettingsChanged();
+        await verifyAppliedProxy(applied);
         await ensureMicrosoftStoreLoopbackExemptions({ strict: Boolean(runElevatedCommand), signal });
       } catch (error) {
         const restored = await restoreOwnership(ownership).then(
@@ -411,19 +498,12 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Syst
       const ownership = activeOwnership ?? (await readOwnershipState());
       if (ownership) await restoreOwnership(ownership);
     },
+    disableForRepair,
+    flushDnsForRepair: flushDnsCache,
+    repairSystemNetwork,
     async repair(signal) {
-      if (platform !== 'win32') return;
-      signal?.throwIfAborted();
-      const results = await Promise.allSettled([setProxy(false, '', ''), flushDnsCache(), runPrivilegedRepair(signal)]);
-      if (results[0]?.status === 'fulfilled') {
-        await clearOwnershipState();
-      }
-      clearInMemoryOwnership();
-
-      const failure = results.find((result) => result.status === 'rejected');
-      if (failure?.status === 'rejected') {
-        throw failure.reason;
-      }
+      await disableForRepair(signal);
+      await repairSystemNetwork(signal);
     }
   };
 }
@@ -477,4 +557,14 @@ function normalizeProxyState(value: unknown): PreviousProxyState | null {
 
 function isPackageFamilyName(value: string): boolean {
   return /^[A-Za-z0-9.]+_[A-Za-z0-9]+$/.test(value);
+}
+
+function rejectedReasons(results: PromiseSettledResult<unknown>[]): unknown[] {
+  return results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []));
+}
+
+function throwCollectedFailures(failures: unknown[], message: string): void {
+  if (failures.length === 0) return;
+  if (failures.length === 1) throw failures[0];
+  throw new AggregateError(failures, message);
 }

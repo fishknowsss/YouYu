@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  App,
   createOperationRequestTracker,
   getActionErrorMessage,
   RegistrationGate,
@@ -24,6 +25,8 @@ afterEach(async () => {
   if (root) await act(async () => root?.unmount());
   root = undefined;
   document.body.replaceChildren();
+  Object.defineProperty(window, 'youyu', { configurable: true, value: undefined });
+  window.history.replaceState({}, '', '/');
 });
 
 describe('renderer action behavior', () => {
@@ -81,7 +84,207 @@ describe('renderer action behavior', () => {
     await expect(running).rejects.toThrow('operation canceled');
     expect(start).not.toHaveBeenCalled();
   });
+
+  it('keeps the successful sync message out of the home diagnostics panel', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?mode=advanced&page=settings');
+    const snapshot = {
+      status: 'running',
+      currentNode: '自动选择',
+      nodes: [],
+      nodeHealth: {
+        nodeName: '自动选择',
+        delayStatus: 'untested',
+        availability: { status: 'untested', totalCount: 0 }
+      },
+      strategies: [],
+      mode: 'rule',
+      strategy: 'auto',
+      ruleProfile: 'ruleset',
+      features: {
+        systemProxyEnabled: true,
+        dnsEnhanced: true,
+        snifferEnabled: true,
+        tunEnabled: false,
+        strictRouteEnabled: true,
+        allowLan: false,
+        subscriptionRefreshIntervalHours: 12
+      },
+      runtime: { activeConnections: 0, uploadTotal: 0, downloadTotal: 0 },
+      traffic: {
+        totalUpload: 0,
+        totalDownload: 0,
+        todayUpload: 0,
+        todayDownload: 0,
+        pendingUpload: 0,
+        pendingDownload: 0,
+        nodeUsage: {},
+        reportStatus: 'idle'
+      },
+      trafficIdentity: {
+        userId: 'user-1',
+        deviceId: 'device-1',
+        name: '测试用户',
+        registeredAt: '2026-07-15T00:00:00.000Z'
+      },
+      subscriptionUrl: 'https://example.com/subscription',
+      update: {
+        currentVersion: '1.5.11',
+        buildChannel: 'standard',
+        updateChannel: 'latest',
+        status: 'idle'
+      },
+      diagnostics: { logs: ['运行正常'] }
+    } as AppSnapshot;
+    const api = {
+      getSnapshot: vi.fn(async () => snapshot),
+      syncRemoteConfig: vi.fn(async () => snapshot),
+      onSnapshotUpdated: vi.fn(() => () => undefined),
+      cancelOperation: vi.fn(async () => undefined)
+    } as unknown as NonNullable<Window['youyu']>;
+    Object.defineProperty(window, 'youyu', { configurable: true, value: api });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<App />));
+    await act(async () => Promise.resolve());
+    const syncButton = [...container.querySelectorAll('button')].find((button) => button.textContent === '同步');
+    expect(syncButton).toBeTruthy();
+    await act(async () => syncButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(container.textContent).toContain('已同步');
+
+    await act(async () => {
+      const backButton = [...container.querySelectorAll('button')].find((button) => button.textContent === '返回');
+      backButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(container.querySelector('.diagnostics-status')?.textContent ?? '').not.toContain('已同步');
+
+    await act(async () => vi.advanceTimersByTimeAsync(4000));
+
+    expect(container.querySelector('.diagnostics-status')?.textContent ?? '').not.toContain('已同步');
+  });
+
+  it.each([
+    { button: '保存', done: '已保存' },
+    { button: '修复', done: '已修复' }
+  ])('keeps the $done settings message out of the home diagnostics panel', async ({ button, done }) => {
+    window.history.replaceState({}, '', '/?mode=advanced&page=settings');
+    const snapshot = createRegisteredRendererSnapshot();
+    const saveSettings = vi.fn(async () => snapshot);
+    const repair = vi.fn(async () => snapshot);
+    const api = {
+      getSnapshot: vi.fn(async () => snapshot),
+      saveSettings,
+      repair,
+      onSnapshotUpdated: vi.fn(() => () => undefined),
+      cancelOperation: vi.fn(async () => undefined)
+    } as unknown as NonNullable<Window['youyu']>;
+    Object.defineProperty(window, 'youyu', { configurable: true, value: api });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<App />));
+    await act(async () => Promise.resolve());
+    const actionButton = [...container.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent === button
+    );
+    expect(actionButton).toBeTruthy();
+    await act(async () => actionButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(container.textContent).toContain(done);
+
+    await act(async () => {
+      const backButton = [...container.querySelectorAll('button')].find(
+        (candidate) => candidate.textContent === '返回'
+      );
+      backButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.querySelector('.diagnostics-status')?.textContent ?? '').not.toContain(done);
+    expect(button === '保存' ? saveSettings : repair).toHaveBeenCalledOnce();
+  });
+
+  it('exports diagnostics through the preload API and reports completion only after a saved file', async () => {
+    window.history.replaceState({}, '', '/?mode=advanced&page=settings');
+    const snapshot = createRegisteredRendererSnapshot();
+    const exportDiagnostics = vi.fn(async () => ({ canceled: false, exportedCount: 12 }));
+    const api = {
+      getSnapshot: vi.fn(async () => snapshot),
+      exportDiagnostics,
+      onSnapshotUpdated: vi.fn(() => () => undefined),
+      cancelOperation: vi.fn(async () => undefined)
+    } as unknown as NonNullable<Window['youyu']>;
+    Object.defineProperty(window, 'youyu', { configurable: true, value: api });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<App />));
+    await act(async () => Promise.resolve());
+    const exportButton = [...container.querySelectorAll('button')].find((button) => button.textContent === '导出');
+    expect(exportButton).toBeTruthy();
+
+    await act(async () => {
+      exportButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(exportDiagnostics).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain('已导出');
+  });
 });
+
+function createRegisteredRendererSnapshot(): AppSnapshot {
+  return {
+    status: 'running',
+    currentNode: '自动选择',
+    nodes: [],
+    nodeHealth: {
+      nodeName: '自动选择',
+      delayStatus: 'untested',
+      availability: { status: 'untested', totalCount: 0 }
+    },
+    strategies: [],
+    mode: 'rule',
+    strategy: 'auto',
+    ruleProfile: 'ruleset',
+    features: {
+      systemProxyEnabled: true,
+      dnsEnhanced: true,
+      snifferEnabled: true,
+      tunEnabled: false,
+      strictRouteEnabled: true,
+      allowLan: false,
+      subscriptionRefreshIntervalHours: 12
+    },
+    runtime: { activeConnections: 0, uploadTotal: 0, downloadTotal: 0 },
+    traffic: {
+      totalUpload: 0,
+      totalDownload: 0,
+      todayUpload: 0,
+      todayDownload: 0,
+      pendingUpload: 0,
+      pendingDownload: 0,
+      nodeUsage: {},
+      reportStatus: 'idle'
+    },
+    trafficIdentity: {
+      userId: 'user-1',
+      deviceId: 'device-1',
+      name: '测试用户',
+      registeredAt: '2026-07-15T00:00:00.000Z'
+    },
+    subscriptionUrl: 'https://example.com/subscription',
+    update: {
+      currentVersion: '1.5.11',
+      buildChannel: 'standard',
+      updateChannel: 'latest',
+      status: 'idle'
+    },
+    diagnostics: { logs: ['运行正常'], logCount: 12 }
+  };
+}
 
 describe('RegistrationGate', () => {
   it('renders a labelled modal form that requires both fields', () => {
@@ -142,6 +345,30 @@ describe('RegistrationGate', () => {
 });
 
 describe('advanced home diagnostics', () => {
+  it.each(['已同步', '已保存', '已修复'])('does not render %s above the diagnostic log', (message) => {
+    const html = renderToStaticMarkup(
+      <Home
+        usageMode="advanced"
+        snapshot={createRegisteredRendererSnapshot()}
+        busy={false}
+        busyLabel=""
+        message={message}
+        onQuickStart={vi.fn()}
+        onStart={vi.fn()}
+        onStop={vi.fn()}
+        onRepair={vi.fn()}
+        onModeChange={vi.fn()}
+        onStrategyChange={vi.fn()}
+        onOpenNodes={vi.fn()}
+        onUsageModeChange={vi.fn()}
+        onInstallUpdate={vi.fn()}
+      />
+    );
+
+    expect(html).not.toContain('diagnostics-status');
+    expect(html).not.toContain(message);
+  });
+
   it('keeps the diagnostics viewport on the latest log entry', async () => {
     const container = document.createElement('div');
     document.body.append(container);

@@ -5,9 +5,10 @@ describe('update install entry points', () => {
   it('uses the same install handler in easy and advanced interfaces', async () => {
     const source = await readFile('src/renderer/App.tsx', 'utf8');
 
-    expect(source).toContain('function handleInstallUpdate()');
-    expect(source.match(/onInstallUpdate=\{handleInstallUpdate\}/g)).toHaveLength(2);
-    expect(source).toContain('messageSink: setSettingsMessage');
+    expect(source).toContain('function handleInstallUpdate(messageSink?: (message: string) => void)');
+    expect(source).toContain('onInstallUpdate={() => handleInstallUpdate()}');
+    expect(source).toContain('onInstallUpdate={() => handleInstallUpdate(setSettingsMessage)}');
+    expect(source).toContain('messageSink');
   });
 
   it('keeps an installer launch failure from closing the app', async () => {
