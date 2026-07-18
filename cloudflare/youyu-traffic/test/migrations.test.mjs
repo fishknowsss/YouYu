@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 const baseUrl = new URL('../', import.meta.url);
+const currentSchema = readFileSync(new URL('schema.sql', baseUrl), 'utf8');
 
 test('legacy database can apply every migration in order', () => {
   const database = new DatabaseSync(':memory:');
@@ -34,5 +35,57 @@ test('legacy database can apply every migration in order', () => {
     .map((row) => row.name);
   assert.ok(remoteColumns.includes('subscription_url'));
   assert.ok(remoteColumns.includes('anomaly_threshold_bytes'));
+  database.close();
+});
+
+test('device identity and user merge migration normalizes removed remote controls', () => {
+  const database = new DatabaseSync(':memory:');
+  database.exec(currentSchema);
+  database.exec(`
+    INSERT INTO users (id, name, normalized_name, status, created_at)
+    VALUES ('user-1', 'Alice', 'alice', 'active', '2026-07-19T00:00:00.000Z');
+    INSERT INTO remote_config
+      (id, version, enabled, rule_profile, preferred_node, preferred_strategy, direct_rules, proxy_rules, anomaly_threshold_bytes, updated_at)
+    VALUES
+      (1, 1, 1, 'smart', 'Node A', 'manual', '["DOMAIN,direct.test"]', '["DOMAIN,proxy.test"]', 1024, '2026-07-19T00:00:00.000Z');
+    INSERT INTO user_remote_config
+      (user_id, rule_profile, preferred_node, preferred_strategy, direct_rules, proxy_rules, updated_at)
+    VALUES
+      ('user-1', 'global', 'Node B', 'auto', '["DOMAIN,direct.test"]', '["DOMAIN,proxy.test"]', '2026-07-19T00:00:00.000Z');
+  `);
+
+  const migration = readFileSync(new URL('migrations/2026-07-19-device-identity-and-user-merge.sql', baseUrl), 'utf8');
+  database.exec(migration);
+  database.exec(`
+    UPDATE remote_config SET updated_at = 'after-first-run';
+    UPDATE user_remote_config SET updated_at = 'after-first-run';
+  `);
+  database.exec(migration);
+
+  const global = database.prepare('SELECT * FROM remote_config WHERE id = 1').get();
+  assert.equal(global.rule_profile, 'ruleset');
+  assert.equal(global.preferred_node, null);
+  assert.equal(global.preferred_strategy, null);
+  assert.equal(global.direct_rules, '[]');
+  assert.equal(global.proxy_rules, '[]');
+  assert.equal(global.anomaly_threshold_bytes, 1024 * 1024 * 1024);
+  assert.equal(global.version, 2);
+  assert.equal(global.updated_at, 'after-first-run');
+  const user = database.prepare('SELECT * FROM user_remote_config WHERE user_id = ?').get('user-1');
+  assert.equal(user.rule_profile, 'ruleset');
+  assert.equal(user.preferred_node, null);
+  assert.equal(user.preferred_strategy, null);
+  assert.equal(user.direct_rules, null);
+  assert.equal(user.proxy_rules, null);
+  assert.equal(user.updated_at, 'after-first-run');
+
+  const mergeTable = database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_merge_audit'")
+    .get();
+  const deviceKeyIndex = database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_devices_device_key'")
+    .get();
+  assert.equal(mergeTable.name, 'user_merge_audit');
+  assert.equal(deviceKeyIndex.name, 'idx_devices_device_key');
   database.close();
 });

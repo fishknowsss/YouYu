@@ -497,7 +497,6 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         strictRouteEnabled: settings.strictRouteEnabled,
         allowLan: settings.allowLan,
         subscriptionConfigText,
-        remoteConfig,
         mixedPort: ports.mixedPort,
         controllerPort: ports.controllerPort,
         dnsPort: ports.dnsPort
@@ -506,7 +505,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
     );
     await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
 
-    return { workDir, configPath, settings, ports, remoteConfig, remoteConfigSnapshot };
+    return { workDir, configPath, settings, ports, remoteConfigSnapshot };
   }
 
   async function stopCurrentChild(current = child) {
@@ -554,11 +553,9 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         signal?.throwIfAborted();
-        const { workDir, configPath, settings, ports, remoteConfig, remoteConfigSnapshot } = await writeConfig(signal);
-        const startupNode = remoteConfig?.preferredNode ?? settings.selectedNode;
-        const startupStrategy = remoteConfig?.preferredNode
-          ? 'manual'
-          : (remoteConfig?.preferredStrategy ?? settings.strategy);
+        const { workDir, configPath, settings, ports, remoteConfigSnapshot } = await writeConfig(signal);
+        const startupNode = settings.selectedNode;
+        const startupStrategy = settings.strategy;
         options.logLine?.(
           `mihomo starting: mixed-port=${ports.mixedPort}, controller=${ports.controllerPort}, dns=${ports.dnsPort ?? 1053}`
         );

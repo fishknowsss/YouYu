@@ -2,7 +2,7 @@ export type AppStatus = 'stopped' | 'running' | 'failed';
 export type AppBuildChannel = 'standard' | 'in' | 'no';
 export type MihomoMode = 'rule' | 'global' | 'direct';
 export type StrategyKey = 'manual' | 'auto' | 'fallback' | 'load-balance' | 'direct';
-export type RuleProfile = 'ruleset' | 'smart' | 'global' | 'subscription';
+export type RuleProfile = 'ruleset' | 'subscription';
 export type RemoteControlConfig = {
   version: number;
   enabled: boolean;
@@ -196,6 +196,8 @@ export type AppDiagnostics = {
   lastError?: string;
   logs: string[];
   logCount?: number;
+  logCapacity?: number;
+  droppedLogCount?: number;
   issueKind?: DiagnosticIssueKind;
 };
 

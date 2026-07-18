@@ -47,7 +47,7 @@ describe('connectivity test cache context', () => {
     expect(
       getConnectivityCacheKey({
         ...snapshot,
-        ruleProfile: snapshot.ruleProfile === 'smart' ? 'ruleset' : 'smart'
+        ruleProfile: snapshot.ruleProfile === 'subscription' ? 'ruleset' : 'subscription'
       })
     ).not.toBe(baseKey);
     expect(getConnectivityCacheKey({ ...snapshot, subscriptionRevision: 1 })).not.toBe(baseKey);

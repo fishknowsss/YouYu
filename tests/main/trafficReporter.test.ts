@@ -106,6 +106,49 @@ describe('TrafficReporter', () => {
     });
   });
 
+  it('includes a stable logical device key in activation when available', async () => {
+    const deviceKey = '33333333-3333-4333-8333-333333333333';
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body.deviceKey).toBe(deviceKey);
+      return new Response(JSON.stringify(activationPayload('user_1', 'device_1', 'Alice')), { status: 200 });
+    });
+    const reporter = new TrafficReporter({
+      store: new TrafficStore(dir),
+      endpoint: 'https://traffic.example.com',
+      appVersion: '1.6.5',
+      fetch,
+      getDeviceKey: async () => deviceKey
+    });
+
+    await expect(reporter.register({ name: 'Alice', passphrase: 'secret' })).resolves.toMatchObject({
+      userId: 'user_1',
+      deviceId: 'device_1'
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues activation without a logical device key when its provider fails', async () => {
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body).not.toHaveProperty('deviceKey');
+      return new Response(JSON.stringify(activationPayload('user_1', 'device_1', 'Alice')), { status: 200 });
+    });
+    const reporter = new TrafficReporter({
+      store: new TrafficStore(dir),
+      endpoint: 'https://traffic.example.com',
+      appVersion: '1.6.5',
+      fetch,
+      getDeviceKey: async () => Promise.reject(new Error('registry unavailable'))
+    });
+
+    await expect(reporter.register({ name: 'Alice', passphrase: 'secret' })).resolves.toMatchObject({
+      userId: 'user_1',
+      deviceId: 'device_1'
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('uses activation totals as the authoritative baseline without a follow-up heartbeat', async () => {
     let reportRequests = 0;
     const endpoint = await startJsonServer(async (_body, request) => {

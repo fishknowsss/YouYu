@@ -155,8 +155,10 @@ describe('renderer action behavior', () => {
     expect(container.textContent).toContain('已同步');
 
     await act(async () => {
-      const backButton = [...container.querySelectorAll('button')].find((button) => button.textContent === '返回');
-      backButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      const homeButton = [...container.querySelectorAll('.nav-list button')].find(
+        (button) => button.textContent === '首页'
+      );
+      homeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(container.querySelector('.diagnostics-status')?.textContent ?? '').not.toContain('已同步');
 
@@ -195,10 +197,10 @@ describe('renderer action behavior', () => {
     expect(container.textContent).toContain(done);
 
     await act(async () => {
-      const backButton = [...container.querySelectorAll('button')].find(
-        (candidate) => candidate.textContent === '返回'
+      const homeButton = [...container.querySelectorAll('.nav-list button')].find(
+        (candidate) => candidate.textContent === '首页'
       );
-      backButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      homeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
     expect(container.querySelector('.diagnostics-status')?.textContent ?? '').not.toContain(done);
@@ -501,6 +503,32 @@ describe('RegistrationGate', () => {
 });
 
 describe('advanced home diagnostics', () => {
+  it('shows the retained log total when the snapshot only includes recent entries', () => {
+    const snapshot = createRegisteredRendererSnapshot();
+    snapshot.diagnostics = { logs: ['recent entry'], logCount: 200 };
+
+    const html = renderToStaticMarkup(
+      <Home
+        usageMode="advanced"
+        snapshot={snapshot}
+        busy={false}
+        busyLabel=""
+        message=""
+        onQuickStart={vi.fn()}
+        onStart={vi.fn()}
+        onStop={vi.fn()}
+        onRepair={vi.fn()}
+        onModeChange={vi.fn()}
+        onStrategyChange={vi.fn()}
+        onOpenNodes={vi.fn()}
+        onUsageModeChange={vi.fn()}
+        onInstallUpdate={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('<span>200 条</span>');
+  });
+
   it.each(['已同步', '已保存', '已修复'])('does not render %s above the diagnostic log', (message) => {
     const html = renderToStaticMarkup(
       <Home

@@ -187,6 +187,7 @@ function AdvancedHome(props: HomeProps) {
   const mostUsedNode = props.snapshot.traffic.nodeUsage.mostUsed;
   const longestUsedNode = props.snapshot.traffic.nodeUsage.longestUsed;
   const diagnosticsLogs = props.snapshot.diagnostics.logs;
+  const diagnosticLogCount = props.snapshot.diagnostics.logCount ?? diagnosticsLogs.length;
   const logLines = diagnosticsLogs.slice(-7);
   const diagnosticsLogRef = useRef<HTMLDivElement>(null);
   const diagnosticMessage =
@@ -205,7 +206,7 @@ function AdvancedHome(props: HomeProps) {
         description="代理状态与节点"
         actions={
           <>
-            <button className="secondary-button mode-return-button" onClick={() => props.onUsageModeChange('easy')}>
+            <button className="secondary-button" onClick={() => props.onUsageModeChange('easy')}>
               返回小白
             </button>
             <span className={`status-badge ${props.snapshot.status}`}>{statusLabel}</span>
@@ -287,11 +288,7 @@ function AdvancedHome(props: HomeProps) {
           </div>
         </DashboardPanel>
 
-        <DashboardPanel
-          className="diagnostics-panel"
-          title="诊断"
-          meta={<span>{props.snapshot.diagnostics.logs.length} 条</span>}
-        >
+        <DashboardPanel className="diagnostics-panel" title="诊断" meta={<span>{diagnosticLogCount} 条</span>}>
           <div className="diagnostics-body">
             {diagnosticMessage && (
               <div className="diagnostics-status" aria-live="polite">

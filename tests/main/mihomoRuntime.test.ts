@@ -24,7 +24,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     controllerSecret: 'local-secret',
     mode: 'rule',
     strategy: 'auto',
-    ruleProfile: 'smart',
+    ruleProfile: 'ruleset',
     selectedNode: '',
     systemProxyEnabled: true,
     dnsEnhanced: true,
@@ -631,7 +631,7 @@ proxies:
     expect(autoNow).toBe('香港 01');
   });
 
-  it('keeps the auto strategy group ahead of a saved node on startup', async () => {
+  it('keeps the local auto strategy ahead of deprecated remote startup preferences', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);
     const child = new EventEmitter() as EventEmitter & {
@@ -669,6 +669,14 @@ proxies:
       binaryPath: 'C:/YouYu/mihomo.exe',
       userDataDir,
       readSettings: async () => makeSettings({ selectedNode: '美国 01' }),
+      readRemoteConfig: async () => ({
+        version: 2,
+        enabled: true,
+        preferredNode: '美国 01',
+        preferredStrategy: 'manual',
+        directRules: [],
+        proxyRules: []
+      }),
       spawnProcess: () => child as never
     });
 

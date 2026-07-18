@@ -34,8 +34,7 @@ test('an existing name attaches another device to the same user data', async (co
     .bind(firstIdentity.userId, firstIdentity.deviceId, today, 4096, 8192, new Date().toISOString())
     .run();
   const configWrite = await updateAdminUserConfig(database, firstIdentity.userId, {
-    subscriptionUrl: 'https://example.com/alice-sub',
-    preferredNode: 'Alice Node'
+    subscriptionUrl: 'https://example.com/alice-sub'
   });
   assert.equal(configWrite.status, 200);
 
@@ -62,7 +61,6 @@ test('an existing name attaches another device to the same user data', async (co
   assert.equal(config.status, 200);
   const configBody = await config.json();
   assert.equal(configBody.config.subscriptionUrl, 'https://example.com/alice-sub');
-  assert.equal(configBody.config.preferredNode, 'Alice Node');
   assert.equal(configBody.config.enabled, true);
 
   const retry = await activate(database, {
@@ -84,6 +82,478 @@ test('an existing name attaches another device to the same user data', async (co
     todayDownload: 8192
   });
   assert.equal(database.queryAll('SELECT id FROM devices WHERE user_id = ?', firstIdentity.userId).length, 2);
+});
+
+test('a stable device key reuses one physical device when the signing seed is recreated', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceKey = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const firstSeed = '11111111-1111-4111-8111-111111111111';
+  const replacementSeed = '22222222-2222-4222-8222-222222222222';
+
+  const first = await activate(database, { name: 'Alice', deviceSeed: firstSeed, deviceKey });
+  assert.equal(first.status, 200);
+  const firstIdentity = await first.json();
+
+  const replacement = await activate(database, {
+    name: 'Alice',
+    deviceSeed: replacementSeed,
+    deviceKey: deviceKey.toUpperCase()
+  });
+  assert.equal(replacement.status, 200);
+  const replacementIdentity = await replacement.json();
+
+  assert.equal(replacementIdentity.userId, firstIdentity.userId);
+  assert.equal(replacementIdentity.deviceId, firstIdentity.deviceId);
+  const [storedDevice] = database.queryAll(
+    'SELECT device_seed, device_key FROM devices WHERE user_id = ?',
+    firstIdentity.userId
+  );
+  assert.equal(storedDevice.device_seed, replacementSeed);
+  assert.equal(storedDevice.device_key, deviceKey);
+  assert.equal((await getClientConfig(database, replacementIdentity, replacementSeed)).status, 200);
+});
+
+test('admin device totals count logical machines while retaining legacy installation records', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+
+  const first = await activate(database, {
+    name: 'Alice',
+    deviceSeed: '11111111-1111-4111-8111-111111111111',
+    deviceName: 'ALICE-PC'
+  });
+  assert.equal(first.status, 200);
+  const second = await activate(database, {
+    name: 'Alice',
+    deviceSeed: '22222222-2222-4222-8222-222222222222',
+    deviceName: ' alice-pc '
+  });
+  assert.equal(second.status, 200);
+
+  const response = await requestAdmin(database, '/api/admin/users');
+  assert.equal(response.status, 200);
+  const users = (await response.json()).users;
+  assert.equal(users.length, 1);
+  assert.equal(users[0].devices, 1);
+  assert.equal(users[0].deviceRecords, 2);
+});
+
+test('admin can merge user aliases without breaking an already registered source device', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const sourceSeed = '11111111-1111-4111-8111-111111111111';
+  const targetSeed = '22222222-2222-4222-8222-222222222222';
+  const mergeRequestId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+  const sourceResponse = await activate(database, { name: 'Alice-old', deviceSeed: sourceSeed });
+  const targetResponse = await activate(database, { name: 'Alice', deviceSeed: targetSeed });
+  assert.equal(sourceResponse.status, 200);
+  assert.equal(targetResponse.status, 200);
+  const source = await sourceResponse.json();
+  const target = await targetResponse.json();
+  assert.equal(
+    (await updateAdminUserConfig(database, source.userId, { subscriptionUrl: 'https://example.com/source' })).status,
+    200
+  );
+  assert.equal(
+    (await updateAdminUserConfig(database, target.userId, { subscriptionUrl: 'https://example.com/target' })).status,
+    200
+  );
+
+  const preview = await requestAdmin(
+    database,
+    `/api/admin/users/${encodeURIComponent(source.userId)}/merge-preview?targetUserId=${encodeURIComponent(target.userId)}`
+  );
+  assert.equal(preview.status, 200);
+  assert.deepEqual((await preview.json()).config, {
+    conflict: true,
+    sourceHasOverride: true,
+    targetHasOverride: true,
+    recommendedResolution: 'keep_target'
+  });
+  const unresolved = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId: target.userId })
+  });
+  assert.equal(unresolved.status, 409);
+  assert.deepEqual(await unresolved.json(), { error: 'config conflict' });
+
+  const merge = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({
+      targetUserId: target.userId,
+      configResolution: 'keep_target',
+      requestId: mergeRequestId
+    })
+  });
+  assert.equal(merge.status, 200);
+
+  const listed = (await (await requestAdmin(database, '/api/admin/users')).json()).users;
+  assert.deepEqual(
+    listed.map((user) => user.id),
+    [target.userId]
+  );
+  assert.equal(listed[0].deviceRecords, 2);
+  assert.equal((await getClientConfig(database, source, sourceSeed)).status, 200);
+  const sourceConfig = await getClientConfig(database, source, sourceSeed);
+  assert.equal((await sourceConfig.json()).config.subscriptionUrl, 'https://example.com/target');
+
+  const aliasActivation = await activate(database, {
+    name: 'Alice-old',
+    deviceSeed: '33333333-3333-4333-8333-333333333333'
+  });
+  assert.equal(aliasActivation.status, 200);
+  const aliasIdentity = await aliasActivation.json();
+  assert.equal(aliasIdentity.userId, target.userId);
+  assert.equal(aliasIdentity.name, 'Alice');
+
+  const repeated = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({
+      targetUserId: target.userId,
+      configResolution: 'keep_target',
+      requestId: mergeRequestId.toUpperCase()
+    })
+  });
+  assert.equal(repeated.status, 200);
+  const repeatedBody = await repeated.json();
+  assert.equal(repeatedBody.alreadyMerged, true);
+  assert.equal(repeatedBody.requestId, mergeRequestId);
+});
+
+test('multi-hop user merges flatten old aliases so registration and signatures stay canonical', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const firstSeed = '11111111-1111-4111-8111-111111111111';
+  const secondSeed = '22222222-2222-4222-8222-222222222222';
+  const thirdSeed = '33333333-3333-4333-8333-333333333333';
+  const first = await (await activate(database, { name: 'Alice-old', deviceSeed: firstSeed })).json();
+  const second = await (await activate(database, { name: 'Alice-mid', deviceSeed: secondSeed })).json();
+  const third = await (await activate(database, { name: 'Alice', deviceSeed: thirdSeed })).json();
+  const firstRequestId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+  assert.equal(
+    (
+      await requestAdmin(database, `/api/admin/users/${encodeURIComponent(first.userId)}/merge`, {
+        method: 'POST',
+        body: JSON.stringify({ targetUserId: second.userId, requestId: firstRequestId })
+      })
+    ).status,
+    200
+  );
+  assert.equal(
+    (
+      await requestAdmin(database, `/api/admin/users/${encodeURIComponent(second.userId)}/merge`, {
+        method: 'POST',
+        body: JSON.stringify({ targetUserId: third.userId })
+      })
+    ).status,
+    200
+  );
+
+  const aliasSeed = '44444444-4444-4444-8444-444444444444';
+  const aliasActivationResponse = await activate(database, { name: 'Alice-old', deviceSeed: aliasSeed });
+  assert.equal(aliasActivationResponse.status, 200);
+  const aliasIdentity = await aliasActivationResponse.json();
+  assert.equal(aliasIdentity.userId, third.userId);
+  assert.equal((await getClientConfig(database, aliasIdentity, aliasSeed)).status, 200);
+  const oldAlias = database.queryAll('SELECT merged_into_user_id FROM users WHERE id = ?', first.userId)[0];
+  assert.equal(oldAlias.merged_into_user_id, third.userId);
+
+  const replay = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(first.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId: second.userId, requestId: firstRequestId })
+  });
+  assert.equal(replay.status, 200);
+  const replayBody = await replay.json();
+  assert.equal(replayBody.alreadyMerged, true);
+  assert.equal(replayBody.targetUserId, second.userId);
+});
+
+test('use_source removes a target override when the source follows global config', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const source = await (
+    await activate(database, { name: 'Source', deviceSeed: '11111111-1111-4111-8111-111111111111' })
+  ).json();
+  const target = await (
+    await activate(database, { name: 'Target', deviceSeed: '22222222-2222-4222-8222-222222222222' })
+  ).json();
+  assert.equal(
+    (await updateAdminUserConfig(database, target.userId, { subscriptionUrl: 'https://example.com/target' })).status,
+    200
+  );
+
+  const merge = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId: target.userId, configResolution: 'use_source' })
+  });
+  assert.equal(merge.status, 200);
+  assert.equal(database.queryAll('SELECT user_id FROM user_remote_config WHERE user_id = ?', target.userId).length, 0);
+});
+
+test('merge request ids cannot report success for a different active source user', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const first = await (
+    await activate(database, { name: 'Alice-old', deviceSeed: '11111111-1111-4111-8111-111111111111' })
+  ).json();
+  const second = await (
+    await activate(database, { name: 'Alice-other', deviceSeed: '22222222-2222-4222-8222-222222222222' })
+  ).json();
+  const target = await (
+    await activate(database, { name: 'Alice', deviceSeed: '33333333-3333-4333-8333-333333333333' })
+  ).json();
+  const requestId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+  const firstMerge = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(first.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId: target.userId, requestId })
+  });
+  assert.equal(firstMerge.status, 200);
+  const collision = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(second.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId: target.userId, requestId })
+  });
+  assert.equal(collision.status, 409);
+  assert.deepEqual(await collision.json(), { error: 'merge request conflict' });
+  const secondUser = database.queryAll('SELECT status, merged_into_user_id FROM users WHERE id = ?', second.userId)[0];
+  assert.equal(secondUser.status, 'active');
+  assert.equal(secondUser.merged_into_user_id, null);
+});
+
+test('merge batch rejects a target that became an alias after the preview read', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const source = await (
+    await activate(database, { name: 'Source', deviceSeed: '11111111-1111-4111-8111-111111111111' })
+  ).json();
+  const target = await (
+    await activate(database, { name: 'Target', deviceSeed: '22222222-2222-4222-8222-222222222222' })
+  ).json();
+  const ultimate = await (
+    await activate(database, { name: 'Ultimate', deviceSeed: '33333333-3333-4333-8333-333333333333' })
+  ).json();
+  let interceptBatch = true;
+  const racedDatabase = {
+    ...database,
+    async batch(statements) {
+      if (interceptBatch) {
+        interceptBatch = false;
+        const targetMerge = await requestAdmin(
+          database,
+          `/api/admin/users/${encodeURIComponent(target.userId)}/merge`,
+          { method: 'POST', body: JSON.stringify({ targetUserId: ultimate.userId }) }
+        );
+        assert.equal(targetMerge.status, 200);
+      }
+      return database.batch(statements);
+    }
+  };
+
+  const racedMerge = await requestAdmin(racedDatabase, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId: target.userId })
+  });
+  assert.equal(racedMerge.status, 409);
+  assert.deepEqual(await racedMerge.json(), { error: 'merge state changed' });
+  const sourceUser = database.queryAll('SELECT status, merged_into_user_id FROM users WHERE id = ?', source.userId)[0];
+  assert.equal(sourceUser.status, 'active');
+  assert.equal(sourceUser.merged_into_user_id, null);
+});
+
+test('merge batch rejects a target config created after conflict evaluation', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const source = await (
+    await activate(database, { name: 'Source', deviceSeed: '11111111-1111-4111-8111-111111111111' })
+  ).json();
+  const target = await (
+    await activate(database, { name: 'Target', deviceSeed: '22222222-2222-4222-8222-222222222222' })
+  ).json();
+  assert.equal(
+    (await updateAdminUserConfig(database, source.userId, { subscriptionUrl: 'https://example.com/source' })).status,
+    200
+  );
+  let interceptBatch = true;
+  const racedDatabase = {
+    ...database,
+    async batch(statements) {
+      if (interceptBatch) {
+        interceptBatch = false;
+        await database
+          .prepare(
+            `INSERT INTO user_remote_config (user_id, enabled, subscription_url, rule_profile, updated_at)
+             VALUES (?, 1, ?, 'ruleset', ?)`
+          )
+          .bind(target.userId, 'https://example.com/concurrent', '2026-07-19T01:02:03.000Z')
+          .run();
+      }
+      return database.batch(statements);
+    }
+  };
+
+  const racedMerge = await requestAdmin(racedDatabase, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId: target.userId })
+  });
+  assert.equal(racedMerge.status, 409);
+  assert.deepEqual(await racedMerge.json(), { error: 'merge state changed' });
+  const targetConfig = database.queryAll(
+    'SELECT subscription_url FROM user_remote_config WHERE user_id = ?',
+    target.userId
+  )[0];
+  assert.equal(targetConfig.subscription_url, 'https://example.com/concurrent');
+});
+
+test('traffic reports use the device owner committed by a concurrent user merge', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const sourceSeed = '11111111-1111-4111-8111-111111111111';
+  const source = await (await activate(database, { name: 'Source', deviceSeed: sourceSeed })).json();
+  const target = await (
+    await activate(database, { name: 'Target', deviceSeed: '22222222-2222-4222-8222-222222222222' })
+  ).json();
+  let interceptBatch = true;
+  const racedDatabase = {
+    ...database,
+    async batch(statements) {
+      if (interceptBatch) {
+        interceptBatch = false;
+        const merge = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
+          method: 'POST',
+          body: JSON.stringify({ targetUserId: target.userId })
+        });
+        assert.equal(merge.status, 200);
+      }
+      return database.batch(statements);
+    }
+  };
+
+  const response = await reportTraffic(racedDatabase, source, sourceSeed, {
+    reportId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    uploadDelta: 1234,
+    downloadDelta: 5678
+  });
+  assert.equal(response.status, 200);
+  const [report] = database.queryAll(
+    'SELECT user_id FROM traffic_reports WHERE id = ?',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  );
+  assert.equal(report.user_id, target.userId);
+  const [daily] = database.queryAll(
+    'SELECT user_id, upload_bytes, download_bytes FROM traffic_daily WHERE device_id = ?',
+    source.deviceId
+  );
+  assert.equal(daily.user_id, target.userId);
+  assert.equal(daily.upload_bytes, 1234);
+  assert.equal(daily.download_bytes, 5678);
+  const body = await response.json();
+  assert.equal(body.traffic.totalUpload, 1234);
+  assert.equal(body.traffic.totalDownload, 5678);
+});
+
+test('a concurrent merge cannot recreate a source user config override', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const source = await (
+    await activate(database, { name: 'Source', deviceSeed: '11111111-1111-4111-8111-111111111111' })
+  ).json();
+  const target = await (
+    await activate(database, { name: 'Target', deviceSeed: '22222222-2222-4222-8222-222222222222' })
+  ).json();
+  assert.equal(
+    (await updateAdminUserConfig(database, target.userId, { subscriptionUrl: 'https://example.com/target' })).status,
+    200
+  );
+  let interceptWrite = true;
+  const racedDatabase = {
+    ...database,
+    prepare(sql) {
+      const statement = database.prepare(sql);
+      if (!interceptWrite || !sql.includes('INSERT INTO user_remote_config (user_id,')) return statement;
+      return {
+        bind(...bindings) {
+          const bound = statement.bind(...bindings);
+          return {
+            async run() {
+              interceptWrite = false;
+              const merge = await requestAdmin(
+                database,
+                `/api/admin/users/${encodeURIComponent(source.userId)}/merge`,
+                { method: 'POST', body: JSON.stringify({ targetUserId: target.userId }) }
+              );
+              assert.equal(merge.status, 200);
+              return bound.run();
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const response = await updateAdminUserConfig(racedDatabase, source.userId, {
+    subscriptionUrl: 'https://example.com/stale-source'
+  });
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), { error: 'unknown user' });
+  assert.equal(database.queryAll('SELECT user_id FROM user_remote_config WHERE user_id = ?', source.userId).length, 0);
+  const [targetConfig] = database.queryAll(
+    'SELECT subscription_url FROM user_remote_config WHERE user_id = ?',
+    target.userId
+  );
+  assert.equal(targetConfig.subscription_url, 'https://example.com/target');
+});
+
+test('client config reads the device current owner after a concurrent merge', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const sourceSeed = '11111111-1111-4111-8111-111111111111';
+  const source = await (await activate(database, { name: 'Source', deviceSeed: sourceSeed })).json();
+  const target = await (
+    await activate(database, { name: 'Target', deviceSeed: '22222222-2222-4222-8222-222222222222' })
+  ).json();
+  assert.equal(
+    (await updateAdminUserConfig(database, source.userId, { subscriptionUrl: 'https://example.com/source' })).status,
+    200
+  );
+  assert.equal(
+    (await updateAdminUserConfig(database, target.userId, { subscriptionUrl: 'https://example.com/target' })).status,
+    200
+  );
+  let interceptRead = true;
+  const racedDatabase = {
+    ...database,
+    prepare(sql) {
+      const statement = database.prepare(sql);
+      if (!interceptRead || !sql.includes('INNER JOIN remote_config ON remote_config.id = 1')) return statement;
+      return {
+        bind(...bindings) {
+          const bound = statement.bind(...bindings);
+          return {
+            async first() {
+              interceptRead = false;
+              const merge = await requestAdmin(
+                database,
+                `/api/admin/users/${encodeURIComponent(source.userId)}/merge`,
+                {
+                  method: 'POST',
+                  body: JSON.stringify({ targetUserId: target.userId, configResolution: 'keep_target' })
+                }
+              );
+              assert.equal(merge.status, 200);
+              return bound.first();
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const response = await getClientConfig(racedDatabase, source, sourceSeed);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).config.subscriptionUrl, 'https://example.com/target');
 });
 
 test('an orphaned existing user atomically accepts concurrent fresh devices', async (context) => {
@@ -147,8 +617,7 @@ test('an existing device can switch to another existing user name', async (conte
     .bind(bobIdentity.userId, bobIdentity.deviceId, today, 700, 900, new Date().toISOString())
     .run();
   const configWrite = await updateAdminUserConfig(database, bobIdentity.userId, {
-    subscriptionUrl: 'https://example.com/bob-sub',
-    preferredNode: 'Bob Node'
+    subscriptionUrl: 'https://example.com/bob-sub'
   });
   assert.equal(configWrite.status, 200);
 
@@ -193,7 +662,6 @@ test('an existing device can switch to another existing user name', async (conte
   assert.equal(config.status, 200);
   const configBody = await config.json();
   assert.equal(configBody.config.subscriptionUrl, 'https://example.com/bob-sub');
-  assert.equal(configBody.config.preferredNode, 'Bob Node');
   assert.equal(
     database.queryAll('SELECT user_id FROM user_remote_config WHERE user_id = ?', bobIdentity.userId).length,
     1
@@ -234,6 +702,45 @@ test('a whitespace-only admin token keeps the admin API disabled', async (contex
   assert.deepEqual(await response.json(), { error: 'admin disabled' });
 });
 
+test('admin page exposes the redesigned two-profile workspace without removed controls', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const response = await worker.fetch(new Request('https://worker.example/admin'), {
+    DB: database,
+    REGISTRATION_PASSPHRASE: registrationPassphrase,
+    ADMIN_TOKEN: adminToken
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.match(response.headers.get('content-security-policy') ?? '', /frame-ancestors 'none'/);
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  const page = await response.text();
+  const script = page.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script);
+  assert.doesNotThrow(() => new Function(script));
+  assert.match(page, /class="admin-workspace"/);
+  assert.match(page, /value="ruleset">智能规则/);
+  assert.match(page, /value="subscription">机场规则/);
+  assert.match(page, /id="mergeTitle">合并用户/);
+  for (const removed of [
+    '兼容机场',
+    '本地规则',
+    '全局代理',
+    '直联规则',
+    '代理规则',
+    '异常阈值',
+    '启动选择',
+    'preferredNode',
+    'preferredStrategy',
+    'directRules',
+    'proxyRules',
+    'anomalyThresholdBytes'
+  ]) {
+    assert.equal(page.includes(removed), false, removed);
+  }
+});
+
 test('admin config writes reject non-object JSON and bodies larger than 64 KiB', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
@@ -254,31 +761,42 @@ test('admin config writes reject non-object JSON and bodies larger than 64 KiB',
   }
 });
 
-test('admin config writes bound rule count and rule text without truncating invalid input', async (context) => {
+test('admin config exposes only status, subscription, and the two supported rule profiles', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
   await addKnownUser(database);
 
-  const tooMany = await updateAdminConfig(database, {
-    directRules: Array.from({ length: 257 }, (_, index) => `DOMAIN,rule-${index}.test`)
-  });
-  assert.equal(tooMany.status, 400);
-  assert.deepEqual(await tooMany.json(), { error: 'too many rules' });
+  for (const ruleProfile of ['ruleset', 'subscription']) {
+    const response = await updateAdminConfig(database, { enabled: true, ruleProfile });
+    assert.equal(response.status, 200, ruleProfile);
+    assert.equal((await response.json()).config.ruleProfile, ruleProfile);
+  }
 
-  const tooLong = await updateAdminUserConfig(database, 'user-1', {
-    directRules: [`DOMAIN,${'x'.repeat(154)}`]
-  });
-  assert.equal(tooLong.status, 400);
-  assert.deepEqual(await tooLong.json(), { error: 'invalid rule' });
+  for (const ruleProfile of ['smart', 'global']) {
+    const response = await updateAdminConfig(database, { ruleProfile });
+    assert.equal(response.status, 400, ruleProfile);
+    assert.deepEqual(await response.json(), { error: 'invalid rule profile' });
+  }
 
-  const invalidItem = await updateAdminConfig(database, { proxyRules: ['DOMAIN,example.test', 42] });
-  assert.equal(invalidItem.status, 400);
-  assert.deepEqual(await invalidItem.json(), { error: 'invalid rules' });
+  for (const field of [
+    { preferredNode: 'Node A' },
+    { preferredStrategy: 'auto' },
+    { directRules: ['DOMAIN,direct.test'] },
+    { proxyRules: ['DOMAIN,proxy.test'] },
+    { anomalyThresholdBytes: 1024 }
+  ]) {
+    const response = await updateAdminConfig(database, field);
+    assert.equal(response.status, 400, JSON.stringify(field));
+    assert.deepEqual(await response.json(), { error: 'unsupported config field' });
+  }
 
-  const boundaryRules = Array.from({ length: 256 }, (_, index) => `DOMAIN,ok-${index}.test`);
-  const accepted = await updateAdminConfig(database, { directRules: boundaryRules });
-  assert.equal(accepted.status, 200);
-  assert.deepEqual((await accepted.json()).config.directRules, boundaryRules);
+  const config = (await (await getAdminConfig(database)).json()).config;
+  assert.deepEqual(config.directRules, []);
+  assert.deepEqual(config.proxyRules, []);
+  assert.equal(config.anomalyThresholdBytes, 1024 * 1024 * 1024);
+  for (const removedField of ['preferredNode', 'preferredStrategy']) {
+    assert.equal(removedField in config, false, removedField);
+  }
 });
 
 test('global config rejects invalid recognized fields without changing stored config', async (context) => {
@@ -288,10 +806,7 @@ test('global config rejects invalid recognized fields without changing stored co
   const baselineResponse = await updateAdminConfig(database, {
     enabled: true,
     subscriptionUrl: 'https://example.com/sub',
-    ruleProfile: 'global',
-    preferredNode: 'Node A',
-    preferredStrategy: 'auto',
-    anomalyThresholdBytes: 1024
+    ruleProfile: 'ruleset'
   });
   assert.equal(baselineResponse.status, 200);
   const baseline = (await baselineResponse.json()).config;
@@ -300,10 +815,9 @@ test('global config rejects invalid recognized fields without changing stored co
     { input: { enabled: 'true' }, error: 'invalid enabled' },
     { input: { subscriptionUrl: 42 }, error: 'invalid subscription url' },
     { input: { enabled: false, ruleProfile: 'unsupported' }, error: 'invalid rule profile' },
-    { input: { preferredNode: 42 }, error: 'invalid preferred node' },
-    { input: { preferredStrategy: 'unsupported' }, error: 'invalid preferred strategy' },
-    { input: { anomalyThresholdBytes: null }, error: 'invalid anomaly threshold' },
-    { input: { anomalyThresholdBytes: 0.5 }, error: 'invalid anomaly threshold' }
+    { input: { preferredNode: 42 }, error: 'unsupported config field' },
+    { input: { preferredStrategy: 'unsupported' }, error: 'unsupported config field' },
+    { input: { anomalyThresholdBytes: null }, error: 'unsupported config field' }
   ];
 
   for (const item of cases) {
@@ -324,31 +838,22 @@ test('per-user config patches preserve omitted fields and only explicit null cle
   const baselineResponse = await updateAdminUserConfig(database, 'user-1', {
     enabled: false,
     subscriptionUrl: 'https://example.com/user-sub',
-    ruleProfile: 'global',
-    preferredNode: 'Node A',
-    preferredStrategy: 'auto',
-    directRules: ['DOMAIN,direct.test'],
-    proxyRules: ['DOMAIN,proxy.test']
+    ruleProfile: 'subscription'
   });
   assert.equal(baselineResponse.status, 200);
 
-  const patchedResponse = await updateAdminUserConfig(database, 'user-1', { preferredNode: 'Node B' });
+  const patchedResponse = await updateAdminUserConfig(database, 'user-1', { ruleProfile: 'ruleset' });
   assert.equal(patchedResponse.status, 200);
   const patched = (await patchedResponse.json()).override;
   assert.equal(patched.enabled, false);
   assert.equal(patched.subscriptionUrl, 'https://example.com/user-sub');
-  assert.equal(patched.ruleProfile, 'global');
-  assert.equal(patched.preferredNode, 'Node B');
-  assert.equal(patched.preferredStrategy, 'auto');
-  assert.deepEqual(patched.directRules, ['DOMAIN,direct.test']);
-  assert.deepEqual(patched.proxyRules, ['DOMAIN,proxy.test']);
+  assert.equal(patched.ruleProfile, 'ruleset');
 
   const clearedResponse = await updateAdminUserConfig(database, 'user-1', { subscriptionUrl: null });
   assert.equal(clearedResponse.status, 200);
   const cleared = (await clearedResponse.json()).override;
   assert.equal('subscriptionUrl' in cleared, false);
-  assert.equal(cleared.preferredNode, 'Node B');
-  assert.deepEqual(cleared.directRules, ['DOMAIN,direct.test']);
+  assert.equal(cleared.ruleProfile, 'ruleset');
 
   const invalidResponse = await updateAdminUserConfig(database, 'user-1', {
     enabled: true,
@@ -359,17 +864,14 @@ test('per-user config patches preserve omitted fields and only explicit null cle
 
   const unsupportedThreshold = await updateAdminUserConfig(database, 'user-1', { anomalyThresholdBytes: 1024 });
   assert.equal(unsupportedThreshold.status, 400);
-  assert.deepEqual(await unsupportedThreshold.json(), { error: 'invalid anomaly threshold' });
+  assert.deepEqual(await unsupportedThreshold.json(), { error: 'unsupported config field' });
 
   const currentResponse = await getAdminUserConfig(database, 'user-1');
   assert.equal(currentResponse.status, 200);
   const current = (await currentResponse.json()).override;
   assert.equal(current.enabled, false);
   assert.equal('subscriptionUrl' in current, false);
-  assert.equal(current.ruleProfile, 'global');
-  assert.equal(current.preferredNode, 'Node B');
-  assert.deepEqual(current.directRules, ['DOMAIN,direct.test']);
-  assert.deepEqual(current.proxyRules, ['DOMAIN,proxy.test']);
+  assert.equal(current.ruleProfile, 'ruleset');
 });
 
 test('activation rejects request bodies larger than 16 KiB', async (context) => {
@@ -528,15 +1030,14 @@ test('concurrent global config patches preserve both fields and advance distinct
 
   const baselineResponse = await updateAdminConfig(database, {
     ruleProfile: 'ruleset',
-    preferredStrategy: 'manual',
-    preferredNode: 'Node A'
+    subscriptionUrl: 'https://example.com/initial'
   });
   assert.equal(baselineResponse.status, 200);
   const baseline = (await baselineResponse.json()).config;
 
   const responses = await Promise.all([
-    updateAdminConfig(database, { ruleProfile: 'global' }),
-    updateAdminConfig(database, { preferredStrategy: 'auto' })
+    updateAdminConfig(database, { ruleProfile: 'subscription' }),
+    updateAdminConfig(database, { subscriptionUrl: 'https://example.com/final' })
   ]);
   assert.deepEqual(
     responses.map((response) => response.status),
@@ -546,30 +1047,29 @@ test('concurrent global config patches preserve both fields and advance distinct
   const finalResponse = await getAdminConfig(database);
   assert.equal(finalResponse.status, 200);
   const final = (await finalResponse.json()).config;
-  assert.equal(final.ruleProfile, 'global');
-  assert.equal(final.preferredStrategy, 'auto');
-  assert.equal(final.preferredNode, 'Node A');
+  assert.equal(final.ruleProfile, 'subscription');
+  assert.equal(final.subscriptionUrl, 'https://example.com/final');
   assert.equal(final.version, baseline.version + 2);
 });
 
-test('explicit null clears nullable global config choices', async (context) => {
+test('explicit null clears nullable global choices and restores the default rule profile', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
 
   const baseline = await updateAdminConfig(database, {
-    ruleProfile: 'global',
-    preferredStrategy: 'auto'
+    ruleProfile: 'subscription',
+    subscriptionUrl: 'https://example.com/sub'
   });
   assert.equal(baseline.status, 200);
 
   const cleared = await updateAdminConfig(database, {
     ruleProfile: null,
-    preferredStrategy: null
+    subscriptionUrl: null
   });
   assert.equal(cleared.status, 200);
   const config = (await cleared.json()).config;
-  assert.equal('ruleProfile' in config, false);
-  assert.equal('preferredStrategy' in config, false);
+  assert.equal(config.ruleProfile, 'ruleset');
+  assert.equal('subscriptionUrl' in config, false);
 });
 
 async function activate(database, input) {
@@ -615,6 +1115,39 @@ async function getClientConfig(database, identity, deviceSeed) {
   );
 }
 
+async function reportTraffic(database, identity, deviceSeed, input) {
+  const url = new URL('https://worker.example/api/traffic/report');
+  const body = JSON.stringify({
+    reportId: input.reportId,
+    userId: identity.userId,
+    deviceId: identity.deviceId,
+    uploadDelta: input.uploadDelta,
+    downloadDelta: input.downloadDelta,
+    reportedAt: input.reportedAt ?? new Date().toISOString(),
+    appVersion: input.appVersion ?? '1.6.6'
+  });
+  const timestamp = String(Date.now());
+  const bodyHash = createHash('sha256').update(body).digest('hex');
+  const canonical = ['POST', url.pathname, timestamp, bodyHash].join('\n');
+  const signature = createHmac('sha256', deviceSeed).update(canonical).digest('hex');
+
+  return worker.fetch(
+    new Request(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-youyu-timestamp': timestamp,
+        'x-youyu-signature': signature
+      },
+      body
+    }),
+    {
+      DB: database,
+      REGISTRATION_PASSPHRASE: registrationPassphrase
+    }
+  );
+}
+
 function trafficWithoutTimestamp(traffic) {
   const { updatedAt: _updatedAt, ...summary } = traffic;
   return summary;
@@ -633,14 +1166,18 @@ async function updateAdminUserConfig(database, userId, input) {
 }
 
 async function requestAdminConfig(database, path, body) {
+  return requestAdmin(database, path, { method: 'POST', body });
+}
+
+async function requestAdmin(database, path, options = {}) {
   return worker.fetch(
     new Request(`https://worker.example${path}`, {
-      method: 'POST',
+      ...options,
       headers: {
         authorization: `Bearer ${adminToken}`,
-        'content-type': 'application/json'
-      },
-      body
+        ...(options.body ? { 'content-type': 'application/json' } : {}),
+        ...options.headers
+      }
     }),
     {
       DB: database,

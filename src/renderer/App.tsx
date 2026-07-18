@@ -518,7 +518,6 @@ export function App() {
             message={message}
             testingAll={testingAllNodes}
             switchingNode={switchingNode}
-            onBack={() => setPage('home')}
             onSelect={selectNode}
             onTestNode={(name) => runAction((api) => api.testNode(name), '测速完成')}
             onTestAll={testAllNodes}
@@ -550,7 +549,6 @@ export function App() {
             busy={busy}
             busyLabel={busyLabel}
             message={settingsMessage}
-            onBack={() => setPage('home')}
             onRepair={() =>
               runAction((api, request) => api.repair(request), '已修复', {
                 workingMessage: '修复中',

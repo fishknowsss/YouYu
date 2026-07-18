@@ -3,13 +3,16 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   normalized_name TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL DEFAULT 'active',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  merged_into_user_id TEXT,
+  FOREIGN KEY (merged_into_user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   device_seed TEXT NOT NULL UNIQUE,
+  device_key TEXT,
   device_name TEXT,
   platform TEXT,
   app_version TEXT,
@@ -31,6 +34,7 @@ CREATE TABLE IF NOT EXISTS traffic_daily (
 );
 
 CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_device_key ON devices(device_key) WHERE device_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_traffic_daily_user_date ON traffic_daily(user_id, date);
 
 CREATE TABLE IF NOT EXISTS traffic_reports (
@@ -98,3 +102,18 @@ CREATE TABLE IF NOT EXISTS traffic_anomalies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_traffic_anomalies_user_created ON traffic_anomalies(user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS user_merge_audit (
+  id TEXT PRIMARY KEY,
+  request_id TEXT NOT NULL UNIQUE,
+  source_user_id TEXT NOT NULL UNIQUE,
+  target_user_id TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  target_name TEXT NOT NULL,
+  config_resolution TEXT NOT NULL,
+  merged_at TEXT NOT NULL,
+  FOREIGN KEY (source_user_id) REFERENCES users(id),
+  FOREIGN KEY (target_user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_merged_into ON users(merged_into_user_id);

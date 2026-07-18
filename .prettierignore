@@ -6,6 +6,9 @@ release-archive
 resources/generated
 resources/mihomo
 cloudflare/youyu-traffic/.wrangler
+.wrangler
+.playwright-cli
+output
 src/renderer/assets/pet
 package-lock.json
 *.md

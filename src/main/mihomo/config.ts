@@ -401,11 +401,11 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
       : buildProviderProxyGroups(),
     rules: useRuleSet
       ? dedupeRules([
-          ...buildRulePrefix(selectorName, input.remoteConfig),
+          ...buildRulePrefix(),
           ...buildPriorityProxyRules(selectorName),
           ...buildYouYuRuleSetRules({ proxyTarget: selectorName })
         ])
-      : buildManagedRules(ruleProfile, selectorName, input.remoteConfig)
+      : buildManagedRules(selectorName)
   };
 
   return YAML.stringify(config);
@@ -446,11 +446,11 @@ function buildInlineSubscriptionConfig(input: MihomoConfigInput): string | null 
         : buildInlineProxyGroups(orderedProxyNames),
       rules: useRuleSet
         ? dedupeRules([
-            ...buildRulePrefix(selectorName, input.remoteConfig),
+            ...buildRulePrefix(),
             ...buildPriorityProxyRules(selectorName),
             ...buildYouYuRuleSetRules({ proxyTarget: selectorName })
           ])
-        : buildManagedRules(ruleProfile, selectorName, input.remoteConfig)
+        : buildManagedRules(selectorName)
     };
 
     return YAML.stringify(config);
@@ -689,14 +689,9 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
   return options;
 }
 
-function buildManagedRules(ruleProfile: RuleProfile, proxyTarget = selectorName, remoteConfig?: RemoteControlConfig) {
-  const rulePrefix = buildRulePrefix(proxyTarget, remoteConfig);
-  if (ruleProfile === 'global') {
-    return dedupeRules([...rulePrefix, ...buildPriorityProxyRules(proxyTarget), `MATCH,${proxyTarget}`]);
-  }
-
+function buildManagedRules(proxyTarget = selectorName) {
   return dedupeRules([
-    ...rulePrefix,
+    ...buildRulePrefix(),
     ...buildChinaDirectRules(),
     ...buildPriorityProxyRules(proxyTarget),
     `MATCH,${proxyTarget}`
@@ -741,12 +736,12 @@ function buildSubscriptionConfig(input: MihomoConfigInput): string | null {
         })
       );
       merged.rules = dedupeRules([
-        ...buildRulePrefix(proxyTarget, input.remoteConfig),
+        ...buildRulePrefix(),
         ...buildPriorityProxyRules(proxyTarget),
         ...buildYouYuRuleSetRules({ proxyTarget })
       ]);
     } else {
-      merged.rules = buildRulesForFullSubscription(ruleProfile, merged.rules, proxyTarget, input.remoteConfig);
+      merged.rules = buildRulesForFullSubscription(merged.rules, proxyTarget);
     }
 
     return YAML.stringify(merged);
@@ -840,14 +835,10 @@ function sanitizeSubscriptionNoticeNodes(config: Record<string, unknown>) {
   }
 }
 
-function normalizeSubscriptionRules(
-  rules: unknown[],
-  proxyTarget: string,
-  remoteConfig?: RemoteControlConfig
-): unknown[] {
+function normalizeSubscriptionRules(rules: unknown[], proxyTarget: string): unknown[] {
   const buckets = splitSubscriptionRules(rules);
   return dedupeRules([
-    ...buildRulePrefix(proxyTarget, remoteConfig),
+    ...buildRulePrefix(),
     ...buildChinaDirectRules(),
     ...buildPriorityProxyRules(proxyTarget),
     ...buckets.reject,
@@ -857,21 +848,12 @@ function normalizeSubscriptionRules(
   ]);
 }
 
-function buildRulesForFullSubscription(
-  ruleProfile: RuleProfile,
-  rules: unknown,
-  proxyTarget: string,
-  remoteConfig?: RemoteControlConfig
-): unknown[] {
-  if (ruleProfile === 'global') {
-    return buildManagedRules('global', proxyTarget, remoteConfig);
+function buildRulesForFullSubscription(rules: unknown, proxyTarget: string): unknown[] {
+  if (!Array.isArray(rules) || rules.length === 0) {
+    return buildManagedRules(proxyTarget);
   }
 
-  if (ruleProfile === 'smart' || !Array.isArray(rules) || rules.length === 0) {
-    return buildManagedRules('smart', proxyTarget, remoteConfig);
-  }
-
-  return normalizeSubscriptionRules(rules, proxyTarget, remoteConfig);
+  return normalizeSubscriptionRules(rules, proxyTarget);
 }
 
 function sanitizeDnsConfig(config: Record<string, unknown>) {
@@ -905,13 +887,11 @@ function buildPriorityProxyRules(proxyTarget: string): string[] {
   ];
 }
 
-function buildRulePrefix(proxyTarget: string, remoteConfig?: RemoteControlConfig): string[] {
+function buildRulePrefix(): string[] {
   return dedupeStringRules([
     ...buildRemoteDesktopDirectRules(),
     ...buildDomesticAppDirectRules(),
-    ...buildMicrosoftStoreDirectRules(),
-    ...normalizeRemoteRules(remoteConfig?.directRules, 'DIRECT'),
-    ...normalizeRemoteRules(remoteConfig?.proxyRules, proxyTarget)
+    ...buildMicrosoftStoreDirectRules()
   ]);
 }
 
@@ -935,44 +915,6 @@ function buildChinaDirectRules(): string[] {
     ...chinaDirectDomains.map((domain) => `DOMAIN-SUFFIX,${domain},DIRECT`),
     ...chinaDirectCidrs.map((cidr) => `IP-CIDR,${cidr},DIRECT,no-resolve`)
   ];
-}
-
-function normalizeRemoteRules(rules: string[] | undefined, fallbackTarget: string): string[] {
-  if (!rules?.length) return [];
-
-  return rules.map((rule) => normalizeRemoteRule(rule, fallbackTarget)).filter((rule): rule is string => Boolean(rule));
-}
-
-function normalizeRemoteRule(rule: string, fallbackTarget: string): string | undefined {
-  const parts = rule
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length < 2) return undefined;
-
-  const type = parts[0].toUpperCase();
-  if (
-    ![
-      'DOMAIN',
-      'DOMAIN-SUFFIX',
-      'DOMAIN-KEYWORD',
-      'DOMAIN-WILDCARD',
-      'IP-CIDR',
-      'IP-CIDR6',
-      'PROCESS-NAME',
-      'PROCESS-PATH'
-    ].includes(type)
-  ) {
-    return undefined;
-  }
-
-  if (parts.length === 2) {
-    return `${type},${parts[1]},${fallbackTarget}`;
-  }
-
-  const target = parts[2].toUpperCase() === 'PROXY' ? fallbackTarget : parts[2];
-  const suffix = parts.slice(3);
-  return [type, parts[1], target, ...suffix].join(',');
 }
 
 function isPriorityProxyRule(normalizedRule: string): boolean {

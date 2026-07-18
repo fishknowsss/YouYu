@@ -110,7 +110,7 @@ describe('buildMihomoConfig', () => {
     expect(config.rules.some((rule: string) => rule.startsWith('GEOIP,'))).toBe(false);
   });
 
-  it('puts remote desktop and remote managed rules before proxy priority rules', () => {
+  it('keeps built-in safeguards while ignoring deprecated remote rule lists', () => {
     const yamlText = buildMihomoConfig({
       subscriptionUrl: 'https://example.com/sub?token=secret',
       secret: 'local-secret',
@@ -130,11 +130,8 @@ describe('buildMihomoConfig', () => {
       'PROCESS-NAME,ToDesk_Lite.exe,DIRECT',
       'PROCESS-NAME,SunloginClient.exe,DIRECT'
     ]);
-    expect(config.rules).toContain('DOMAIN-SUFFIX,remote.example.com,DIRECT');
-    expect(config.rules).toContain(`DOMAIN-SUFFIX,ai.example.com,${selector}`);
-    expect(config.rules.indexOf('DOMAIN-SUFFIX,remote.example.com,DIRECT')).toBeLessThan(
-      config.rules.indexOf(`DOMAIN-SUFFIX,flow.google.com,${selector}`)
-    );
+    expect(config.rules).not.toContain('DOMAIN-SUFFIX,remote.example.com,DIRECT');
+    expect(config.rules).not.toContain(`DOMAIN-SUFFIX,ai.example.com,${selector}`);
     expect(config.rules.filter((rule: string) => rule === 'PROCESS-NAME,ToDesk.exe,DIRECT')).toHaveLength(1);
   });
 
@@ -633,11 +630,11 @@ rules:
     expect(config.rules.at(-1)).toBe('MATCH,PROXY');
   });
 
-  it('uses global rules for full airport configs when requested', () => {
+  it('falls back to built-in routing when an airport config has no rules', () => {
     const yamlText = buildMihomoConfig({
       subscriptionUrl: 'https://example.com/sub',
       secret: 'local-secret',
-      ruleProfile: 'global',
+      ruleProfile: 'subscription',
       subscriptionConfigText: `
 proxies:
   - name: HK 01
@@ -651,40 +648,6 @@ proxy-groups:
     type: select
     proxies:
       - HK 01
-rules:
-  - DOMAIN-SUFFIX,example.com,DIRECT
-  - MATCH,DIRECT
-`
-    });
-    const config = parse(yamlText);
-
-    expect(config.rules).toContain('DOMAIN-SUFFIX,flow.google.com,PROXY');
-    expect(config.rules).toContain('MATCH,PROXY');
-    expect(config.rules).not.toContain('DOMAIN-SUFFIX,example.com,DIRECT');
-    expect(config.rules).not.toContain('MATCH,DIRECT');
-  });
-
-  it('uses local smart rules for full airport configs when requested', () => {
-    const yamlText = buildMihomoConfig({
-      subscriptionUrl: 'https://example.com/sub',
-      secret: 'local-secret',
-      ruleProfile: 'smart',
-      subscriptionConfigText: `
-proxies:
-  - name: HK 01
-    type: ss
-    server: 127.0.0.1
-    port: 8388
-    cipher: aes-128-gcm
-    password: pass
-proxy-groups:
-  - name: PROXY
-    type: select
-    proxies:
-      - HK 01
-rules:
-  - DOMAIN-SUFFIX,example.com,DIRECT
-  - MATCH,DIRECT
 `
     });
     const config = parse(yamlText);
@@ -692,7 +655,5 @@ rules:
     expect(config.rules).toContain('DOMAIN-SUFFIX,flow.google.com,PROXY');
     expect(config.rules).toContain('DOMAIN-SUFFIX,cn,DIRECT');
     expect(config.rules).toContain('MATCH,PROXY');
-    expect(config.rules).not.toContain('DOMAIN-SUFFIX,example.com,DIRECT');
-    expect(config.rules).not.toContain('MATCH,DIRECT');
   });
 });

@@ -12,11 +12,28 @@ const subscriptionTables = ['remote_config', 'user_remote_config'];
 const migrationFiles = [
   '2026-07-03-add-remote-subscription-url.sql',
   '2026-07-08-security-and-idempotency.sql',
-  '2026-07-11-retention-cleanup.sql'
+  '2026-07-11-retention-cleanup.sql',
+  '2026-07-19-device-identity-and-user-merge.sql'
 ].map((name) => resolve(migrationDirectory, name));
+const repairableColumns = new Map([
+  ['remote_config.subscription_url', 'TEXT'],
+  ['user_remote_config.subscription_url', 'TEXT'],
+  ['users.merged_into_user_id', 'TEXT REFERENCES users(id)'],
+  ['devices.device_key', 'TEXT']
+]);
 const requiredTableColumns = {
-  users: ['id', 'name', 'normalized_name', 'status', 'created_at'],
-  devices: ['id', 'user_id', 'device_seed', 'device_name', 'platform', 'app_version', 'first_seen_at', 'last_seen_at'],
+  users: ['id', 'name', 'normalized_name', 'status', 'created_at', 'merged_into_user_id'],
+  devices: [
+    'id',
+    'user_id',
+    'device_seed',
+    'device_key',
+    'device_name',
+    'platform',
+    'app_version',
+    'first_seen_at',
+    'last_seen_at'
+  ],
   traffic_daily: ['user_id', 'device_id', 'date', 'upload_bytes', 'download_bytes', 'updated_at'],
   traffic_reports: ['id', 'user_id', 'device_id', 'upload_delta', 'download_delta', 'reported_at', 'created_at'],
   rate_limits: ['key', 'attempts', 'reset_at', 'updated_at'],
@@ -44,10 +61,22 @@ const requiredTableColumns = {
     'proxy_rules',
     'updated_at'
   ],
-  traffic_anomalies: ['id', 'user_id', 'device_id', 'date', 'upload_delta', 'download_delta', 'reason', 'created_at']
+  traffic_anomalies: ['id', 'user_id', 'device_id', 'date', 'upload_delta', 'download_delta', 'reason', 'created_at'],
+  user_merge_audit: [
+    'id',
+    'request_id',
+    'source_user_id',
+    'target_user_id',
+    'source_name',
+    'target_name',
+    'config_resolution',
+    'merged_at'
+  ]
 };
 const requiredIndexes = {
   idx_devices_user_id: { table: 'devices', columns: ['user_id'] },
+  idx_devices_device_key: { table: 'devices', columns: ['device_key'], unique: true, partial: true },
+  idx_users_merged_into: { table: 'users', columns: ['merged_into_user_id'] },
   idx_traffic_daily_user_date: { table: 'traffic_daily', columns: ['user_id', 'date'] },
   idx_traffic_reports_user_created: { table: 'traffic_reports', columns: ['user_id', 'created_at'] },
   idx_traffic_reports_created_at: { table: 'traffic_reports', columns: ['created_at'] },
@@ -62,11 +91,13 @@ const requiredPrimaryKeyColumns = {
   rate_limits: ['key'],
   remote_config: ['id'],
   user_remote_config: ['user_id'],
-  traffic_anomalies: ['id']
+  traffic_anomalies: ['id'],
+  user_merge_audit: ['id']
 };
 const requiredUniqueConstraintColumns = {
   users: [['normalized_name']],
-  devices: [['device_seed']]
+  devices: [['device_seed']],
+  user_merge_audit: [['request_id'], ['source_user_id']]
 };
 const baseTableNames = new Set(['users', 'devices', 'traffic_daily']);
 const baseIndexNames = new Set(['idx_devices_user_id', 'idx_traffic_daily_user_date']);
@@ -95,14 +126,15 @@ export function parseMigrationArgs(args) {
 
 export async function planWorkerMigrations(runner) {
   const validation = await inspectSchema(runner, requiredTableColumns, requiredIndexes);
-  const subscriptionColumnsToAdd = validation.missingColumns.filter((column) =>
-    subscriptionTables.some((table) => column === `${table}.subscription_url`)
-  );
+  const columnsToAdd = validation.missingColumns.filter((column) => repairableColumns.has(column));
 
   return {
     migrationFiles: [...migrationFiles],
     ...validation,
-    subscriptionColumnsToAdd
+    columnsToAdd,
+    subscriptionColumnsToAdd: columnsToAdd.filter((column) =>
+      subscriptionTables.some((table) => column === `${table}.subscription_url`)
+    )
   };
 }
 
@@ -114,9 +146,9 @@ export async function applyWorkerMigrations(runner, options = {}) {
   onStep(`execute ${basename(migrationFiles[0])}`);
   await runner.executeFile(migrationFiles[0]);
 
-  for (const qualifiedColumn of await getMissingSubscriptionColumns(runner)) {
-    const [table] = qualifiedColumn.split('.');
-    const statement = `ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN subscription_url TEXT`;
+  for (const qualifiedColumn of await getMissingRepairableColumns(runner)) {
+    const [table, column] = qualifiedColumn.split('.');
+    const statement = `ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteSqlIdentifier(column)} ${repairableColumns.get(qualifiedColumn)}`;
     onStep(`add ${qualifiedColumn}`);
     await runner.executeSql(statement);
   }
@@ -251,7 +283,7 @@ export async function main(args = process.argv.slice(2)) {
     for (const table of plan.missingTables.filter((name) => subscriptionTables.includes(name))) {
       console.log(`- create ${table} with subscription_url`);
     }
-    for (const column of plan.subscriptionColumnsToAdd) console.log(`- add ${column}`);
+    for (const column of plan.columnsToAdd) console.log(`- add ${column}`);
     for (const path of plan.migrationFiles.slice(1)) console.log(`- execute ${basename(path)}`);
     console.log('- validate all required tables, columns, indexes, and key constraints');
     return;
@@ -373,8 +405,12 @@ async function inspectSchema(runner, tableColumns, indexes) {
     if (!sameColumns(actual.columns, expected.columns)) {
       problems.push(`columns (${actual.columns.join(',')}) expected (${expected.columns.join(',')})`);
     }
-    if (actual.unique !== false) problems.push(`unique ${String(actual.unique)} expected false`);
-    if (actual.partial !== false) problems.push(`partial ${String(actual.partial)} expected false`);
+    if (actual.unique !== (expected.unique ?? false)) {
+      problems.push(`unique ${String(actual.unique)} expected ${String(expected.unique ?? false)}`);
+    }
+    if (actual.partial !== (expected.partial ?? false)) {
+      problems.push(`partial ${String(actual.partial)} expected ${String(expected.partial ?? false)}`);
+    }
     if (problems.length > 0) {
       invalidIndexes.push(`${index}: ${problems.join('; ')}`);
     }
@@ -390,18 +426,19 @@ async function inspectSchema(runner, tableColumns, indexes) {
   };
 }
 
-async function getMissingSubscriptionColumns(runner) {
+async function getMissingRepairableColumns(runner) {
   const missing = [];
-  for (const table of subscriptionTables) {
+  for (const qualifiedColumn of repairableColumns.keys()) {
+    const [table, column] = qualifiedColumn.split('.');
     const { columns } = await runner.getTableInfo(table);
-    if (columns.length > 0 && !columns.includes('subscription_url')) missing.push(`${table}.subscription_url`);
+    if (columns.length > 0 && !columns.includes(column)) missing.push(qualifiedColumn);
   }
   return missing;
 }
 
 function assertMigrationPreflight(plan) {
   assertBaseSchema(plan);
-  const unrepairableColumns = plan.missingColumns.filter((column) => !plan.subscriptionColumnsToAdd.includes(column));
+  const unrepairableColumns = plan.missingColumns.filter((column) => !plan.columnsToAdd.includes(column));
   if (
     unrepairableColumns.length > 0 ||
     plan.invalidIndexes.length > 0 ||
@@ -422,7 +459,9 @@ function assertMigrationPreflight(plan) {
 function assertBaseSchema(plan) {
   const baseProblems = {
     missingTables: plan.missingTables.filter((table) => baseTableNames.has(table)),
-    missingColumns: plan.missingColumns.filter((column) => baseTableNames.has(column.split('.')[0])),
+    missingColumns: plan.missingColumns.filter(
+      (column) => baseTableNames.has(column.split('.')[0]) && !plan.columnsToAdd.includes(column)
+    ),
     missingIndexes: plan.missingIndexes.filter((index) => baseIndexNames.has(index)),
     invalidIndexes: plan.invalidIndexes.filter((index) => baseIndexNames.has(index.split(':')[0])),
     invalidPrimaryKeys: plan.invalidPrimaryKeys.filter((constraint) => baseTableNames.has(constraint.split(' ')[0])),

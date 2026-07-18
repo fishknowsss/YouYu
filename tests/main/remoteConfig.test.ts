@@ -16,6 +16,12 @@ const cachedConfig = {
   directRules: ['DOMAIN-SUFFIX,example.cn'],
   proxyRules: ['DOMAIN-SUFFIX,example.com']
 };
+const activeCachedConfig = {
+  version: 3,
+  enabled: true,
+  directRules: [],
+  proxyRules: []
+};
 
 const registeredIdentity = {
   userId: 'user-1',
@@ -212,8 +218,7 @@ describe('RemoteConfigClient cache', () => {
 
     await expect(client.getActiveConfig()).resolves.toMatchObject({
       version: 3,
-      enabled: true,
-      preferredStrategy: 'auto'
+      enabled: true
     });
   });
 
@@ -351,7 +356,7 @@ describe('RemoteConfigClient cache', () => {
     });
 
     await expect(client.sync()).rejects.toThrow('remote config response invalid');
-    await expect(client.getActiveConfig()).resolves.toEqual(cachedConfig);
+    await expect(client.getActiveConfig()).resolves.toEqual(activeCachedConfig);
     await expect(readFile(join(dir, 'remote-config.json'), 'utf8')).resolves.toBe(JSON.stringify(cacheEnvelope()));
   });
 
@@ -382,9 +387,70 @@ describe('RemoteConfigClient cache', () => {
       config: {
         version: 4,
         enabled: false,
-        directRules: ['DOMAIN-SUFFIX,example.cn'],
+        directRules: [],
         proxyRules: []
       }
+    });
+  });
+
+  it('ignores changes to deprecated remote routing and startup fields', async () => {
+    await writeFile(join(dir, 'remote-config.json'), JSON.stringify(cacheEnvelope()), 'utf8');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          config: {
+            version: 3,
+            enabled: true,
+            preferredNode: 'remote-node',
+            preferredStrategy: 'manual',
+            directRules: ['DOMAIN-SUFFIX,new-direct.example'],
+            proxyRules: ['DOMAIN-SUFFIX,new-proxy.example'],
+            anomalyThresholdBytes: 2048
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.6.5',
+      store: createRegisteredStore()
+    });
+
+    await expect(client.sync()).resolves.toEqual({ config: activeCachedConfig, changed: false });
+    await expect(readFile(join(dir, 'remote-config.json'), 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      config: activeCachedConfig
+    });
+  });
+
+  it.each(['smart', 'global'])('maps the legacy remote %s profile to smart rules', async (ruleProfile) => {
+    const remoteConfig = {
+      version: 5,
+      enabled: true,
+      ruleProfile,
+      directRules: [],
+      proxyRules: []
+    };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ config: remoteConfig }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    );
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.6.5',
+      store: createRegisteredStore()
+    });
+
+    await expect(client.sync()).resolves.toMatchObject({
+      changed: true,
+      config: { ruleProfile: 'ruleset' }
+    });
+    await expect(readFile(join(dir, 'remote-config.json'), 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      config: { ruleProfile: 'ruleset' }
     });
   });
 
@@ -534,7 +600,7 @@ describe('RemoteConfigClient cache', () => {
     try {
       const result = await withTestCertificate(() => client.sync({ proxyUrl: proxy.url, signal: controller.signal }));
 
-      expect(result.config).toEqual(remoteConfig);
+      expect(result.config).toEqual({ version: 5, enabled: true, directRules: [], proxyRules: [] });
       expect(authorities).toEqual([`agent1:${origin.port}`]);
       expect(requestText).toContain('GET /api/config?');
       expect(requestText).toContain('accept-encoding: identity');

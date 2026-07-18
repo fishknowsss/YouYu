@@ -25,6 +25,31 @@ describe('professional workspace layout contract', () => {
     expect(getCssRule(styles, '.dashboard-panel')).toContain('gap: 8px;');
     expect(home.match(/<DashboardPanel/g)).toHaveLength(2);
   });
+
+  it('uses one readable header-button geometry and the sidebar hover surface', async () => {
+    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const headerButton = getCssRule(styles, '.header-actions > button');
+    const sidebarHover = getCssRule(styles, '.nav-list button:not(.active):hover:not(:disabled)');
+
+    expect(styles).toContain('--interactive-hover: #efe4fb;');
+    expect(headerButton).toContain('width: 112px;');
+    expect(headerButton).toContain('font-size: 16px;');
+    expect(headerButton).toContain('color: var(--ink-soft);');
+    expect(headerButton).toContain('background: var(--interactive-hover);');
+    expect(sidebarHover).toContain('background: var(--interactive-hover);');
+  });
+
+  it('does not duplicate sidebar navigation with node or settings back actions', async () => {
+    const [nodes, settings] = await Promise.all([
+      readFile('src/renderer/pages/NodeSelect.tsx', 'utf8'),
+      readFile('src/renderer/pages/Settings.tsx', 'utf8')
+    ]);
+
+    expect(nodes).not.toContain('onBack');
+    expect(settings).not.toContain('onBack');
+    expect(nodes).not.toContain('>\n              返回\n');
+    expect(settings).not.toContain('>\n            返回\n');
+  });
 });
 
 function getCssRule(source: string, selector: string): string {

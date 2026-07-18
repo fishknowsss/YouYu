@@ -9,7 +9,6 @@ type SettingsProps = {
   busy: boolean;
   busyLabel: string;
   message: string;
-  onBack: () => void;
   onRepair: () => void;
   onSave: (settings: AppSettingsInput) => void;
   onSyncRemoteConfig: () => void;
@@ -23,7 +22,6 @@ export function Settings({
   busy,
   busyLabel,
   message,
-  onBack,
   onRepair,
   onSave,
   onSyncRemoteConfig,
@@ -86,15 +84,7 @@ export function Settings({
 
   return (
     <div className="workspace settings-workspace">
-      <WorkspaceHeader
-        title="设置"
-        description="订阅与网络开关"
-        actions={
-          <button className="secondary-button" onClick={onBack}>
-            返回
-          </button>
-        }
-      />
+      <WorkspaceHeader title="设置" description="订阅与网络开关" />
       <section className="panel settings-panel">
         <div className="settings-form-grid">
           <div className="settings-row settings-subscription-row">
@@ -124,9 +114,7 @@ export function Settings({
                 }}
               >
                 <option value="ruleset">智能规则</option>
-                <option value="subscription">兼容机场</option>
-                <option value="smart">本地规则</option>
-                <option value="global">全局代理</option>
+                <option value="subscription">机场规则</option>
               </select>
             </label>
             <NetworkStatus label="系统代理" value={formatEnabled(snapshot.features.systemProxyEnabled)} />

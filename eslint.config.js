@@ -12,9 +12,11 @@ export default tseslint.config(
       '**/dist/**',
       '**/release/**',
       '**/release-archive/**',
+      '**/.wrangler/**',
+      '.playwright-cli/**',
+      'output/**',
       'resources/generated/**',
-      'src/renderer/assets/pet/**',
-      'cloudflare/youyu-traffic/.wrangler/**'
+      'src/renderer/assets/pet/**'
     ]
   },
   eslint.configs.recommended,

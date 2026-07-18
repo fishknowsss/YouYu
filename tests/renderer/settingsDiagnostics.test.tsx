@@ -13,7 +13,6 @@ describe('settings diagnostic export', () => {
         busy={false}
         busyLabel=""
         message=""
-        onBack={vi.fn()}
         onRepair={vi.fn()}
         onSave={vi.fn()}
         onSyncRemoteConfig={vi.fn()}
@@ -65,7 +64,6 @@ describe('settings diagnostic export', () => {
         busy
         busyLabel="导出中"
         message=""
-        onBack={vi.fn()}
         onRepair={vi.fn()}
         onSave={vi.fn()}
         onSyncRemoteConfig={vi.fn()}
@@ -193,7 +191,6 @@ function renderSettings(message: string, snapshot: AppSnapshot): string {
       busy={false}
       busyLabel=""
       message={message}
-      onBack={vi.fn()}
       onRepair={vi.fn()}
       onSave={vi.fn()}
       onSyncRemoteConfig={vi.fn()}

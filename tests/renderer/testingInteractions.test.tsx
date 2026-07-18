@@ -35,7 +35,6 @@ describe('testing interactions', () => {
           busy
           message="测速中"
           testingAll
-          onBack={() => undefined}
           onSelect={onSelect}
           onTestNode={() => undefined}
           onTestAll={() => undefined}
@@ -59,7 +58,6 @@ describe('testing interactions', () => {
           message="切换中"
           testingAll
           switchingNode="日本 01"
-          onBack={() => undefined}
           onSelect={onSelect}
           onTestNode={() => undefined}
           onTestAll={() => undefined}

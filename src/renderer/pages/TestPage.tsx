@@ -233,7 +233,7 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
         description={proxyReady ? `当前节点：${snapshot.currentNode}` : '先启动代理'}
         actions={
           <button
-            className="wide-button header-batch-button"
+            className="secondary-button"
             disabled={!apiReady || !proxyReady || stoppingAll}
             onClick={() => void (busyAll ? stopAll() : testAll())}
             aria-pressed={busyAll}

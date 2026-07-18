@@ -34,11 +34,11 @@ type AppSettingsNormalizerInput = Omit<Partial<AppSettings>, 'selectedNode' | 'p
 };
 
 const settingsFileName = 'settings.json';
-const currentSettingsVersion = 4;
+const currentSettingsVersion = 5;
 const bundledSelectionMigrationVersion = 3;
 const validModes: MihomoMode[] = ['rule', 'global', 'direct'];
 const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-balance', 'direct'];
-const validRuleProfiles: RuleProfile[] = ['ruleset', 'smart', 'global', 'subscription'];
+const validRuleProfiles: RuleProfile[] = ['ruleset', 'subscription'];
 const defaultSubscriptionRefreshIntervalHours = 12;
 const validSubscriptionRefreshIntervalHours = [0, 6, 12, 24];
 
@@ -107,8 +107,7 @@ export class SettingsStore {
   }
 
   private normalize(value: AppSettingsNormalizerInput): AppSettings {
-    const legacyRuleProfile =
-      typeof value.settingsVersion !== 'number' && value.ruleProfile === 'smart' ? 'subscription' : value.ruleProfile;
+    const normalizedRuleProfile = normalizeRuleProfile(value.ruleProfile, value.settingsVersion);
     const storedSubscriptionUrl = typeof value.subscriptionUrl === 'string' ? value.subscriptionUrl.trim() : '';
     const remoteSubscriptionUrl = normalizeSubscriptionUrl(value.remoteSubscriptionUrl);
     const localSubscriptionUrl = this.defaultSubscriptionUrl || storedSubscriptionUrl;
@@ -128,9 +127,7 @@ export class SettingsStore {
           : this.createSecret(),
       mode: validModes.includes(value.mode as MihomoMode) ? (value.mode as MihomoMode) : 'rule',
       strategy: resetBundledSelection ? 'auto' : normalizedStrategy,
-      ruleProfile: validRuleProfiles.includes(legacyRuleProfile as RuleProfile)
-        ? (legacyRuleProfile as RuleProfile)
-        : 'ruleset',
+      ruleProfile: normalizedRuleProfile,
       selectedNode: resetBundledSelection
         ? ''
         : typeof value.selectedNode === 'string'
@@ -206,6 +203,14 @@ function normalizeSubscriptionRefreshInterval(value: unknown): number {
   return validSubscriptionRefreshIntervalHours.includes(value as number)
     ? (value as number)
     : defaultSubscriptionRefreshIntervalHours;
+}
+
+function normalizeRuleProfile(value: unknown, settingsVersion: unknown): RuleProfile {
+  // Before settingsVersion existed, "smart" meant preserving the airport's own
+  // routing. Keep that one historical migration, then collapse the later
+  // local/global variants into the supported smart ruleset.
+  if (typeof settingsVersion !== 'number' && value === 'smart') return 'subscription';
+  return validRuleProfiles.includes(value as RuleProfile) ? (value as RuleProfile) : 'ruleset';
 }
 
 function normalizeSubscriptionUrl(value: unknown): string | undefined {

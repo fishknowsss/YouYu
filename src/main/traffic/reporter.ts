@@ -15,6 +15,7 @@ type TrafficReporterOptions = {
   requestTimeoutMs?: number;
   fetch?: FetchLike;
   getProxyUrl?: () => string | undefined;
+  getDeviceKey?: () => Promise<string | undefined>;
   onIdentityInvalidated?: () => void | Promise<void>;
   onError?: (error: unknown) => void;
 };
@@ -83,12 +84,14 @@ export class TrafficReporter {
     if (!passphrase) throw new Error('missing traffic passphrase');
 
     const deviceSeed = await this.options.store.createDeviceSeed();
+    const deviceKey = await getOptionalDeviceKey(this.options.getDeviceKey);
     const response = await postJson(
       `${endpoint}/api/activate`,
       {
         name,
         passphrase,
         deviceSeed,
+        ...(deviceKey ? { deviceKey } : {}),
         deviceName: hostname(),
         appVersion: this.options.appVersion,
         platform: process.platform
@@ -240,6 +243,22 @@ export class TrafficReporter {
         }
       );
     }
+  }
+}
+
+async function getOptionalDeviceKey(
+  provider: (() => Promise<string | undefined>) | undefined
+): Promise<string | undefined> {
+  if (!provider) return undefined;
+  try {
+    const value = await provider();
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim().toLowerCase();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)
+      ? normalized
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 

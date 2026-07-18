@@ -25,7 +25,7 @@ function makeSnapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
     strategies: [{ key: 'auto', label: '自动', target: '自动选择', active: true }],
     mode: 'rule',
     strategy: 'auto',
-    ruleProfile: 'smart',
+    ruleProfile: 'ruleset',
     features: {
       systemProxyEnabled: true,
       dnsEnhanced: true,
@@ -72,7 +72,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     controllerSecret: 'secret',
     mode: 'rule',
     strategy: 'auto',
-    ruleProfile: 'smart',
+    ruleProfile: 'ruleset',
     selectedNode: '',
     systemProxyEnabled: true,
     dnsEnhanced: true,

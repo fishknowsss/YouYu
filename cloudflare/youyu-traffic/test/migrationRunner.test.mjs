@@ -44,6 +44,12 @@ test('migration runner repairs legacy subscription columns once and preserves th
     'remote_config.subscription_url',
     'user_remote_config.subscription_url'
   ]);
+  assert.deepEqual(plan.columnsToAdd, [
+    'users.merged_into_user_id',
+    'devices.device_key',
+    'remote_config.subscription_url',
+    'user_remote_config.subscription_url'
+  ]);
 
   await applyWorkerMigrations(runner);
   database.prepare('UPDATE remote_config SET subscription_url = ? WHERE id = 1').run('https://example.com/global');
@@ -52,7 +58,7 @@ test('migration runner repairs legacy subscription columns once and preserves th
     .run('https://example.com/alice', 'user-1');
   await applyWorkerMigrations(runner);
 
-  assert.equal(runner.alterStatements.length, 2);
+  assert.equal(runner.alterStatements.length, 4);
   assert.equal(
     database.prepare('SELECT subscription_url FROM remote_config WHERE id = 1').get().subscription_url,
     'https://example.com/global'

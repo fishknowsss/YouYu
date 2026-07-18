@@ -23,6 +23,7 @@ import { connectivityServices, testAllConnectivity, testConnectivity } from './c
 import { createMihomoApiClient } from './mihomo/api';
 import { strategyLabels, strategyTargets } from './mihomo/config';
 import { createMihomoRuntime } from './mihomo/process';
+import { createWindowsDeviceKeyProvider } from './platform/deviceKey';
 import { createSystemProxyAdapter } from './platform/systemProxy';
 import { runWindowsElevatedProcess, spawnWindowsElevatedMihomo } from './platform/elevatedProcess';
 import { createWindowsStartupTask } from './platform/startupTask';
@@ -41,6 +42,7 @@ import {
   NodeHealthStore
 } from './storage/nodeHealth';
 import { resolveDefaultSubscriptionUrl } from './defaultSubscription';
+import { resolveAppVersion } from './appVersion';
 import { TrafficReporter } from './traffic/reporter';
 import { createTemporaryRuntimeLeaseManager, createTrafficRegistrationCoordinator } from './traffic/registration';
 import { TrafficStore } from './traffic/store';
@@ -78,8 +80,10 @@ import { createRuntimeIntentController } from './runtimeIntent';
 import { buildProxyRelaunchArguments, resumeProxyAfterRelaunchArgument } from './appRelaunch';
 import { clearMihomoRepairCache, runNetworkRepair, type NetworkRepairOptions } from './networkRepair';
 import {
+  DiagnosticLogBuffer,
   classifyDiagnosticIssue,
   createDiagnosticExportDefaultPath,
+  diagnosticSnapshotLogLimit,
   exportDiagnosticReport,
   isDiagnosticIssueResolvedByOperation,
   redactDiagnosticText
@@ -216,8 +220,7 @@ let subscriptionRevision = 0;
 const ipcOperations = new IpcOperationRegistry((error) => appendLog(`取消操作清理失败: ${formatError(error)}`));
 const runtimeIntent = createRuntimeIntentController();
 let lastError: string | undefined;
-const appLogs: string[] = [];
-const foldedMihomoDialWarnings = new Map<string, { count: number; lastAt: number }>();
+const appLogs = new DiagnosticLogBuffer();
 const petFeatureEnabled = !__YOUYU_DISABLE_PET__;
 const petVisibilityController = createPetVisibilityController({
   initialUserRequestedVisible: true,
@@ -276,7 +279,11 @@ const defaultSubscriptionPath = isDev
 const trafficApiUrlPath = isDev
   ? join(process.cwd(), 'resources/traffic-api-url.txt')
   : join(process.resourcesPath, 'traffic-api-url.txt');
-const appVersion = readPackageVersion();
+const appVersion = resolveAppVersion({
+  isPackaged: app.isPackaged,
+  packagedVersion: app.getVersion(),
+  developmentPackagePath: join(process.cwd(), 'package.json')
+});
 const appBuildChannel = normalizeBuildChannel(__YOUYU_BUILD_CHANNEL__);
 const appUpdateChannel = getUpdateChannelName(appBuildChannel);
 updateSnapshot = {
@@ -289,6 +296,7 @@ const settingsStore = new SettingsStore(app.getPath('userData'), {
   defaultSubscriptionUrl: readDefaultSubscriptionUrl(defaultSubscriptionPath)
 });
 const trafficStore = new TrafficStore(app.getPath('userData'), { secretStorage: safeStorage });
+const deviceKeyProvider = createWindowsDeviceKeyProvider();
 const nodeHealthStore = new NodeHealthStore(app.getPath('userData'));
 const remoteConfigClient = new RemoteConfigClient({
   baseDir: app.getPath('userData'),
@@ -313,6 +321,7 @@ const trafficReporter = new TrafficReporter({
   appVersion,
   intervalMs: 2 * 60 * 1000,
   fetch: directNetworkFetch,
+  getDeviceKey: () => deviceKeyProvider.getDeviceKey(),
   getProxyUrl: getRuntimeTrafficProxyUrl,
   onIdentityInvalidated: handleTrafficIdentityInvalidated,
   onError: (error) => {
@@ -387,65 +396,8 @@ function readOptionalText(path: string): string {
   return readFileSync(path, 'utf8').trim();
 }
 
-function readPackageVersion(): string {
-  try {
-    const packagePath = isDev ? join(process.cwd(), 'package.json') : join(process.resourcesPath, 'package.json');
-    const parsed = JSON.parse(readFileSync(packagePath, 'utf8')) as { version?: string };
-    return parsed.version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-}
-
 function appendLog(message: string) {
-  const normalizedMessage = normalizeDiagnosticLog(message);
-  if (!normalizedMessage) return;
-
-  const safeMessage = redactDiagnosticText(normalizedMessage);
-  const line = `${new Date().toLocaleTimeString('zh-CN', { hour12: false })} ${safeMessage}`;
-  appLogs.push(line);
-  if (appLogs.length > 200) {
-    appLogs.splice(0, appLogs.length - 200);
-  }
-}
-
-function normalizeDiagnosticLog(message: string): string | undefined {
-  const warning = parseMihomoDialWarning(message);
-  if (!warning) return message;
-
-  const now = Date.now();
-  const previous = foldedMihomoDialWarnings.get(warning.signature);
-  if (previous && now - previous.lastAt < 120000) {
-    previous.count += 1;
-    previous.lastAt = now;
-    return undefined;
-  }
-
-  const foldedText = previous?.count ? `，已折叠 ${previous.count} 条` : '';
-  foldedMihomoDialWarnings.set(warning.signature, { count: 0, lastAt: now });
-  trimFoldedMihomoDialWarnings();
-  return `连接警告：${warning.target} 访问失败（${warning.network}${foldedText}）`;
-}
-
-function parseMihomoDialWarning(message: string): { signature: string; target: string; network: string } | undefined {
-  if (!message.includes('[mihomo]') || !/level=warning/i.test(message) || !/\[(?:TCP|UDP)\]\s+dial/i.test(message)) {
-    return undefined;
-  }
-
-  const network = message.match(/\[(TCP|UDP)\]\s+dial/i)?.[1]?.toUpperCase() ?? '连接';
-  const rulePayload = message.match(/match\s+([A-Za-z-]+\/[^")\s]+)/i)?.[1];
-  const target = rulePayload?.split('/').pop()?.trim() || message.match(/dial\s+([^ ]+)/i)?.[1] || '外部站点';
-  return {
-    signature: `${network}:${rulePayload ?? target}`.toLowerCase(),
-    target,
-    network
-  };
-}
-
-function trimFoldedMihomoDialWarnings() {
-  if (foldedMihomoDialWarnings.size <= 40) return;
-  const oldest = [...foldedMihomoDialWarnings.entries()].sort((a, b) => a[1].lastAt - b[1].lastAt)[0]?.[0];
-  if (oldest) foldedMihomoDialWarnings.delete(oldest);
+  appLogs.append(message);
 }
 
 function formatError(error: unknown): string {
@@ -460,7 +412,7 @@ function recordError(context: string, error: unknown) {
 async function exportCurrentDiagnostics() {
   const settings = await settingsStore.read().catch(() => undefined);
   const exportedAt = new Date();
-  const logs = [...appLogs];
+  const logs = appLogs.getLogs();
 
   return exportDiagnosticReport(
     {
@@ -480,6 +432,8 @@ async function exportCurrentDiagnostics() {
           }
         : undefined,
       runtimePorts: { ...runtimePorts },
+      logCapacity: appLogs.capacity,
+      droppedLogCount: appLogs.droppedCount,
       lastError,
       logs
     },
@@ -1595,8 +1549,10 @@ async function createSnapshot(): Promise<AppSnapshot> {
     update: updateSnapshot,
     diagnostics: {
       lastError,
-      logs: appLogs.slice(-80),
-      logCount: appLogs.length,
+      logs: appLogs.getLogs(diagnosticSnapshotLogLimit),
+      logCount: appLogs.size,
+      logCapacity: appLogs.capacity,
+      droppedLogCount: appLogs.droppedCount,
       issueKind: classifyDiagnosticIssue(lastError)
     }
   };

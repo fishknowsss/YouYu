@@ -44,7 +44,6 @@ describe('silent update installation notice', () => {
           busy
           busyLabel="安装中"
           message=""
-          onBack={() => undefined}
           onRepair={() => undefined}
           onSave={() => undefined}
           onSyncRemoteConfig={() => undefined}

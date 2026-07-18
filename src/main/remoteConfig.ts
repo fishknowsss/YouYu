@@ -31,6 +31,9 @@ type JsonResponse = {
 };
 
 type RawJsonResponse = Omit<JsonResponse, 'route' | 'directOutcome'>;
+type RemoteConfigPayload = Omit<RemoteControlConfig, 'ruleProfile'> & {
+  ruleProfile?: RuleProfile | 'smart' | 'global';
+};
 
 type RemoteConfigIdentity = {
   userId: string;
@@ -50,7 +53,8 @@ export type ActiveRemoteConfigSnapshot = {
 };
 
 const remoteConfigFileName = 'remote-config.json';
-const validRuleProfiles: RuleProfile[] = ['ruleset', 'smart', 'global', 'subscription'];
+const validRuleProfiles: RuleProfile[] = ['ruleset', 'subscription'];
+const legacyRuleProfiles = new Set(['smart', 'global']);
 const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-balance', 'direct'];
 
 export class RemoteConfigClient {
@@ -225,32 +229,32 @@ function normalizeRemoteConfig(value: unknown): RemoteControlConfig | undefined 
   if (!isRemoteConfigPayload(value)) return undefined;
 
   const version = Math.floor(value.version);
-  const ruleProfile = value.ruleProfile;
-  const preferredStrategy = value.preferredStrategy;
-  const anomalyThresholdBytes =
-    typeof value.anomalyThresholdBytes === 'number' ? Math.floor(value.anomalyThresholdBytes) : undefined;
+  const ruleProfile = normalizeRuleProfile(value.ruleProfile);
+  const subscriptionUrl = normalizeSubscriptionUrl(value.subscriptionUrl);
+  const updatedAt = normalizeText(value.updatedAt, 40);
 
   return {
     version,
     enabled: value.enabled,
-    subscriptionUrl: normalizeSubscriptionUrl(value.subscriptionUrl),
-    ruleProfile,
-    preferredNode: normalizeText(value.preferredNode, 120),
-    preferredStrategy,
-    directRules: normalizeTextList(value.directRules, 160),
-    proxyRules: normalizeTextList(value.proxyRules, 160),
-    anomalyThresholdBytes,
-    updatedAt: normalizeText(value.updatedAt, 40)
+    ...(subscriptionUrl ? { subscriptionUrl } : {}),
+    ...(ruleProfile ? { ruleProfile } : {}),
+    directRules: [],
+    proxyRules: [],
+    ...(updatedAt ? { updatedAt } : {})
   };
 }
 
-function isRemoteConfigPayload(value: unknown): value is RemoteControlConfig {
+function isRemoteConfigPayload(value: unknown): value is RemoteConfigPayload {
   if (!isRecord(value)) return false;
   if (typeof value.version !== 'number' || !Number.isFinite(value.version) || value.version < 1) return false;
   if (typeof value.enabled !== 'boolean') return false;
   if (!isTextList(value.directRules) || !isTextList(value.proxyRules)) return false;
   if (typeof value.subscriptionUrl !== 'undefined' && !normalizeSubscriptionUrl(value.subscriptionUrl)) return false;
-  if (typeof value.ruleProfile !== 'undefined' && !validRuleProfiles.includes(value.ruleProfile as RuleProfile)) {
+  if (
+    typeof value.ruleProfile !== 'undefined' &&
+    !validRuleProfiles.includes(value.ruleProfile as RuleProfile) &&
+    !legacyRuleProfiles.has(value.ruleProfile as string)
+  ) {
     return false;
   }
   if (typeof value.preferredNode !== 'undefined' && typeof value.preferredNode !== 'string') return false;
@@ -293,9 +297,9 @@ function normalizeSubscriptionUrl(value: unknown): string | undefined {
   }
 }
 
-function normalizeTextList(value: unknown, maxLength: number): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => normalizeText(item, maxLength)).filter((item): item is string => Boolean(item));
+function normalizeRuleProfile(value: unknown): RuleProfile | undefined {
+  if (legacyRuleProfiles.has(value as string)) return 'ruleset';
+  return validRuleProfiles.includes(value as RuleProfile) ? (value as RuleProfile) : undefined;
 }
 
 async function getJson(

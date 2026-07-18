@@ -20,6 +20,8 @@ export type DiagnosticReportInput = {
     controllerPort: number;
     dnsPort: number;
   };
+  logCapacity?: number;
+  droppedLogCount?: number;
   lastError?: string;
   logs: string[];
 };
@@ -28,6 +30,79 @@ export type DiagnosticExportDependencies = {
   chooseFile: (defaultFileName: string) => Promise<string | undefined>;
   writeFile: (filePath: string, contents: string) => Promise<void>;
 };
+
+export const diagnosticLogCapacity = 200;
+export const diagnosticSnapshotLogLimit = 80;
+export const diagnosticLogMessageLimit = 4096;
+export const diagnosticLogCoalesceWindowMs = 2 * 60 * 1000;
+
+type DiagnosticLogEntry = {
+  message: string;
+  firstAt: Date;
+  lastAt: Date;
+  occurrences: number;
+};
+
+type DiagnosticLogBufferOptions = {
+  capacity?: number;
+  maxMessageLength?: number;
+  coalesceWindowMs?: number;
+};
+
+export class DiagnosticLogBuffer {
+  readonly capacity: number;
+  private readonly maxMessageLength: number;
+  private readonly coalesceWindowMs: number;
+  private readonly entries: DiagnosticLogEntry[] = [];
+  private droppedEntries = 0;
+
+  constructor(options: DiagnosticLogBufferOptions = {}) {
+    this.capacity = normalizePositiveInteger(options.capacity, diagnosticLogCapacity);
+    this.maxMessageLength = normalizePositiveInteger(options.maxMessageLength, diagnosticLogMessageLimit);
+    this.coalesceWindowMs = normalizePositiveInteger(options.coalesceWindowMs, diagnosticLogCoalesceWindowMs);
+  }
+
+  get size(): number {
+    return this.entries.length;
+  }
+
+  get droppedCount(): number {
+    return this.droppedEntries;
+  }
+
+  append(input: string, at = new Date()): void {
+    const message = toBoundedSafeDiagnosticMessage(normalizeDiagnosticLog(input), this.maxMessageLength);
+    if (!message) return;
+
+    for (let index = this.entries.length - 1; index >= 0; index -= 1) {
+      const candidate = this.entries[index];
+      if (candidate.message !== message) continue;
+      const elapsed = at.getTime() - candidate.lastAt.getTime();
+      if (elapsed >= 0 && elapsed <= this.coalesceWindowMs) {
+        candidate.lastAt = new Date(at.getTime());
+        candidate.occurrences += 1;
+        if (index !== this.entries.length - 1) {
+          this.entries.splice(index, 1);
+          this.entries.push(candidate);
+        }
+        return;
+      }
+      break;
+    }
+
+    this.entries.push({ message, firstAt: new Date(at.getTime()), lastAt: new Date(at.getTime()), occurrences: 1 });
+    if (this.entries.length > this.capacity) {
+      this.entries.splice(0, this.entries.length - this.capacity);
+      this.droppedEntries += 1;
+    }
+  }
+
+  getLogs(limit = this.capacity): string[] {
+    const count = Math.max(0, Math.floor(limit));
+    if (count === 0) return [];
+    return this.entries.slice(-count).map(formatDiagnosticLogEntry);
+  }
+}
 
 const quotedDiagnosticValue = String.raw`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`;
 const redactedDiagnosticValue = String.raw`\[已隐藏\]`;
@@ -52,6 +127,23 @@ export function redactDiagnosticText(input: string): string {
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[已隐藏标识]')
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '[已隐藏标识]')
     .replace(/(?<![A-Za-z0-9+/_=-])(?:[A-Fa-f0-9]{32,}|[A-Za-z0-9+/_=-]{40,})(?![A-Za-z0-9+/_=-])/g, '[已隐藏标识]');
+}
+
+function normalizeDiagnosticLog(message: string): string {
+  const warning = parseMihomoDialWarning(message);
+  if (!warning) return message;
+  return `连接警告：${warning.target} 访问失败（${warning.network}）`;
+}
+
+function parseMihomoDialWarning(message: string): { target: string; network: string } | undefined {
+  if (!message.includes('[mihomo]') || !/level=warning/i.test(message) || !/\[(?:TCP|UDP)\]\s+dial/i.test(message)) {
+    return undefined;
+  }
+
+  const network = message.match(/\[(TCP|UDP)\]\s+dial/i)?.[1]?.toUpperCase() ?? '连接';
+  const rulePayload = message.match(/match\s+([A-Za-z-]+\/[^")\s]+)/i)?.[1];
+  const target = rulePayload?.split('/').pop()?.trim() || message.match(/dial\s+([^ ]+)/i)?.[1] || '外部站点';
+  return { target, network };
 }
 
 export function classifyDiagnosticIssue(message: string | undefined): DiagnosticIssueKind | undefined {
@@ -133,6 +225,13 @@ export function buildDiagnosticReport(input: DiagnosticReportInput): string {
     `日志条数: ${safeLogs.length}`
   ];
 
+  if (input.logCapacity !== undefined) {
+    lines.push(`日志容量: ${normalizeNonNegativeInteger(input.logCapacity)} 条`);
+  }
+  if (input.droppedLogCount !== undefined) {
+    lines.push(`已丢弃较早日志: ${normalizeNonNegativeInteger(input.droppedLogCount)} 条`);
+  }
+
   if (input.features) {
     lines.push(
       `系统代理: ${formatEnabled(input.features.systemProxyEnabled)}`,
@@ -195,6 +294,38 @@ function toSingleSafeLine(value: string): string {
     .replace(/[\r\n]+/g, ' ↩ ')
     .trim();
   return line.length > 8192 ? `${line.slice(0, 8191)}…` : line;
+}
+
+function toBoundedSafeDiagnosticMessage(value: string, maxLength: number): string {
+  const safe = redactDiagnosticText(String(value))
+    .replace(/[\r\n]+/g, ' ↩ ')
+    .trim();
+  if (safe.length <= maxLength) return safe;
+  return `${safe.slice(0, maxLength - 1)}…`;
+}
+
+function formatDiagnosticLogEntry(entry: DiagnosticLogEntry): string {
+  if (entry.occurrences === 1) return `${formatLocalDateTime(entry.lastAt)} ${entry.message}`;
+  return `${formatLocalDateTime(entry.firstAt)} - ${formatLocalDateTime(entry.lastAt)} ${entry.message}（重复 ${entry.occurrences} 次）`;
+}
+
+function formatLocalDateTime(value: Date): string {
+  return (
+    [
+      String(value.getFullYear()).padStart(4, '0'),
+      String(value.getMonth() + 1).padStart(2, '0'),
+      String(value.getDate()).padStart(2, '0')
+    ].join('-') +
+    ` ${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}:${String(value.getSeconds()).padStart(2, '0')}`
+  );
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : fallback;
+}
+
+function normalizeNonNegativeInteger(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
 function formatEnabled(enabled: boolean): string {

@@ -10,6 +10,8 @@
   --accent-strong: #6f45ad;
   --accent-soft: #efe9fa;
   --accent-tint: #faf7ff;
+  --interactive-hover: #efe4fb;
+  --interactive-hover-strong: #e7d8f7;
   --panel: #ffffff;
   --surface: #f6f2fb;
   --surface-raised: #fbf9fe;
@@ -295,13 +297,13 @@ select:focus-visible {
 }
 
 .nav-list button:not(.active):hover:not(:disabled) {
-  background: #efe4fb;
+  background: var(--interactive-hover);
 }
 
 .secondary-button:hover:not(:disabled),
 .action-row button:hover:not(:disabled),
 .quick-edit-button:hover:not(:disabled) {
-  background: #efe4fb;
+  background: var(--interactive-hover);
 }
 
 .nav-list button.active {
@@ -427,8 +429,19 @@ select:focus-visible {
 .header-actions > .status-badge {
   height: var(--header-action-height);
   min-height: var(--header-action-height);
-  font-size: 14px;
   line-height: 1;
+}
+
+.header-actions > button {
+  width: 112px;
+  padding: 0 12px;
+  color: var(--ink-soft);
+  background: var(--interactive-hover);
+  font-size: 16px;
+}
+
+.header-actions > button:hover:not(:disabled) {
+  background: var(--interactive-hover-strong);
 }
 
 .section-label,
@@ -462,7 +475,6 @@ select:focus-visible {
   background: #eee6f7;
 }
 
-.mode-return-button,
 .nav-list button,
 .node-mode-toggle button,
 .mode-strip button,
@@ -1673,13 +1685,6 @@ select:focus-visible {
   background: #f0e6f9;
 }
 
-.mode-return-button {
-  width: 88px;
-  height: var(--header-action-height);
-  padding: 0 10px;
-  font-size: 14px;
-}
-
 .inline-message,
 .message {
   min-width: 0;
@@ -2795,10 +2800,6 @@ select:focus-visible {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 92px;
   align-items: end;
   gap: 10px;
-}
-
-.header-batch-button {
-  min-width: 88px;
 }
 
 .test-panel {

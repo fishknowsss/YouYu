@@ -26,7 +26,7 @@ describe('SettingsStore', () => {
     const second = await store.read();
 
     expect(first.subscriptionUrl).toBe('');
-    expect(first.settingsVersion).toBe(4);
+    expect(first.settingsVersion).toBe(5);
     expect(first.controllerSecret).toHaveLength(32);
     expect(first.ruleProfile).toBe('ruleset');
     expect(first.dnsEnhanced).toBe(true);
@@ -154,7 +154,7 @@ describe('SettingsStore', () => {
     expect(migrated.strictRouteEnabled).toBe(true);
     expect(migrated.ruleProfile).toBe('subscription');
     expect(migrated.subscriptionRefreshIntervalHours).toBe(12);
-    expect(migrated.settingsVersion).toBe(4);
+    expect(migrated.settingsVersion).toBe(5);
   });
 
   it('persists allowed subscription refresh intervals', async () => {
@@ -192,7 +192,7 @@ describe('SettingsStore', () => {
     expect(migrated.ruleProfile).toBe('ruleset');
   });
 
-  it('preserves smart routing after settings have been versioned', async () => {
+  it.each(['smart', 'global'])('migrates the versioned %s profile to smart rules', async (ruleProfile) => {
     const dir = await mkdtemp(join(tmpdir(), 'youyu-settings-'));
     tempDirs.push(dir);
     await writeFile(
@@ -203,7 +203,7 @@ describe('SettingsStore', () => {
         controllerSecret: '1234567890abcdef1234567890abcdef',
         mode: 'rule',
         strategy: 'auto',
-        ruleProfile: 'smart',
+        ruleProfile,
         selectedNode: '',
         systemProxyEnabled: true,
         dnsEnhanced: true,
@@ -217,7 +217,11 @@ describe('SettingsStore', () => {
     const store = new SettingsStore(dir);
     const current = await store.read();
 
-    expect(current.ruleProfile).toBe('smart');
+    expect(current.ruleProfile).toBe('ruleset');
+    await expect(readFile(join(dir, 'settings.json'), 'utf8').then(JSON.parse)).resolves.toMatchObject({
+      settingsVersion: 5,
+      ruleProfile: 'ruleset'
+    });
   });
 
   it('disables LAN access from older settings', async () => {

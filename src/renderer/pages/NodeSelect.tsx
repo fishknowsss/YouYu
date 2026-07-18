@@ -8,7 +8,6 @@ type NodeSelectProps = {
   message: string;
   testingAll: boolean;
   switchingNode?: string;
-  onBack: () => void;
   onSelect: (name: string) => void;
   onTestNode: (name: string) => void;
   onTestAll: () => void;
@@ -22,7 +21,6 @@ export function NodeSelect({
   message,
   testingAll,
   switchingNode,
-  onBack,
   onSelect,
   onTestNode,
   onTestAll,
@@ -42,11 +40,8 @@ export function NodeSelect({
         description={`当前出口：${snapshot.currentNode}`}
         actions={
           <>
-            <button className="secondary-button" onClick={onBack}>
-              返回
-            </button>
             <button
-              className="wide-button header-batch-button"
+              className="secondary-button"
               disabled={busy && !testingAll}
               onClick={testingAll ? onCancelTestAll : onTestAll}
             >

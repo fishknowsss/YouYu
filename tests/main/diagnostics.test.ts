@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  DiagnosticLogBuffer,
   buildDiagnosticReport,
   classifyDiagnosticIssue,
   createDiagnosticExportDefaultPath,
@@ -8,6 +9,83 @@ import {
   isDiagnosticIssueResolvedByOperation,
   redactDiagnosticText
 } from '../../src/main/diagnostics';
+
+describe('diagnostic log buffer', () => {
+  it('keeps only the newest logical entries and reports how many were dropped', () => {
+    const logs = new DiagnosticLogBuffer({ capacity: 3 });
+
+    for (let index = 1; index <= 4; index += 1) {
+      logs.append(`event ${index}`, new Date(2026, 6, 19, 5, 0, index));
+    }
+
+    expect(logs.size).toBe(3);
+    expect(logs.capacity).toBe(3);
+    expect(logs.droppedCount).toBe(1);
+    expect(logs.getLogs()).toEqual([
+      '2026-07-19 05:00:02 event 2',
+      '2026-07-19 05:00:03 event 3',
+      '2026-07-19 05:00:04 event 4'
+    ]);
+  });
+
+  it('merges equal safe messages within the recent window even when another event is interleaved', () => {
+    const logs = new DiagnosticLogBuffer();
+
+    logs.append('流量统计失败: token=first-secret', new Date(2026, 6, 19, 5, 1, 2));
+    logs.append('后台刷新开始', new Date(2026, 6, 19, 5, 1, 4));
+    logs.append('流量统计失败: token=second-secret', new Date(2026, 6, 19, 5, 1, 7));
+
+    expect(logs.size).toBe(2);
+    expect(logs.droppedCount).toBe(0);
+    expect(logs.getLogs()).toEqual([
+      '2026-07-19 05:01:04 后台刷新开始',
+      '2026-07-19 05:01:02 - 2026-07-19 05:01:07 流量统计失败: token=[已隐藏]（重复 2 次）'
+    ]);
+  });
+
+  it('keeps a continuous Mihomo dial warning visible as one current counted entry', () => {
+    const logs = new DiagnosticLogBuffer();
+    const warning =
+      '[mihomo] time="2026-07-19T05:02:00+08:00" level=warning msg="[TCP] dial example.com:443 match DOMAIN-SUFFIX/example.com"';
+
+    logs.append(warning, new Date(2026, 6, 19, 5, 2, 0));
+    logs.append(warning.replace('05:02:00', '05:02:05'), new Date(2026, 6, 19, 5, 2, 5));
+
+    expect(logs.getLogs()).toEqual([
+      '2026-07-19 05:02:00 - 2026-07-19 05:02:05 连接警告：example.com 访问失败（TCP）（重复 2 次）'
+    ]);
+  });
+
+  it('starts a new logical entry after the repeat coalescing window', () => {
+    const logs = new DiagnosticLogBuffer({ coalesceWindowMs: 1000 });
+    logs.append('same event', new Date(2026, 6, 19, 5, 2, 0));
+    logs.append('same event', new Date(2026, 6, 19, 5, 2, 2));
+
+    expect(logs.getLogs()).toEqual(['2026-07-19 05:02:00 same event', '2026-07-19 05:02:02 same event']);
+  });
+
+  it('bounds and flattens each safe message before retaining it', () => {
+    const logs = new DiagnosticLogBuffer();
+    const message = '安全内容'.repeat(2000);
+
+    logs.append(`${message}\r\nignored`, new Date(2026, 6, 19, 5, 3, 0));
+
+    const [line] = logs.getLogs();
+    expect(line).toHaveLength(20 + 4096);
+    expect(line).toBe(`2026-07-19 05:03:00 ${message.slice(0, 4095)}…`);
+  });
+
+  it('returns only the requested recent window without changing the retained count', () => {
+    const logs = new DiagnosticLogBuffer({ capacity: 200 });
+    for (let index = 0; index < 100; index += 1) {
+      logs.append(`event ${index}`, new Date(2026, 6, 19, 6, 0, index % 60));
+    }
+
+    expect(logs.getLogs(80)).toHaveLength(80);
+    expect(logs.getLogs()).toHaveLength(100);
+    expect(logs.size).toBe(100);
+  });
+});
 
 describe('diagnostic export', () => {
   it.each([
@@ -193,6 +271,8 @@ describe('diagnostic export', () => {
         tunEnabled: false
       },
       runtimePorts: { mixedPort: 7890, controllerPort: 9090, dnsPort: 1053 },
+      logCapacity: 200,
+      droppedLogCount: 7,
       lastError: '订阅失败: https://example.com/sub/private?token=secret',
       logs: ['12:00:00 启动完成', '12:00:01 token=secret']
     });
@@ -204,6 +284,8 @@ describe('diagnostic export', () => {
     expect(report).toContain('状态: failed');
     expect(report).toContain('系统: win32 x64 10.0.26100');
     expect(report).toContain('日志条数: 2');
+    expect(report).toContain('日志容量: 200 条');
+    expect(report).toContain('已丢弃较早日志: 7 条');
     expect(report).toContain('系统代理: 开启');
     expect(report).toContain('TUN: 关闭');
     expect(report).not.toContain('/sub/private');
