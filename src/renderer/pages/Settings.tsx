@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppSettingsInput, AppSnapshot, RuleProfile } from '../../shared/ipc';
+import { updateInstallingMessage } from '../../shared/updateProgress';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { isActionErrorMessage } from '../actionMessages';
 
 type SettingsProps = {
@@ -84,15 +86,15 @@ export function Settings({
 
   return (
     <div className="workspace settings-workspace">
-      <div className="workspace-header">
-        <div>
-          <h1>设置</h1>
-          <p>订阅与网络开关</p>
-        </div>
-        <button className="secondary-button" onClick={onBack}>
-          返回
-        </button>
-      </div>
+      <WorkspaceHeader
+        title="设置"
+        description="订阅与网络开关"
+        actions={
+          <button className="secondary-button" onClick={onBack}>
+            返回
+          </button>
+        }
+      />
       <section className="panel settings-panel">
         <div className="settings-form-grid">
           <div className="settings-row settings-subscription-row">
@@ -333,11 +335,12 @@ function formatUpdateStatus(update: AppSnapshot['update']): string {
       : `${label}${version}`;
   }
   if (update.status === 'downloaded') {
+    if (update.message) return '安装未开始，请重试';
     return update.downloadedVersion ? `已下载 ${update.downloadedVersion}` : '已下载';
   }
   if (update.status === 'not-available') return update.message || '已是最新';
   if (update.status === 'failed') return formatUpdateFailure(update.message);
-  if (update.status === 'installing') return '正在启动安装器';
+  if (update.status === 'installing') return update.message || updateInstallingMessage;
   return '待检查';
 }
 

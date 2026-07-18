@@ -3,6 +3,22 @@ import { createMihomoApiClient } from '../../src/main/mihomo/api';
 import { strategyTargets } from '../../src/main/mihomo/config';
 
 describe('createMihomoApiClient', () => {
+  it('flushes the Mihomo DNS cache through the controller API', async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await api.flushDnsCache();
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/cache/dns/flush',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { Authorization: 'Bearer secret' },
+        signal: expect.any(AbortSignal)
+      })
+    );
+  });
+
   it('times out a stalled controller request', async () => {
     const client = createMihomoApiClient({
       secret: 'secret',

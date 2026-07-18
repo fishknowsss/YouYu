@@ -8,6 +8,7 @@ import type {
   StrategyKey,
   YouYuApi
 } from '../shared/ipc';
+import { updateInstallingMessage } from '../shared/updateProgress';
 
 declare const __YOUYU_APP_VERSION__: string;
 declare const __YOUYU_BUILD_CHANNEL__: 'standard' | 'in' | 'no' | string;
@@ -35,8 +36,8 @@ const devConnectivity: Array<{
     url: 'https://store.steampowered.com',
     category: 'special',
     totalMs: 142,
-    ip: '23.203.232.145',
-    region: 'Japan'
+    ip: '192.0.2.10',
+    region: '演示区域'
   },
   {
     key: 'steamNetwork',
@@ -44,8 +45,8 @@ const devConnectivity: Array<{
     url: 'https://api.steampowered.com',
     category: 'special',
     totalMs: 166,
-    ip: '23.203.232.145',
-    region: 'Japan'
+    ip: '192.0.2.10',
+    region: '演示区域'
   },
   {
     key: 'steamCloud',
@@ -53,8 +54,8 @@ const devConnectivity: Array<{
     url: 'https://steamcloud-ugc.storage.googleapis.com',
     category: 'special',
     totalMs: 184,
-    ip: '172.217.25.176',
-    region: 'Japan'
+    ip: '192.0.2.10',
+    region: '演示区域'
   },
   {
     key: 'chatgpt',
@@ -62,8 +63,8 @@ const devConnectivity: Array<{
     url: 'https://chatgpt.com',
     category: 'ai',
     totalMs: 286,
-    ip: '126.63.231.113',
-    region: 'Japan'
+    ip: '198.51.100.24',
+    region: '演示区域'
   },
   {
     key: 'claude',
@@ -71,42 +72,102 @@ const devConnectivity: Array<{
     url: 'https://claude.ai',
     category: 'ai',
     totalMs: 312,
-    ip: '126.63.231.113',
-    region: 'Japan'
+    ip: '198.51.100.24',
+    region: '演示区域'
   },
-  { key: 'gemini', name: 'Gemini', url: 'https://gemini.google.com', category: 'ai', totalMs: 248 },
-  { key: 'flow', name: 'Flow', url: 'https://labs.google/fx/tools/flow', category: 'special', totalMs: 338 },
-  { key: 'pixverse', name: 'PixVerse', url: 'https://app.pixverse.ai', category: 'ai', totalMs: 428 },
+  {
+    key: 'gemini',
+    name: 'Gemini',
+    url: 'https://gemini.google.com',
+    category: 'ai',
+    totalMs: 248,
+    ip: '198.51.100.24',
+    region: '演示区域'
+  },
+  {
+    key: 'flow',
+    name: 'Flow',
+    url: 'https://labs.google/fx/tools/flow',
+    category: 'special',
+    totalMs: 338,
+    ip: '198.51.100.24',
+    region: '演示区域'
+  },
+  {
+    key: 'pixverse',
+    name: 'PixVerse',
+    url: 'https://app.pixverse.ai',
+    category: 'ai',
+    totalMs: 428,
+    ip: '198.51.100.24',
+    region: '演示区域'
+  },
   {
     key: 'microsoftStore',
     name: 'Microsoft 商店',
     url: 'https://apps.microsoft.com',
     category: 'special',
-    totalMs: 232
+    totalMs: 232,
+    ip: '203.0.113.18',
+    region: '演示区域'
   },
-  { key: 'discord', name: 'Discord', url: 'https://discord.com', category: 'special', totalMs: 266 },
+  {
+    key: 'discord',
+    name: 'Discord',
+    url: 'https://discord.com',
+    category: 'special',
+    totalMs: 266,
+    ip: '203.0.113.18',
+    region: '演示区域'
+  },
   {
     key: 'turnstile',
     name: 'Cloudflare 验证',
     url: 'https://challenges.cloudflare.com',
     category: 'special',
-    totalMs: 188
+    totalMs: 188,
+    ip: '203.0.113.18',
+    region: '演示区域'
   },
-  { key: 'recaptcha', name: 'Google 验证', url: 'https://www.recaptcha.net', category: 'special', totalMs: 246 },
-  { key: 'hcaptcha', name: 'hCaptcha', url: 'https://js.hcaptcha.com', category: 'special', totalMs: 221 },
-  { key: 'google', name: 'Google', url: 'https://www.google.com', category: 'global', totalMs: 168 },
+  {
+    key: 'recaptcha',
+    name: 'Google 验证',
+    url: 'https://www.recaptcha.net',
+    category: 'special',
+    totalMs: 246,
+    ip: '192.0.2.42',
+    region: '演示区域'
+  },
+  {
+    key: 'hcaptcha',
+    name: 'hCaptcha',
+    url: 'https://js.hcaptcha.com',
+    category: 'special',
+    totalMs: 221,
+    ip: '192.0.2.42',
+    region: '演示区域'
+  },
+  {
+    key: 'google',
+    name: 'Google',
+    url: 'https://www.google.com',
+    category: 'global',
+    totalMs: 168,
+    ip: '192.0.2.42',
+    region: '演示区域'
+  },
   {
     key: 'cloudflare',
     name: 'Cloudflare',
     url: 'https://www.cloudflare.com',
     category: 'global',
     totalMs: 198,
-    ip: '216.236.40.177',
-    region: 'Hong Kong'
+    ip: '203.0.113.18',
+    region: '演示区域'
   }
 ];
 
-export function createDevYouYuApi(): YouYuApi {
+export function createDevYouYuApi(options: { preset?: 'readme'; updateStatus?: 'installing' } = {}): YouYuApi {
   let petState: DesktopPetState = 'idle';
   const petListeners = new Set<(state: DesktopPetState) => void>();
   const petSequenceTimers = new Set<number>();
@@ -156,6 +217,14 @@ export function createDevYouYuApi(): YouYuApi {
       logCount: 0
     }
   };
+  if (options.preset === 'readme') snapshot = createReadmePreviewSnapshot(snapshot);
+  if (options.updateStatus === 'installing') {
+    snapshot.update = {
+      ...snapshot.update,
+      status: 'installing',
+      message: updateInstallingMessage
+    };
+  }
 
   function withNodes(currentNode = snapshot.currentNode): ProxyNode[] {
     return baseNodes.map((node) => ({
@@ -539,7 +608,7 @@ function createDevConnectivityResult(key: ConnectivityServiceKey): ConnectivityR
     },
     rule: 'DOMAIN-SUFFIX',
     rulePayload: service.key,
-    chains: ['MESL', '台湾 08 家宽']
+    chains: ['DEMO', '日本 01']
   };
 }
 
@@ -568,6 +637,75 @@ function strategyLabel(strategy: StrategyKey): string {
 
 export function installDevApiFallback() {
   if (import.meta.env.DEV && !window.youyu) {
-    window.youyu = createDevYouYuApi();
+    const params = new URLSearchParams(window.location.search);
+    const preset = params.get('demo') === 'readme' ? 'readme' : undefined;
+    const updateStatus = params.get('update') === 'installing' ? 'installing' : undefined;
+    window.youyu = createDevYouYuApi({ preset, updateStatus });
   }
+}
+
+function createReadmePreviewSnapshot(base: AppSnapshot): AppSnapshot {
+  const gib = 1024 ** 3;
+  const checkedAt = '2026-07-18T05:26:12.000Z';
+  return {
+    ...base,
+    status: 'running',
+    currentNode: '日本 01',
+    nodes: baseNodes.map((node) => ({ ...node, active: node.name === '日本 01' })),
+    nodeHealth: createDevNodeHealth('日本 01', 96),
+    strategies: createStrategies('manual'),
+    strategy: 'manual',
+    runtime: {
+      activeConnections: 4,
+      uploadTotal: Math.round(1.2 * gib),
+      downloadTotal: Math.round(8.6 * gib)
+    },
+    traffic: {
+      totalUpload: Math.round(12.4 * gib),
+      totalDownload: Math.round(86.7 * gib),
+      todayUpload: Math.round(1.2 * gib),
+      todayDownload: Math.round(8.6 * gib),
+      pendingUpload: 0,
+      pendingDownload: 0,
+      totalSource: 'server',
+      serverSyncedAt: checkedAt,
+      nodeUsage: {
+        mostUsed: {
+          name: '日本 01',
+          upload: Math.round(4.2 * gib),
+          download: Math.round(38.6 * gib),
+          durationMs: 12 * 60 * 60 * 1000,
+          lastUsedAt: checkedAt
+        },
+        longestUsed: {
+          name: '香港 01',
+          upload: Math.round(2.1 * gib),
+          download: Math.round(21.4 * gib),
+          durationMs: (18 * 60 + 36) * 60 * 1000,
+          lastUsedAt: checkedAt
+        }
+      },
+      lastUpdatedAt: checkedAt,
+      lastReportedAt: checkedAt,
+      reportStatus: 'synced'
+    },
+    trafficIdentity: {
+      userId: 'demo-user',
+      deviceId: 'demo-device',
+      name: '演示用户',
+      deviceName: '演示设备',
+      registeredAt: checkedAt,
+      verificationStatus: 'verified'
+    },
+    subscriptionUrl: 'https://example.com/sub/demo-profile',
+    subscriptionRevision: 1,
+    diagnostics: {
+      logs: [
+        '13:26:08 mihomo runtime ready',
+        '13:26:11 node health refreshed: 日本 01, 96 ms',
+        '13:26:12 proxy mode: rule'
+      ],
+      logCount: 3
+    }
+  };
 }

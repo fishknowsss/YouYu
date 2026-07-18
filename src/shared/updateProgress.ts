@@ -1,5 +1,7 @@
 export type UpdateDownloadPhase = 'downloading' | 'full-download' | 'verifying';
 
+export const updateInstallingMessage = '已开始自动安装，无需操作';
+
 export function getUpdateDownloadPhase(input: {
   previousPercent?: number;
   previousPhase?: UpdateDownloadPhase;

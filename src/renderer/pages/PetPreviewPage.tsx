@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { DesktopPetState } from '../../shared/ipc';
 import { PetSprite } from '../components/PetSprite';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { petStates } from '../pet/atlas';
 
 const stateLabels: Record<DesktopPetState, string> = {
@@ -63,12 +64,7 @@ export function PetPreviewPage() {
 
   return (
     <div className="workspace pet-preview-page">
-      <div className="workspace-header">
-        <div>
-          <h1>桌宠预览</h1>
-          <p>共 {petStates.length} 个状态</p>
-        </div>
-      </div>
+      <WorkspaceHeader title="桌宠预览" description={`共 ${petStates.length} 个状态`} />
 
       <section className="pet-preview-layout">
         <div className="pet-preview-grid" aria-label="桌宠状态">

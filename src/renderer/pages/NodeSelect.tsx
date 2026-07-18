@@ -1,5 +1,6 @@
 import type { AppSnapshot } from '../../shared/ipc';
 import { NodeList } from '../components/NodeList';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 
 type NodeSelectProps = {
   snapshot: AppSnapshot;
@@ -36,31 +37,32 @@ export function NodeSelect({
 
   return (
     <div className="workspace fill-space">
-      <div className="workspace-header">
-        <div>
-          <h1>节点</h1>
-          <p>当前出口：{snapshot.currentNode}</p>
-        </div>
-        <div className="header-actions">
-          <button className="secondary-button" onClick={onBack}>
-            返回
-          </button>
-          <button
-            className="wide-button"
-            disabled={busy && !testingAll}
-            onClick={testingAll ? onCancelTestAll : onTestAll}
-          >
-            {testingAll ? '停止' : '全部测速'}
-          </button>
-          <button className="secondary-button" disabled={busy} onClick={onRefresh}>
-            {snapshot.status === 'running' ? '更新订阅' : '启动并更新'}
-          </button>
-        </div>
-      </div>
+      <WorkspaceHeader
+        title="节点"
+        description={`当前出口：${snapshot.currentNode}`}
+        actions={
+          <>
+            <button className="secondary-button" onClick={onBack}>
+              返回
+            </button>
+            <button
+              className="wide-button header-batch-button"
+              disabled={busy && !testingAll}
+              onClick={testingAll ? onCancelTestAll : onTestAll}
+            >
+              {testingAll ? '停止' : '全部测速'}
+            </button>
+            <button className="secondary-button" disabled={busy} onClick={onRefresh}>
+              {snapshot.status === 'running' ? '更新订阅' : '启动并更新'}
+            </button>
+          </>
+        }
+      />
       <section className="panel list-panel">
         <NodeList
           nodes={snapshot.nodes}
-          busy={busy}
+          selectionBusy={busy && !testingAll}
+          testingBusy={busy}
           switchingNode={switchingNode}
           emptyText={emptyText}
           onSelect={onSelect}

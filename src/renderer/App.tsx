@@ -8,6 +8,7 @@ import type {
   TrafficRegistrationInput
 } from '../shared/ipc';
 import { AppShell, type PageKey, type UsageMode } from './components/AppShell';
+import { createOperationRequest } from './operationRequest';
 import { isActionErrorMessage } from './actionMessages';
 import { Home } from './pages/Home';
 import { NodeSelect } from './pages/NodeSelect';
@@ -124,6 +125,7 @@ export function App() {
   const snapshotRef = useRef(snapshot);
   const snapshotGenerationRef = useRef(0);
   const nodeSelectionGenerationRef = useRef(0);
+  const switchingNodeRef = useRef('');
   const registered = Boolean(snapshot.trafficIdentity);
 
   function commitSnapshot(next: AppSnapshot, expectedGeneration?: number): boolean {
@@ -396,8 +398,10 @@ export function App() {
       setMessage('核心接口未加载');
       return;
     }
+    if (switchingNodeRef.current) return;
 
     const selectionGeneration = ++nodeSelectionGenerationRef.current;
+    switchingNodeRef.current = name;
     setSwitchingNode(name);
     setMessage('');
     try {
@@ -413,7 +417,10 @@ export function App() {
       commitSnapshot(next);
       setMessage(getActionErrorMessage(error));
     } finally {
-      if (selectionGeneration === nodeSelectionGenerationRef.current) setSwitchingNode('');
+      if (selectionGeneration === nodeSelectionGenerationRef.current) {
+        switchingNodeRef.current = '';
+        setSwitchingNode('');
+      }
     }
   }
 
@@ -918,10 +925,6 @@ class ActionTimeoutError extends Error {
   }
 }
 
-function createOperationRequest(): OperationRequest {
-  return { requestId: globalThis.crypto?.randomUUID?.() ?? createFallbackRequestId() };
-}
-
 export function createOperationRequestTracker(): OperationRequestTracker {
   const tracker: OperationRequestTracker = {
     next: () => {
@@ -931,10 +934,6 @@ export function createOperationRequestTracker(): OperationRequestTracker {
     }
   };
   return tracker;
-}
-
-function createFallbackRequestId(): string {
-  return `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function getFocusableElements(container: HTMLElement | null): HTMLElement[] {

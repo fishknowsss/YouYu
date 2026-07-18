@@ -172,6 +172,7 @@ const steamAccelerationDomains = [
   'steamcloud-sydney.storage.googleapis.com',
   'steamcloud-taiwan.storage.googleapis.com'
 ];
+const steamDnsResolvers = ['https://1.1.1.1/dns-query#RULES', 'https://8.8.8.8/dns-query#RULES'];
 const gamingFakeIpFilterDomains = [
   '*.steampowered.com',
   '*.steamcommunity.com',
@@ -627,6 +628,8 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
       enable: true,
       listen: `127.0.0.1:${input.dnsPort ?? 1053}`,
       ipv6: false,
+      'cache-algorithm': 'arc',
+      'prefer-h3': false,
       'enhanced-mode': 'fake-ip',
       'fake-ip-range': '198.18.0.1/16',
       'fake-ip-filter': [
@@ -642,6 +645,9 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
       ],
       'default-nameserver': ['223.5.5.5', '119.29.29.29'],
       nameserver: ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
+      'nameserver-policy': Object.fromEntries(
+        steamAccelerationDomains.map((domain) => [`+.${domain}`, [...steamDnsResolvers]])
+      ),
       'direct-nameserver': ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
       'proxy-server-nameserver': ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
       'direct-nameserver-follow-policy': false,

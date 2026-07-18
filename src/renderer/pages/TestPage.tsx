@@ -6,6 +6,8 @@ import type {
   ConnectivityServiceKey,
   ConnectivityStatus
 } from '../../shared/ipc';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
+import { createOperationRequest } from '../operationRequest';
 
 type TestPageProps = {
   snapshot: AppSnapshot;
@@ -58,8 +60,10 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
   const [results, setResults] = useState<TestResults>(() => getCachedResults(cacheKey));
   const [activeKey, setActiveKey] = useState<ConnectivityServiceKey>(() => getCachedActiveKey(cacheKey));
   const [busyAll, setBusyAll] = useState(false);
+  const [stoppingAll, setStoppingAll] = useState(false);
   const activeRef = useRef(true);
   const runGenerationRef = useRef(0);
+  const activeRequestIdsRef = useRef(new Set<string>());
   const apiReady = Boolean(window.youyu);
   const proxyReady = snapshot.status === 'running';
   const rows = useMemo(() => services.map((service) => results[service.key]), [results]);
@@ -67,10 +71,16 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
   const summary = getSummary(rows);
 
   useEffect(() => {
+    const activeRequestIds = activeRequestIdsRef.current;
     activeRef.current = true;
     return () => {
       activeRef.current = false;
       runGenerationRef.current += 1;
+      const api = window.youyu;
+      for (const requestId of activeRequestIds) {
+        void api?.cancelOperation(requestId).catch(() => false);
+      }
+      activeRequestIds.clear();
       setCachedResults(cacheKey, markAllTesting(getCachedResults(cacheKey), false));
     };
   }, [cacheKey]);
@@ -92,7 +102,7 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
       runGeneration
     );
     try {
-      const result = await api.testConnectivity(key);
+      const result = await requestConnectivityTest(api, key);
       commitResults(
         (current) => ({
           ...current,
@@ -134,6 +144,22 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
     }
   }
 
+  async function stopAll() {
+    const api = window.youyu;
+    if (!api || !busyAll || stoppingAll) return;
+
+    runGenerationRef.current += 1;
+    setBusyAll(false);
+    setStoppingAll(true);
+    commitResults((current) => markAllTesting(current, false));
+    const requestIds = [...activeRequestIdsRef.current];
+    try {
+      await Promise.allSettled(requestIds.map((requestId) => api.cancelOperation(requestId)));
+    } finally {
+      if (activeRef.current) setStoppingAll(false);
+    }
+  }
+
   function selectActiveKey(key: ConnectivityServiceKey) {
     setCachedActiveKey(cacheKey, key);
     setActiveKey(key);
@@ -146,57 +172,76 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
     setResults(next);
   }
 
+  async function requestConnectivityTest(api: ConnectivityApi, key: ConnectivityServiceKey) {
+    const request = createOperationRequest();
+    activeRequestIdsRef.current.add(request.requestId);
+    try {
+      return await api.testConnectivity(key, request);
+    } finally {
+      activeRequestIdsRef.current.delete(request.requestId);
+    }
+  }
+
   async function testConnectivityQueue(api: ConnectivityApi, runGeneration: number) {
-    const queue = [...services];
+    const steamServices = services.filter((service) => isSteamService(service.key));
+    for (const service of steamServices) {
+      if (!(await testQueuedService(api, service, runGeneration))) return;
+    }
+
+    const queue = services.filter((service) => !isSteamService(service.key));
     const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
       while (queue.length) {
         if (!activeRef.current || runGenerationRef.current !== runGeneration) return;
         const service = queue.shift();
         if (!service) continue;
-
-        try {
-          const result = await api.testConnectivity(service.key);
-          if (!activeRef.current || runGenerationRef.current !== runGeneration) return;
-          commitResults(
-            (current) => ({
-              ...current,
-              [service.key]: result
-            }),
-            runGeneration
-          );
-        } catch (error) {
-          if (!activeRef.current || runGenerationRef.current !== runGeneration) return;
-          commitResults(
-            (current) => ({
-              ...current,
-              [service.key]: createFailedResult(current[service.key], error)
-            }),
-            runGeneration
-          );
-        }
+        if (!(await testQueuedService(api, service, runGeneration))) return;
       }
     });
 
     await Promise.all(workers);
   }
 
+  async function testQueuedService(api: ConnectivityApi, service: (typeof services)[number], runGeneration: number) {
+    if (!activeRef.current || runGenerationRef.current !== runGeneration) return false;
+    try {
+      const result = await requestConnectivityTest(api, service.key);
+      if (!activeRef.current || runGenerationRef.current !== runGeneration) return false;
+      commitResults(
+        (current) => ({
+          ...current,
+          [service.key]: result
+        }),
+        runGeneration
+      );
+    } catch (error) {
+      if (!activeRef.current || runGenerationRef.current !== runGeneration) return false;
+      commitResults(
+        (current) => ({
+          ...current,
+          [service.key]: createFailedResult(current[service.key], error)
+        }),
+        runGeneration
+      );
+    }
+    return true;
+  }
+
   return (
     <section className="workspace advanced-workspace test-workspace" aria-label="测试">
-      <header className="workspace-header test-header">
-        <div>
-          <h1>测试</h1>
-          <p>{proxyReady ? `当前节点：${snapshot.currentNode}` : '先启动代理'}</p>
-        </div>
-        <div className="header-actions">
+      <WorkspaceHeader
+        title="测试"
+        description={proxyReady ? `当前节点：${snapshot.currentNode}` : '先启动代理'}
+        actions={
           <button
-            className="secondary-button test-all-button"
-            disabled={!apiReady || !proxyReady || busyAll}
-            onClick={testAll}
+            className="wide-button header-batch-button"
+            disabled={!apiReady || !proxyReady || stoppingAll}
+            onClick={() => void (busyAll ? stopAll() : testAll())}
+            aria-pressed={busyAll}
           >
-            测全部
+            {stoppingAll ? '停止中' : busyAll ? '停止' : '测全部'}
           </button>
-        </div>
-      </header>
+        }
+      />
 
       <div className="test-panel">
         <div className="test-summary" aria-label="测试概览">
@@ -408,6 +453,10 @@ function createFailedResult(row: TestRow, error: unknown): TestRow {
     testing: false,
     error: error instanceof Error ? error.message : String(error)
   };
+}
+
+function isSteamService(key: ConnectivityServiceKey): boolean {
+  return key === 'steam' || key === 'steamNetwork' || key === 'steamCloud';
 }
 
 function getSummary(rows: TestRow[]) {

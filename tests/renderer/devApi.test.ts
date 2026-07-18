@@ -65,4 +65,29 @@ describe('createDevYouYuApi', () => {
     await expect(api.start()).rejects.toThrow('traffic identity required');
     await expect(api.updateSubscription()).rejects.toThrow('traffic identity required');
   });
+
+  it('provides a safe and repeatable README screenshot preset', async () => {
+    const api = createDevYouYuApi({ preset: 'readme' });
+    const snapshot = await api.getSnapshot();
+    const connectivity = await api.testAllConnectivity();
+
+    expect(snapshot).toMatchObject({
+      status: 'running',
+      currentNode: '日本 01',
+      subscriptionUrl: 'https://example.com/sub/demo-profile',
+      trafficIdentity: { name: '演示用户' }
+    });
+    expect(connectivity).toHaveLength(15);
+    for (const result of connectivity) {
+      expect(result.ip).toMatch(/^(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/);
+      expect(result.region).toBe('演示区域');
+      expect(result.chains).toEqual(['DEMO', '日本 01']);
+    }
+
+    const installing = await createDevYouYuApi({ preset: 'readme', updateStatus: 'installing' }).getSnapshot();
+    expect(installing.update).toMatchObject({
+      status: 'installing',
+      message: '已开始自动安装，无需操作'
+    });
+  });
 });

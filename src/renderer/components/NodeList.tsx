@@ -2,7 +2,8 @@ import type { ProxyNode } from '../../shared/ipc';
 
 type NodeListProps = {
   nodes: ProxyNode[];
-  busy: boolean;
+  selectionBusy: boolean;
+  testingBusy: boolean;
   switchingNode?: string;
   emptyText?: string;
   onSelect: (name: string) => void;
@@ -11,7 +12,8 @@ type NodeListProps = {
 
 export function NodeList({
   nodes,
-  busy,
+  selectionBusy,
+  testingBusy,
   switchingNode,
   emptyText = '先更新订阅',
   onSelect,
@@ -29,13 +31,17 @@ export function NodeList({
 
         return (
           <div key={node.name} className={className}>
-            <button className="node-main" disabled={busy || switching} onClick={() => onSelect(node.name)}>
+            <button
+              className="node-main"
+              disabled={selectionBusy || Boolean(switchingNode)}
+              onClick={() => onSelect(node.name)}
+            >
               <span className="node-name">{node.name}</span>
               <span className={getDelayClass(node)}>{formatDelay(node, switching)}</span>
             </button>
             <button
               className="node-test"
-              disabled={busy || switching}
+              disabled={testingBusy || switching}
               aria-label={`${node.name} 测速`}
               onClick={() => onTestNode(node.name)}
             >

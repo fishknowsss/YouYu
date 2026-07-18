@@ -46,6 +46,7 @@ export type MihomoApiClient = {
     options?: { avoidNode?: string; signal?: AbortSignal }
   ) => Promise<string | undefined>;
   closeConnections: () => Promise<void>;
+  flushDnsCache: () => Promise<void>;
   updateProvider: (options?: { signal?: AbortSignal }) => Promise<void>;
 };
 
@@ -759,6 +760,12 @@ export function createMihomoApiClient(options: {
     async closeConnections() {
       await request('/connections', {
         method: 'DELETE',
+        headers: headers()
+      });
+    },
+    async flushDnsCache() {
+      await request('/cache/dns/flush', {
+        method: 'POST',
         headers: headers()
       });
     },

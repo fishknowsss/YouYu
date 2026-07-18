@@ -165,6 +165,16 @@ describe('buildMihomoConfig', () => {
       expect(config.dns['fake-ip-filter']).toContain(`*.${domain}`);
     }
     expect(config.dns.nameserver).toEqual(['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query']);
+    expect(config.dns['cache-algorithm']).toBe('arc');
+    expect(config.dns['prefer-h3']).toBe(false);
+    expect(config.dns['nameserver-policy']['+.steampowered.com']).toEqual([
+      'https://1.1.1.1/dns-query#RULES',
+      'https://8.8.8.8/dns-query#RULES'
+    ]);
+    expect(config.dns['nameserver-policy']['+.steamcloud-ugc.storage.googleapis.com']).toEqual([
+      'https://1.1.1.1/dns-query#RULES',
+      'https://8.8.8.8/dns-query#RULES'
+    ]);
     expect(config.dns['proxy-server-nameserver']).toEqual([
       'https://dns.alidns.com/dns-query',
       'https://doh.pub/dns-query'

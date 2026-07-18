@@ -15,7 +15,8 @@ describe('update and exit lifecycle safety', () => {
     expect(install.indexOf('lifecycle.suspendStarts()')).toBeLessThan(
       install.indexOf('await prepareForUpdateInstall()')
     );
-    expect(install.indexOf("setUpdateSnapshot({ status: 'installing' })")).toBeLessThan(
+    expect(install.indexOf("status: 'installing'")).toBeLessThan(install.indexOf('await prepareForUpdateInstall()'));
+    expect(install.indexOf('message: updateInstallingMessage')).toBeLessThan(
       install.indexOf('await prepareForUpdateInstall()')
     );
   });
@@ -48,6 +49,29 @@ describe('update and exit lifecycle safety', () => {
     expect(deferredLaunch.indexOf('updateInstallerLaunchStarted = true')).toBeLessThan(
       deferredLaunch.indexOf('autoUpdater.quitAndInstall(true, true)')
     );
+    expect(deferredLaunch.indexOf('cleanupFinished = true')).toBeLessThan(
+      deferredLaunch.indexOf('autoUpdater.quitAndInstall(true, true)')
+    );
+    expect(deferredLaunch.indexOf('isQuitting = true')).toBeLessThan(
+      deferredLaunch.indexOf('autoUpdater.quitAndInstall(true, true)')
+    );
+    expect(install.slice(0, install.indexOf('deferUpdateInstallerLaunch'))).not.toContain('isQuitting = true');
+  });
+
+  it('keeps the application alive throughout the installer handoff buffer', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const beforeQuit = source.slice(source.indexOf("app.on('before-quit'"));
+    const cleanup = source.slice(
+      source.indexOf('async function cleanupBeforeExit'),
+      source.indexOf('const gotSingleInstanceLock')
+    );
+
+    expect(source).toContain('updateInstallerLaunchPending && !updateInstallerLaunchStarted');
+    expect(beforeQuit.indexOf('isUpdateInstallerHandoffPending()')).toBeLessThan(
+      beforeQuit.indexOf('updateInstallerBeforeQuitObserved = true')
+    );
+    expect(cleanup).toContain('if (isUpdateInstallerHandoffPending())');
+    expect(cleanup).toContain("throw new Error('update installer launch pending')");
   });
 
   it('only blocks a follow-up quit when the failed installer attempt already reached before-quit', async () => {

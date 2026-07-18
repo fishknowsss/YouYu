@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { connectivityServices, parseCurlMetrics, parseTraceData } from '../../src/main/connectivity';
+import { describe, expect, it, vi } from 'vitest';
+import { connectivityServices, parseCurlMetrics, parseTraceData, testConnectivity } from '../../src/main/connectivity';
 
 describe('parseCurlMetrics', () => {
   it('reads curl timing output and keeps the response body', () => {
@@ -46,7 +46,8 @@ describe('connectivityServices', () => {
     expect(connectivityServices[0]).toMatchObject({
       key: 'steam',
       name: 'Steam',
-      host: 'store.steampowered.com'
+      host: 'store.steampowered.com',
+      probeUrl: 'https://store.steampowered.com/robots.txt'
     });
     expect(connectivityServices[1]).toMatchObject({
       key: 'steamNetwork',
@@ -80,5 +81,96 @@ describe('connectivityServices', () => {
     expect(connectivityServices.map((service) => service.key)).not.toEqual(
       expect.arrayContaining(['github', 'bytedance', 'runway', 'tencent', 'ehentai'])
     );
+  });
+});
+
+describe('testConnectivity cancellation', () => {
+  it('propagates cancellation to an in-flight curl probe', async () => {
+    const controller = new AbortController();
+    const runProbe = vi.fn(
+      (_url: string, _mixedPort: number, options: { signal?: AbortSignal }) =>
+        new Promise<never>((_resolve, reject) => {
+          options.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+        })
+    );
+    const pending = testConnectivity(
+      {
+        getMixedPort: () => 7890,
+        getControllerPort: () => 9090,
+        getControllerSecret: async () => 'secret',
+        isRunning: () => true
+      },
+      'steam',
+      { signal: controller.signal, runProbe }
+    );
+
+    await vi.waitFor(() => expect(runProbe).toHaveBeenCalledOnce());
+    controller.abort(new Error('operation canceled'));
+
+    await expect(pending).rejects.toThrow('operation canceled');
+    expect(runProbe.mock.calls[0]?.[2].signal).toBe(controller.signal);
+  });
+});
+
+describe('Steam connectivity resilience', () => {
+  it('retries one transient Steam TLS failure before reporting the node as failed', async () => {
+    const runProbe = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('curl: (28) SSL connection timeout'))
+      .mockResolvedValueOnce({
+        httpCode: 200,
+        finalUrl: 'https://store.steampowered.com/robots.txt',
+        timings: { totalMs: 720 }
+      });
+
+    const result = await testConnectivity(
+      {
+        getMixedPort: () => 7890,
+        getControllerPort: () => 9090,
+        getControllerSecret: async () => 'secret',
+        isRunning: () => true
+      },
+      'steam',
+      { runProbe }
+    );
+
+    expect(runProbe).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ status: 'available', statusText: '可用', httpCode: 200 });
+  });
+
+  it('reports the failing stage after both Steam attempts time out', async () => {
+    const runProbe = vi.fn().mockRejectedValue(new Error('curl: (28) SSL connection timeout'));
+
+    const result = await testConnectivity(
+      {
+        getMixedPort: () => 7890,
+        getControllerPort: () => 9090,
+        getControllerSecret: async () => 'secret',
+        isRunning: () => true
+      },
+      'steamCloud',
+      { runProbe }
+    );
+
+    expect(runProbe).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ status: 'timeout', statusText: '超时', error: 'TLS 握手超时' });
+  });
+
+  it('does not retry a Steam certificate validation failure', async () => {
+    const runProbe = vi.fn().mockRejectedValue(new Error('curl: (60) SSL certificate problem'));
+
+    const result = await testConnectivity(
+      {
+        getMixedPort: () => 7890,
+        getControllerPort: () => 9090,
+        getControllerSecret: async () => 'secret',
+        isRunning: () => true
+      },
+      'steam',
+      { runProbe }
+    );
+
+    expect(runProbe).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ status: 'failed', statusText: '失败', error: 'TLS 证书校验失败' });
   });
 });

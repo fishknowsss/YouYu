@@ -1,8 +1,11 @@
 import { useEffect, useRef } from 'react';
 import type { AppSnapshot, MihomoMode, StrategyKey } from '../../shared/ipc';
+import { updateInstallingMessage } from '../../shared/updateProgress';
 import type { UsageMode } from '../components/AppShell';
 import { BrandMark } from '../components/BrandMark';
+import { DashboardPanel } from '../components/DashboardPanel';
 import { PowerButton } from '../components/PowerButton';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { isActionErrorMessage } from '../actionMessages';
 
 type HomeProps = {
@@ -104,30 +107,53 @@ function EasyUpdateNotice({
   onInstallUpdate: () => void;
 }) {
   const update = snapshot.update;
-  const visible = update.status === 'available' || update.status === 'downloading' || update.status === 'downloaded';
+  const visible =
+    update.status === 'available' ||
+    update.status === 'downloading' ||
+    update.status === 'downloaded' ||
+    update.status === 'installing';
   if (!visible) return null;
 
   const downloaded = update.status === 'downloaded';
   const downloading = update.status === 'downloading';
+  const installing = update.status === 'installing';
   const version = update.downloadedVersion || update.availableVersion;
   const verifying = update.downloadPhase === 'verifying';
   const downloadingFullPackage = update.downloadPhase === 'full-download';
-  const text = downloaded
-    ? `已下载 ${version ?? '新版本'}`
-    : downloading
-      ? verifying
-        ? '校验更新包'
+  const text = installing
+    ? updateInstallingMessage
+    : downloaded
+      ? update.message
+        ? '安装未开始，请重试'
+        : `已下载 ${version ?? '新版本'}`
+      : downloading
+        ? verifying
+          ? '校验更新包'
+          : version
+            ? `${downloadingFullPackage ? '下载完整包' : '下载更新'} ${version}`
+            : downloadingFullPackage
+              ? '下载完整包'
+              : '下载更新'
         : version
-          ? `${downloadingFullPackage ? '下载完整包' : '下载更新'} ${version}`
-          : downloadingFullPackage
-            ? '下载完整包'
-            : '下载更新'
-      : version
-        ? `发现 ${version}`
-        : '发现更新';
+          ? `发现 ${version}`
+          : '发现更新';
   const progress = getDisplayUpdateProgress(update);
-  const noticeClass = downloaded ? 'is-ready' : downloading ? 'is-downloading' : 'is-available';
-  const stateLabel = verifying ? '校验中' : downloadingFullPackage ? '完整包' : downloading ? '下载中' : '准备中';
+  const noticeClass = installing
+    ? 'is-installing'
+    : downloaded
+      ? 'is-ready'
+      : downloading
+        ? 'is-downloading'
+        : 'is-available';
+  const stateLabel = installing
+    ? '即将重启'
+    : verifying
+      ? '校验中'
+      : downloadingFullPackage
+        ? '完整包'
+        : downloading
+          ? '下载中'
+          : '准备中';
 
   return (
     <aside className={`easy-update-notice ${noticeClass}`} aria-live="polite">
@@ -174,18 +200,18 @@ function AdvancedHome(props: HomeProps) {
 
   return (
     <div className="workspace advanced-workspace">
-      <header className="workspace-header">
-        <div>
-          <h1>控制台</h1>
-          <p>代理状态与节点</p>
-        </div>
-        <div className="header-actions">
-          <button className="secondary-button mode-return-button" onClick={() => props.onUsageModeChange('easy')}>
-            返回小白
-          </button>
-          <span className={`status-badge ${props.snapshot.status}`}>{statusLabel}</span>
-        </div>
-      </header>
+      <WorkspaceHeader
+        title="控制台"
+        description="代理状态与节点"
+        actions={
+          <>
+            <button className="secondary-button mode-return-button" onClick={() => props.onUsageModeChange('easy')}>
+              返回小白
+            </button>
+            <span className={`status-badge ${props.snapshot.status}`}>{statusLabel}</span>
+          </>
+        }
+      />
 
       <section className={`home-board advanced-board ${running ? 'is-running' : ''} ${failed ? 'is-failed' : ''}`}>
         <div className="connection-card">
@@ -240,8 +266,7 @@ function AdvancedHome(props: HomeProps) {
           </div>
         </section>
 
-        <section className="panel runtime-panel">
-          <h2>运行数据</h2>
+        <DashboardPanel className="runtime-panel" title="运行数据">
           <div className="runtime-metric-grid">
             <RuntimeMetric label="今日上传" value={formatBytes(props.snapshot.traffic.todayUpload)} />
             <RuntimeMetric label="今日下载" value={formatBytes(props.snapshot.traffic.todayDownload)} />
@@ -260,31 +285,35 @@ function AdvancedHome(props: HomeProps) {
               variant="node"
             />
           </div>
-        </section>
+        </DashboardPanel>
 
-        <section className="panel diagnostics-panel">
-          <div className="panel-title-row">
-            <h2>诊断</h2>
-            <span>{props.snapshot.diagnostics.logs.length} 条</span>
-          </div>
-          {diagnosticMessage && (
-            <div className="diagnostics-status" aria-live="polite">
-              <p className={isActionErrorMessage(diagnosticMessage) ? 'diagnostics-error' : ''}>{diagnosticMessage}</p>
-              {isActionErrorMessage(diagnosticMessage) && (
-                <button className="diagnostics-repair" disabled={props.busy} onClick={props.onRepair}>
-                  修复
-                </button>
+        <DashboardPanel
+          className="diagnostics-panel"
+          title="诊断"
+          meta={<span>{props.snapshot.diagnostics.logs.length} 条</span>}
+        >
+          <div className="diagnostics-body">
+            {diagnosticMessage && (
+              <div className="diagnostics-status" aria-live="polite">
+                <p className={isActionErrorMessage(diagnosticMessage) ? 'diagnostics-error' : ''}>
+                  {diagnosticMessage}
+                </p>
+                {isActionErrorMessage(diagnosticMessage) && (
+                  <button className="diagnostics-repair" disabled={props.busy} onClick={props.onRepair}>
+                    修复
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="diagnostics-log" ref={diagnosticsLogRef}>
+              {logLines.length ? (
+                logLines.map((line, index) => <span key={`${index}-${line}`}>{line}</span>)
+              ) : (
+                <span>暂无日志</span>
               )}
             </div>
-          )}
-          <div className="diagnostics-log" ref={diagnosticsLogRef}>
-            {logLines.length ? (
-              logLines.map((line, index) => <span key={`${index}-${line}`}>{line}</span>)
-            ) : (
-              <span>暂无日志</span>
-            )}
           </div>
-        </section>
+        </DashboardPanel>
       </section>
     </div>
   );

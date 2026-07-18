@@ -21,7 +21,9 @@ type ConnectivityService = {
   kind: 'trace' | 'http' | 'flow';
 };
 
-type CurlProbe = {
+const steamConnectivityKeys = new Set<ConnectivityServiceKey>(['steam', 'steamNetwork', 'steamCloud']);
+
+export type CurlProbe = {
   httpCode?: number;
   finalUrl?: string;
   remoteIp?: string;
@@ -54,7 +56,7 @@ export const connectivityServices: ConnectivityService[] = [
     key: 'steam',
     name: 'Steam',
     url: 'https://store.steampowered.com',
-    probeUrl: 'https://store.steampowered.com',
+    probeUrl: 'https://store.steampowered.com/robots.txt',
     host: 'store.steampowered.com',
     category: 'special',
     kind: 'http'
@@ -194,10 +196,23 @@ export type ConnectivityDeps = {
   isRunning: () => boolean;
 };
 
+export type ConnectivityProbeRunner = (
+  url: string,
+  mixedPort: number,
+  options: { captureBody: boolean; signal?: AbortSignal }
+) => Promise<CurlProbe>;
+
+export type ConnectivityTestOptions = {
+  signal?: AbortSignal;
+  runProbe?: ConnectivityProbeRunner;
+};
+
 export async function testConnectivity(
   deps: ConnectivityDeps,
-  key: ConnectivityServiceKey
+  key: ConnectivityServiceKey,
+  options: ConnectivityTestOptions = {}
 ): Promise<ConnectivityResult> {
+  throwIfConnectivityTestAborted(options.signal);
   const service = findService(key);
   if (!deps.isRunning()) {
     return createResult(service, 'failed', '未启动', {}, '先启动代理');
@@ -205,7 +220,7 @@ export async function testConnectivity(
 
   const checkedAt = new Date().toISOString();
   try {
-    const probe = await runCurlProbe(service.probeUrl, deps.getMixedPort(), service.kind === 'trace');
+    const probe = await runServiceProbe(service, deps.getMixedPort(), options);
     const route = await findRecentConnection(deps, service.host).catch(() => undefined);
     const status = getServiceStatus(service.key, probe);
     const reachability = getReachability(service.key, probe);
@@ -232,10 +247,53 @@ export async function testConnectivity(
       chains: route?.chains
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const timeout = /timed out|timeout|operation timeout/i.test(message);
+    throwIfConnectivityTestAborted(options.signal);
+    const message = formatProbeError(error);
+    const timeout = /超时|timed out|timeout|operation timeout/i.test(message);
     return createResult(service, timeout ? 'timeout' : 'failed', timeout ? '超时' : '失败', {}, message, checkedAt);
   }
+}
+
+async function runServiceProbe(
+  service: ConnectivityService,
+  mixedPort: number,
+  options: ConnectivityTestOptions
+): Promise<CurlProbe> {
+  const runProbe = options.runProbe ?? runCurlProbe;
+  const attempts = steamConnectivityKeys.has(service.key) ? 2 : 1;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    throwIfConnectivityTestAborted(options.signal);
+    try {
+      return await runProbe(service.probeUrl, mixedPort, {
+        captureBody: service.kind === 'trace',
+        signal: options.signal
+      });
+    } catch (error) {
+      throwIfConnectivityTestAborted(options.signal);
+      if (attempt + 1 >= attempts || !isTransientProbeFailure(error)) throw error;
+    }
+  }
+
+  throw new Error('connectivity probe did not run');
+}
+
+function formatProbeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/could not resolve|resolve host|name or service not known/i.test(message)) return 'DNS 解析失败';
+  if (/certificate|cert verify|cert_authority_invalid/i.test(message)) return 'TLS 证书校验失败';
+  if (/ssl|tls|schannel|handshake/i.test(message)) {
+    return /timed out|timeout/i.test(message) ? 'TLS 握手超时' : 'TLS 握手失败';
+  }
+  if (/failed to connect|connection timed out|connect.*timed out/i.test(message)) return 'TCP 连接超时';
+  return message;
+}
+
+function isTransientProbeFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /timed out|timeout|could not resolve|temporary failure|failed to connect|connection refused|connection reset|recv failure|receive failure|empty reply|ssl connect error|tls connect|handshake failure/i.test(
+    message
+  );
 }
 
 export async function testAllConnectivity(deps: ConnectivityDeps): Promise<ConnectivityResult[]> {
@@ -290,7 +348,11 @@ function findService(key: ConnectivityServiceKey): ConnectivityService {
   return service;
 }
 
-async function runCurlProbe(url: string, mixedPort: number, captureBody = false): Promise<CurlProbe> {
+async function runCurlProbe(
+  url: string,
+  mixedPort: number,
+  options: { captureBody: boolean; signal?: AbortSignal }
+): Promise<CurlProbe> {
   const outputTarget = process.platform === 'win32' ? 'NUL' : '/dev/null';
   const args = [
     '--proxy',
@@ -304,7 +366,7 @@ async function runCurlProbe(url: string, mixedPort: number, captureBody = false)
     '8',
     '--user-agent',
     'Mozilla/5.0 YouYu Connectivity Check',
-    ...(captureBody ? [] : ['--output', outputTarget]),
+    ...(options.captureBody ? [] : ['--output', outputTarget]),
     '--write-out',
     '\n__YOUYU_CURL_METRICS__\nhttp_code=%{http_code}\nurl_effective=%{url_effective}\nremote_ip=%{remote_ip}\ntime_connect=%{time_connect}\ntime_appconnect=%{time_appconnect}\ntime_starttransfer=%{time_starttransfer}\ntime_total=%{time_total}\n',
     url
@@ -312,9 +374,15 @@ async function runCurlProbe(url: string, mixedPort: number, captureBody = false)
   const curlCommand = process.platform === 'win32' ? 'curl.exe' : 'curl';
   const { stdout } = await execFileAsync(curlCommand, args, {
     windowsHide: true,
-    maxBuffer: 1024 * 1024
+    maxBuffer: 1024 * 1024,
+    signal: options.signal
   });
   return parseCurlMetrics(stdout);
+}
+
+function throwIfConnectivityTestAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error('operation canceled');
 }
 
 export function parseTraceData(body?: string): TraceData {

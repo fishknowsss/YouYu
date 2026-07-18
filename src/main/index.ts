@@ -70,7 +70,7 @@ import {
   type StrategyGroup,
   type StrategyKey
 } from '../shared/ipc';
-import { getUpdateDownloadPhase, normalizeUpdateBytes } from '../shared/updateProgress';
+import { getUpdateDownloadPhase, normalizeUpdateBytes, updateInstallingMessage } from '../shared/updateProgress';
 import { deferUpdateInstallerLaunch } from './updateInstallHandoff';
 import { createPetVisibilityController } from './petVisibilityController';
 import { applyPetWindowTaskbarPolicy } from './petWindowPolicy';
@@ -889,21 +889,22 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
   updateInstallRuntimeIntentGeneration = runtimeIntent.capture();
   const installAttempt = ++updateInstallAttempt;
   lifecycle.suspendStarts();
-  setUpdateSnapshot({ status: 'installing' });
+  setUpdateSnapshot({ status: 'installing', message: updateInstallingMessage });
   try {
     await prepareForUpdateInstall();
     if (installAttempt !== updateInstallAttempt || !updateInstallerLaunchPending) {
       throw new Error('update install preparation canceled');
     }
     const snapshot = await createSnapshot();
-    cleanupFinished = true;
-    isQuitting = true;
+    refreshTrayMenu();
     deferUpdateInstallerLaunch({
       launch: () => {
         if (!updateInstallerLaunchPending || updateInstallAttempt !== installAttempt) {
           return;
         }
         updateInstallerLaunchStarted = true;
+        cleanupFinished = true;
+        isQuitting = true;
         autoUpdater.quitAndInstall(true, true);
       },
       onError: recoverFromUpdateInstallerLaunchFailure
@@ -943,6 +944,7 @@ function recoverFromUpdateInstallFailure(prefix: string, error: unknown) {
   restartPetFullscreenProbe();
   appendLog(message);
   setUpdateSnapshot({ status: 'downloaded', message });
+  refreshTrayMenu();
   startRemoteConfigPolling();
   if (shouldRestartRuntime && restartIntentGeneration !== undefined) {
     void startLifecycleWithRepairRetry(undefined, restartIntentGeneration)
@@ -953,6 +955,10 @@ function recoverFromUpdateInstallFailure(prefix: string, error: unknown) {
       })
       .catch((restartError) => recordError('安装取消后的代理恢复失败', restartError));
   }
+}
+
+function isUpdateInstallerHandoffPending(): boolean {
+  return updateInstallerLaunchPending && !updateInstallerLaunchStarted;
 }
 
 async function prepareForUpdateInstall(): Promise<void> {
@@ -1524,6 +1530,7 @@ async function ensureCurrentNodeUsable(generation: number): Promise<number> {
   );
   if (!isCurrentNodeHealthGeneration(generation)) return nodeHealthIntervalMs;
   await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+  await mihomoApi.flushDnsCache().catch((error) => appendLog(`刷新 DNS 缓存失败: ${formatError(error)}`));
   if (!isCurrentNodeHealthGeneration(generation)) return nodeHealthIntervalMs;
   appendLog(`已切换可用节点: ${selectedNode}`);
   currentNodeHealthFailures = 0;
@@ -1755,6 +1762,7 @@ async function selectBestAutoNode(signal?: AbortSignal): Promise<AppSnapshot> {
   }
 
   await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+  await mihomoApi.flushDnsCache().catch((error) => appendLog(`刷新 DNS 缓存失败: ${formatError(error)}`));
   appendLog(`已自动选择可用节点: ${selectedNode}`);
   clearLastError();
   scheduleNodeHealthCheck(0);
@@ -2206,6 +2214,7 @@ function registerIpc() {
     const selectedNode = await selectVerifiedManualNode(mihomoApi, name);
     await settingsStore.update({ strategy: 'manual', selectedNode });
     await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+    await mihomoApi.flushDnsCache().catch((error) => appendLog(`刷新 DNS 缓存失败: ${formatError(error)}`));
     scheduleNodeHealthCheck(0);
     return createSnapshot();
   });
@@ -2317,15 +2326,18 @@ function registerIpc() {
     sendSnapshotToWindows(snapshot);
     return snapshot;
   });
-  ipcMain.handle(ipcChannels.testConnectivity, async (_event, key) => {
-    return testConnectivity(
-      {
-        getMixedPort: () => runtimePorts.mixedPort,
-        getControllerPort: () => runtimePorts.controllerPort,
-        getControllerSecret: async () => (await settingsStore.read()).controllerSecret,
-        isRunning: () => lifecycle.getStatus() === 'running'
-      },
-      key
+  ipcMain.handle(ipcChannels.testConnectivity, async (event, key, request?: OperationRequest) => {
+    return runCancelableOperation(event.sender.id, request, (signal) =>
+      testConnectivity(
+        {
+          getMixedPort: () => runtimePorts.mixedPort,
+          getControllerPort: () => runtimePorts.controllerPort,
+          getControllerSecret: async () => (await settingsStore.read()).controllerSecret,
+          isRunning: () => lifecycle.getStatus() === 'running'
+        },
+        key,
+        { signal }
+      )
     );
   });
   ipcMain.handle(ipcChannels.testAllConnectivity, async () => {
@@ -2838,7 +2850,12 @@ function showPetContextMenu() {
     { type: 'separator' },
     {
       label: '退出',
+      enabled: !isUpdateInstallerHandoffPending(),
       click: () => {
+        if (isUpdateInstallerHandoffPending()) {
+          showMainWindow();
+          return;
+        }
         isQuitting = true;
         void cleanupBeforeExit();
       }
@@ -3173,8 +3190,12 @@ function refreshTrayMenu() {
     { type: 'separator' },
     {
       label: '退出',
-      enabled: !trayBusy,
+      enabled: !trayBusy && !isUpdateInstallerHandoffPending(),
       click: () => {
+        if (isUpdateInstallerHandoffPending()) {
+          showMainWindow();
+          return;
+        }
         isQuitting = true;
         void cleanupBeforeExit();
       }
@@ -3399,6 +3420,12 @@ type ExitCleanupOptions = {
 };
 
 async function cleanupBeforeExit(options: ExitCleanupOptions = {}): Promise<boolean> {
+  if (isUpdateInstallerHandoffPending()) {
+    isQuitting = false;
+    showMainWindow();
+    if (options.throwOnFailure) throw new Error('update installer launch pending');
+    return false;
+  }
   if (cleanupStarted) {
     if (options.throwOnFailure) throw new Error('application cleanup already in progress');
     return false;
@@ -3531,6 +3558,12 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
+  if (isUpdateInstallerHandoffPending()) {
+    event.preventDefault();
+    isQuitting = false;
+    showMainWindow();
+    return;
+  }
   if (updateInstallerLaunchPending && updateInstallerLaunchStarted) {
     updateInstallerBeforeQuitObserved = true;
   }
