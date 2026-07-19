@@ -149,7 +149,7 @@ export default {
       if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/admin')) {
         return new Response(adminPage(), {
           headers: {
-            'cache-control': 'no-store',
+            'cache-control': 'no-store, no-transform',
             'content-security-policy':
               "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
             'content-type': 'text/html; charset=utf-8',

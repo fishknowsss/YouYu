@@ -41,7 +41,7 @@ export function NodeSelect({
         actions={
           <>
             <button
-              className="secondary-button"
+              className="wide-button"
               disabled={busy && !testingAll}
               onClick={testingAll ? onCancelTestAll : onTestAll}
             >

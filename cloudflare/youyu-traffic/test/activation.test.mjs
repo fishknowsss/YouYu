@@ -3,6 +3,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { JSDOM } from 'jsdom';
 
 import worker from '../src/index.ts';
 
@@ -11,6 +12,14 @@ const registrationPassphrase = 'shared-registration-secret';
 const adminToken = 'admin-secret';
 const maxRequestBodyBytes = 16 * 1024;
 const maxAdminConfigBodyBytes = 64 * 1024;
+
+async function waitFor(predicate, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('timed out waiting for condition');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 test('an existing name attaches another device to the same user data', async (context) => {
   const database = createD1Database();
@@ -712,14 +721,29 @@ test('admin page exposes the redesigned two-profile workspace without removed co
   });
 
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get('cache-control'), 'no-store');
-  assert.match(response.headers.get('content-security-policy') ?? '', /frame-ancestors 'none'/);
+  assert.equal(response.headers.get('cache-control'), 'no-store, no-transform');
+  const contentSecurityPolicy = response.headers.get('content-security-policy') ?? '';
+  assert.match(contentSecurityPolicy, /frame-ancestors 'none'/);
+  assert.match(contentSecurityPolicy, /script-src 'unsafe-inline';/);
+  assert.doesNotMatch(contentSecurityPolicy, /static\.cloudflareinsights\.com/);
+  assert.match(contentSecurityPolicy, /connect-src 'self'/);
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   const page = await response.text();
   const script = page.match(/<script>([\s\S]*?)<\/script>/)?.[1];
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));
   assert.match(page, /class="admin-workspace"/);
+  assert.match(page, /id="changeToken"[^>]*aria-expanded="true"/);
+  assert.match(page, /class="management-grid"/);
+  assert.match(page, /<table class="users-table">\s*<colgroup>/);
+  assert.match(page, /html\s*\{[^}]*overflow-y:\s*scroll;[^}]*scrollbar-gutter:\s*stable both-edges;/);
+  assert.match(page, /table\s*\{[^}]*table-layout:\s*fixed;/);
+  assert.match(page, /\.sort-mark\s*\{[^}]*width:\s*16px;/);
+  assert.doesNotMatch(page, /scrollIntoView\(/);
+  assert.doesNotMatch(page, /button\[aria-busy="true"\]\s*\{[^}]*padding-right:/);
+  assert.match(page, /let committedToken = sessionToken \|\| legacyToken;/);
+  assert.match(page, /const token = tokenOverride \|\| committedToken;/);
+  assert.doesNotMatch(page, /tokenInput\.value\.trim\(\) \|\| sessionStorage/);
   assert.match(page, /value="ruleset">智能规则/);
   assert.match(page, /value="subscription">机场规则/);
   assert.match(page, /id="mergeTitle">合并用户/);
@@ -739,6 +763,58 @@ test('admin page exposes the redesigned two-profile workspace without removed co
   ]) {
     assert.equal(page.includes(removed), false, removed);
   }
+});
+
+test('admin page never uses an unsubmitted token draft for API requests', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const response = await worker.fetch(new Request('https://worker.example/admin'), {
+    DB: database,
+    REGISTRATION_PASSPHRASE: registrationPassphrase,
+    ADMIN_TOKEN: adminToken
+  });
+  const page = await response.text();
+  const requests = [];
+  const dom = new JSDOM(page, {
+    beforeParse(window) {
+      window.sessionStorage.setItem('youyu_admin_token', 'committed-token');
+      window.fetch = async (input, init = {}) => {
+        const path = String(input);
+        requests.push({ path, authorization: init.headers?.authorization });
+        const body = path.endsWith('/config')
+          ? { config: {} }
+          : path.endsWith('/users')
+            ? { users: [] }
+            : { anomalies: [] };
+        return new Response(JSON.stringify(body), {
+          headers: { 'content-type': 'application/json' },
+          status: 200
+        });
+      };
+    },
+    runScripts: 'dangerously',
+    url: 'https://worker.example/admin'
+  });
+  context.after(() => dom.window.close());
+
+  const document = dom.window.document;
+  await waitFor(() => document.getElementById('adminWorkspace').hidden === false);
+  assert.equal(document.getElementById('changeToken').getAttribute('aria-expanded'), 'false');
+  assert.ok(requests.length >= 3);
+  assert.ok(requests.every((request) => request.authorization === 'Bearer committed-token'));
+
+  document.getElementById('changeToken').click();
+  const tokenInput = document.getElementById('token');
+  tokenInput.value = 'unsaved-token';
+  const refreshButton = document.getElementById('refresh');
+  const requestCount = requests.length;
+  refreshButton.dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true }));
+  refreshButton.click();
+
+  await waitFor(() => requests.length >= requestCount + 3);
+  assert.equal(tokenInput.value, 'committed-token');
+  assert.equal(document.getElementById('changeToken').getAttribute('aria-expanded'), 'false');
+  assert.ok(requests.slice(requestCount).every((request) => request.authorization === 'Bearer committed-token'));
 });
 
 test('admin config writes reject non-object JSON and bodies larger than 64 KiB', async (context) => {

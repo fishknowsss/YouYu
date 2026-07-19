@@ -9,15 +9,15 @@ export function adminPage(): string {
   <style>
     :root {
       color-scheme: light;
-      --canvas: #f2f5f7;
+      --canvas: #f4f6f8;
       --panel: #ffffff;
-      --panel-subtle: #f7f9fa;
-      --ink: #18242f;
-      --ink-soft: #344654;
-      --muted: #697985;
-      --line: #dbe3e7;
-      --line-strong: #c4d0d6;
-      --hover: #efe4fb;
+      --panel-subtle: #f7f8fa;
+      --ink: #17202a;
+      --ink-soft: #3d4854;
+      --muted: #66727e;
+      --line: #dfe3e8;
+      --line-strong: #c9d0d8;
+      --hover: #f0f2f5;
       --accent: #7c4dbc;
       --accent-hover: #6f45ad;
       --accent-soft: #efe9fa;
@@ -27,19 +27,27 @@ export function adminPage(): string {
       --warning-soft: #fbefdf;
       --danger: #ac3b35;
       --danger-soft: #f9e9e7;
-      --shadow: 0 12px 32px rgba(35, 55, 68, 0.07);
+      --shadow: 0 1px 2px rgba(31, 42, 55, 0.045);
+      --shadow-float: 0 18px 48px rgba(31, 42, 55, 0.16);
       --radius: 12px;
       --radius-control: 9px;
       --focus: 0 0 0 3px rgba(124, 77, 188, 0.22);
+      --control-height: 40px;
+      --page-gap: 16px;
     }
 
     * { box-sizing: border-box; }
-    html { min-width: 320px; background: var(--canvas); }
+    html {
+      min-width: 320px;
+      overflow-y: scroll;
+      scrollbar-gutter: stable both-edges;
+      background: var(--canvas);
+    }
     body {
       min-width: 320px;
       min-height: 100vh;
       margin: 0;
-      padding: 24px;
+      padding: 20px 24px 32px;
       background: var(--canvas);
       color: var(--ink);
       font-family: "Segoe UI Variable Text", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
@@ -66,19 +74,27 @@ export function adminPage(): string {
     }
 
     .admin-shell {
-      width: min(1600px, 100%);
+      position: relative;
+      width: min(1560px, 100%);
       min-width: 0;
       margin: 0 auto;
     }
 
     .topbar {
+      position: sticky;
+      top: 12px;
+      z-index: 20;
       display: flex;
-      align-items: flex-end;
+      align-items: center;
       justify-content: space-between;
-      gap: 20px;
-      min-height: 62px;
-      margin-bottom: 18px;
-      padding: 0 2px;
+      gap: 24px;
+      min-height: 72px;
+      margin-bottom: var(--page-gap);
+      padding: 12px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow);
     }
 
     .topbar h1,
@@ -88,49 +104,61 @@ export function adminPage(): string {
 
     .topbar h1 {
       font-family: "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
-      font-size: clamp(26px, 2vw, 32px);
+      font-size: clamp(24px, 2vw, 30px);
       font-weight: 720;
       line-height: 1.08;
       letter-spacing: -0.025em;
     }
 
     .status-text {
+      max-width: min(70vw, 920px);
       min-height: 21px;
-      margin-top: 6px !important;
+      margin-top: 4px !important;
       color: var(--muted);
       font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .action-group {
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       gap: 8px;
     }
 
     button {
       position: relative;
-      min-width: 82px;
-      min-height: 40px;
+      min-width: 88px;
+      height: var(--control-height);
+      min-height: var(--control-height);
+      display: inline-grid;
+      place-items: center;
+      flex: none;
       border: 1px solid transparent;
       border-radius: var(--radius-control);
       padding: 0 15px;
       background: var(--accent);
       color: #ffffff;
       font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
       cursor: pointer;
-      transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+      transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+      --button-spinner: #ffffff;
     }
 
     button:hover:not(:disabled) { background: var(--accent-hover); }
-    button:active:not(:disabled) { transform: translateY(1px); }
+    button:active:not(:disabled) { box-shadow: inset 0 0 0 1px rgba(23, 32, 42, 0.12); }
     button:disabled { cursor: not-allowed; opacity: 0.52; }
 
     button.secondary {
       border-color: var(--line);
       background: var(--hover);
       color: var(--ink-soft);
+      --button-spinner: var(--accent);
     }
 
     button.secondary:hover:not(:disabled) {
@@ -143,6 +171,7 @@ export function adminPage(): string {
       border-color: #edcbc7;
       background: var(--danger-soft);
       color: var(--danger);
+      --button-spinner: var(--danger);
     }
 
     button.danger-button:hover:not(:disabled) {
@@ -151,15 +180,15 @@ export function adminPage(): string {
       color: #8f2f2a;
     }
 
-    button[aria-busy="true"] { padding-right: 38px; }
+    button[aria-busy="true"] { color: transparent; }
     button[aria-busy="true"]::after {
       position: absolute;
       top: 50%;
-      right: 14px;
+      left: 50%;
       width: 14px;
       height: 14px;
-      margin-top: -7px;
-      border: 2px solid currentColor;
+      margin: -7px 0 0 -7px;
+      border: 2px solid var(--button-spinner);
       border-right-color: transparent;
       border-radius: 50%;
       content: "";
@@ -167,23 +196,34 @@ export function adminPage(): string {
     }
 
     .auth-panel {
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      z-index: 30;
       display: grid;
       grid-template-columns: minmax(220px, 1fr) auto;
       gap: 10px;
-      width: min(640px, 100%);
-      margin: 0 0 18px auto;
+      width: min(560px, calc(100vw - 48px));
+      margin: 0;
       padding: 12px;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: var(--panel);
-      box-shadow: var(--shadow);
+      box-shadow: var(--shadow-float);
     }
 
     .admin-workspace {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(360px, 430px);
+      grid-template-columns: minmax(0, 1fr);
       align-items: start;
-      gap: 16px;
+      gap: var(--page-gap);
+    }
+
+    .management-grid {
+      display: grid;
+      grid-template-columns: minmax(390px, 0.82fr) minmax(520px, 1.18fr);
+      align-items: start;
+      gap: var(--page-gap);
     }
 
     .panel {
@@ -192,6 +232,7 @@ export function adminPage(): string {
       border-radius: var(--radius);
       background: var(--panel);
       box-shadow: var(--shadow);
+      overflow: clip;
     }
 
     .panel-head,
@@ -203,17 +244,29 @@ export function adminPage(): string {
     }
 
     .panel-head {
-      min-height: 66px;
-      padding: 14px 16px;
+      min-height: 64px;
+      padding: 12px 16px;
       border-bottom: 1px solid var(--line);
     }
 
     .panel-head h2,
     .section-head h3 {
+      min-width: 0;
       font-family: "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
       color: var(--ink);
       font-weight: 700;
       line-height: 1.2;
+    }
+
+    .panel-head h2 {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .panel-head > .action-group {
+      flex: none;
+      flex-wrap: nowrap;
     }
 
     .panel-head h2 { font-size: 18px; }
@@ -225,9 +278,10 @@ export function adminPage(): string {
       padding: 16px;
     }
 
-    .users-panel { overflow: hidden; }
+    .users-panel { overflow: clip; }
     .users-panel .table-wrap {
-      overflow-x: auto;
+      max-height: min(48vh, 520px);
+      overflow: auto;
       scrollbar-gutter: stable;
     }
 
@@ -235,12 +289,13 @@ export function adminPage(): string {
       display: grid;
       gap: 14px;
       min-width: 0;
-      padding-left: 4px;
-      border-left: 3px solid var(--accent-soft);
     }
 
-    .detail-rail > .panel { box-shadow: none; }
-    .placeholder-panel .panel-body { min-height: 120px; align-content: center; }
+    .detail-rail > .panel { box-shadow: var(--shadow); }
+    .global-config,
+    .placeholder-panel,
+    #userConfigPanel { min-height: 488px; }
+    .placeholder-panel .panel-body { min-height: 486px; align-content: center; justify-items: center; text-align: center; }
 
     .muted { color: var(--muted); }
     .count-text {
@@ -271,7 +326,7 @@ export function adminPage(): string {
     select {
       width: 100%;
       min-width: 0;
-      height: 42px;
+      height: var(--control-height);
       border: 1px solid var(--line-strong);
       border-radius: var(--radius-control);
       padding: 0 11px;
@@ -376,15 +431,25 @@ export function adminPage(): string {
       background: var(--warning-soft);
     }
 
-    .table-wrap { min-width: 0; overflow-x: auto; }
+    .table-wrap { min-width: 0; overflow: auto; }
     table {
       width: 100%;
       min-width: 580px;
       border-collapse: collapse;
+      table-layout: fixed;
       font-variant-numeric: tabular-nums;
     }
 
-    .users-table { min-width: 900px; }
+    .users-table { min-width: 1040px; }
+    .users-table .col-name { width: 17%; }
+    .users-table .col-subscription { width: 11%; }
+    .users-table .col-devices { width: 7%; }
+    .users-table .col-upload,
+    .users-table .col-download,
+    .users-table .col-total { width: 10.5%; }
+    .users-table .col-anomalies { width: 7%; }
+    .users-table .col-seen { width: 18%; }
+    .users-table .col-actions { width: 8.5%; }
     th,
     td {
       padding: 11px 9px;
@@ -392,7 +457,11 @@ export function adminPage(): string {
       text-align: left;
       vertical-align: middle;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
+
+    .users-table td { height: 56px; }
 
     th {
       position: sticky;
@@ -408,7 +477,12 @@ export function adminPage(): string {
     th.sortable button {
       width: 100%;
       min-width: 0;
+      height: 44px;
       min-height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 4px;
       border: 0;
       border-radius: 0;
       padding: 0 9px;
@@ -421,22 +495,32 @@ export function adminPage(): string {
     th.sortable button:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
     th[aria-sort="ascending"] button,
     th[aria-sort="descending"] button { color: var(--ink); }
-    .sort-mark { margin-left: 3px; color: #95a3ac; }
+    .sort-mark {
+      width: 16px;
+      height: 16px;
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 16px;
+      margin: 0;
+      color: #95a3ac;
+      line-height: 1;
+    }
     th[aria-sort="ascending"] .sort-mark,
     th[aria-sort="descending"] .sort-mark { color: var(--accent); }
 
     td.num,
     th.num,
     th.num button { text-align: right; }
+    th.num button { justify-content: flex-end; }
 
-    tbody tr { transition: background-color 120ms ease; }
+    tbody tr { transition: background-color 120ms ease, box-shadow 120ms ease; }
     .users-table tbody tr { cursor: pointer; }
     tbody tr:hover { background: #f6f9fa; }
-    tbody tr.is-active { background: var(--accent-soft); }
+    tbody tr.is-active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
     tbody tr:last-child td { border-bottom: 0; }
 
     .user-name-cell {
-      max-width: 170px;
+      max-width: 0;
       overflow: hidden;
       color: var(--ink);
       font-weight: 700;
@@ -444,8 +528,9 @@ export function adminPage(): string {
     }
 
     .table-action {
-      min-width: 66px;
-      min-height: 36px;
+      min-width: 72px;
+      height: 34px;
+      min-height: 34px;
       padding: 0 12px;
     }
 
@@ -500,50 +585,103 @@ export function adminPage(): string {
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    @media (max-width: 1180px) {
-      body { padding: 18px; }
-      .admin-workspace { grid-template-columns: 1fr; }
-      .users-panel .table-wrap { max-height: none; }
-      .detail-rail {
-        position: static;
-        max-height: none;
-        padding-left: 0;
-        border-left: 0;
-      }
+    @media (max-width: 1100px) {
+      body { padding: 16px; }
+      .management-grid { grid-template-columns: minmax(0, 1fr); }
+      .global-config,
+      .placeholder-panel,
+      #userConfigPanel { min-height: 0; }
+      .placeholder-panel .panel-body { min-height: 180px; }
+      .users-panel .table-wrap { max-height: min(52vh, 480px); }
     }
 
     @media (max-width: 720px) {
-      body { padding: 12px; }
-      .topbar { align-items: flex-start; margin-bottom: 14px; }
-      .topbar h1 { font-size: 25px; }
-      .auth-panel { grid-template-columns: 1fr; }
+      body { padding: 10px; }
+      .topbar {
+        top: 8px;
+        min-height: 68px;
+        gap: 12px;
+        margin-bottom: 12px;
+        padding: 10px 12px;
+      }
+      .topbar h1 { font-size: 23px; }
+      .status-text {
+        max-width: 48vw;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .topbar button { min-width: 76px; padding: 0 12px; }
+      .auth-panel {
+        grid-template-columns: 1fr;
+        width: min(480px, calc(100vw - 20px));
+      }
+      .admin-workspace,
+      .management-grid { gap: 12px; }
       .panel-head,
       .section-head { align-items: flex-start; }
       .form-grid,
       .preview-grid { grid-template-columns: 1fr; }
-      .field.wide { grid-column: auto; }
-      .users-panel .table-wrap { overflow: visible; }
-      .users-table { min-width: 0; }
-      .users-table thead { display: none; }
-      .users-table,
-      .users-table tbody,
-      .users-table tr,
-      .users-table td { display: block; width: 100%; }
-      .users-table tbody { display: grid; gap: 10px; padding: 12px; }
-      .users-table tr {
+      .field.wide,
+      .field-error.wide { grid-column: auto; }
+      .users-panel .table-wrap {
+        max-height: min(68vh, 660px);
+        overflow: auto;
+        scrollbar-gutter: stable;
+      }
+      .users-table { display: block; min-width: 0; }
+      .users-table colgroup { display: none; }
+      .users-table thead {
+        position: sticky;
+        top: 0;
+        z-index: 4;
+        display: block;
+        overflow-x: auto;
+        border-bottom: 1px solid var(--line);
+        scrollbar-width: thin;
+      }
+      .users-table thead tr {
+        width: max-content;
+        display: flex;
+      }
+      .users-table thead th {
+        position: static;
+        width: 92px;
+        display: block;
+        flex: 0 0 92px;
+        border-right: 1px solid var(--line);
+        border-bottom: 0;
+      }
+      .users-table thead th:nth-child(8) { width: 112px; flex-basis: 112px; }
+      .users-table thead th:last-child { display: none; }
+      .users-table tbody {
+        display: grid;
+        gap: 10px;
+        padding: 10px;
+        background: var(--panel-subtle);
+      }
+      .users-table tbody tr {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         overflow: hidden;
         border: 1px solid var(--line);
         border-radius: 10px;
         background: #ffffff;
+        box-shadow: none;
       }
-      .users-table tr.is-active { border-color: #bca7da; background: var(--accent-soft); }
+      .users-table tbody tr.is-active {
+        border-color: #bca7da;
+        background: var(--accent-soft);
+        box-shadow: inset 3px 0 0 var(--accent);
+      }
       .users-table td {
+        height: auto;
+        min-height: 38px;
         display: grid;
-        grid-template-columns: minmax(84px, 0.42fr) minmax(0, 1fr);
+        grid-template-columns: minmax(52px, 0.72fr) minmax(0, 1fr);
         align-items: center;
-        gap: 10px;
-        min-height: 42px;
-        padding: 8px 11px;
+        gap: 8px;
+        padding: 6px 10px;
         text-align: right;
         white-space: normal;
       }
@@ -554,19 +692,26 @@ export function adminPage(): string {
         font-weight: 650;
         text-align: left;
       }
+      .users-table td .chip { justify-self: end; }
+      .users-table tbody tr:last-child td { border-bottom: 1px solid var(--line); }
+      .users-table td.user-name-cell,
+      .users-table td:nth-child(8),
+      .users-table td.actions-cell { grid-column: 1 / -1; }
       .users-table td.user-name-cell { max-width: none; }
-      .users-table td.actions-cell { display: block; text-align: right; }
+      .users-table td.actions-cell,
+      .users-table tbody tr:last-child td.actions-cell { display: block; border-bottom: 0; text-align: right; }
       .users-table td.actions-cell::before { content: none; }
-      .users-table td.empty-cell { display: block; height: auto; text-align: center; }
+      .users-table td.empty-cell { display: block; height: auto; grid-column: 1 / -1; text-align: center; }
       .users-table td.empty-cell::before { content: none; }
       .table-action { width: 100%; }
-      .detail-rail table { min-width: 520px; }
+      .detail-table,
+      .anomalies-table { min-width: 620px; }
     }
 
     @media (max-width: 520px) {
       .topbar { display: grid; }
       .topbar .action-group { justify-content: flex-start; }
-      .topbar button { min-width: 74px; }
+      .status-text { max-width: calc(100vw - 44px); }
       .panel-head { display: grid; }
       .panel-head .action-group { justify-content: flex-start; }
       .panel-body { padding: 14px; }
@@ -590,16 +735,15 @@ export function adminPage(): string {
         <p class="status-text" id="status" role="status" aria-live="polite">未加载</p>
       </div>
       <div class="action-group">
-        <button class="secondary" id="changeToken" type="button">令牌</button>
+        <button class="secondary" id="changeToken" type="button" aria-controls="authPanel" aria-expanded="true">令牌</button>
         <button class="secondary" id="refresh" type="button" disabled>刷新</button>
       </div>
+      <form class="auth-panel" id="authPanel">
+        <label class="visually-hidden" for="token">管理令牌</label>
+        <input id="token" type="password" placeholder="管理令牌" autocomplete="current-password" required />
+        <button id="login" type="submit">进入</button>
+      </form>
     </header>
-
-    <form class="auth-panel" id="authPanel">
-      <label class="visually-hidden" for="token">管理令牌</label>
-      <input id="token" type="password" placeholder="管理令牌" autocomplete="current-password" required />
-      <button id="login" type="submit">进入</button>
-    </form>
 
     <div class="admin-workspace" id="adminWorkspace" hidden>
       <section class="panel users-panel" aria-labelledby="usersTitle">
@@ -609,6 +753,17 @@ export function adminPage(): string {
         </div>
         <div class="table-wrap">
           <table class="users-table">
+            <colgroup>
+              <col class="col-name" />
+              <col class="col-subscription" />
+              <col class="col-devices" />
+              <col class="col-upload" />
+              <col class="col-download" />
+              <col class="col-total" />
+              <col class="col-anomalies" />
+              <col class="col-seen" />
+              <col class="col-actions" />
+            </colgroup>
             <thead>
               <tr>
                 <th class="sortable" data-sort="name" aria-sort="none"><button type="button">姓名<span class="sort-mark" aria-hidden="true">↕</span></button></th>
@@ -627,7 +782,7 @@ export function adminPage(): string {
         </div>
       </section>
 
-      <aside class="detail-rail" aria-label="配置与用户明细">
+      <div class="management-grid">
         <section class="panel global-config" aria-labelledby="globalTitle">
           <form id="globalConfigForm">
             <div class="panel-head">
@@ -661,6 +816,7 @@ export function adminPage(): string {
           </form>
         </section>
 
+        <aside class="detail-rail" aria-label="配置与用户明细">
         <section class="panel placeholder-panel" id="sidePlaceholder">
           <div class="panel-body">
             <h2>用户明细</h2>
@@ -722,32 +878,36 @@ export function adminPage(): string {
           </div>
         </section>
 
-        <section class="panel hidden" id="detailPanel" aria-labelledby="detailTitle">
-          <div class="panel-head">
-            <h2 id="detailTitle">流量明细</h2>
-            <button class="secondary" id="closeDetail" type="button">收起</button>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>日期</th><th>设备</th><th class="num">上传</th><th class="num">下载</th></tr></thead>
-              <tbody id="details"></tbody>
-            </table>
-          </div>
-        </section>
+        </aside>
+      </div>
 
-        <details class="panel anomaly-panel hidden" id="anomalyPanel">
-          <summary>
-            <span><strong>异常</strong><span class="muted" id="anomalyCount">0 条</span></span>
-            <span class="summary-action" aria-hidden="true"></span>
-          </summary>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>用户</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>时间</th></tr></thead>
-              <tbody id="anomalies"></tbody>
-            </table>
-          </div>
-        </details>
-      </aside>
+      <section class="panel hidden" id="detailPanel" aria-labelledby="detailTitle">
+        <div class="panel-head">
+          <h2 id="detailTitle">流量明细</h2>
+          <button class="secondary" id="closeDetail" type="button">收起</button>
+        </div>
+        <div class="table-wrap">
+          <table class="detail-table">
+            <colgroup><col style="width: 24%" /><col style="width: 40%" /><col style="width: 18%" /><col style="width: 18%" /></colgroup>
+            <thead><tr><th>日期</th><th>设备</th><th class="num">上传</th><th class="num">下载</th></tr></thead>
+            <tbody id="details"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <details class="panel anomaly-panel hidden" id="anomalyPanel">
+        <summary>
+          <span><strong>异常</strong><span class="muted" id="anomalyCount">0 条</span></span>
+          <span class="summary-action" aria-hidden="true"></span>
+        </summary>
+        <div class="table-wrap">
+          <table class="anomalies-table">
+            <colgroup><col style="width: 20%" /><col style="width: 28%" /><col style="width: 14%" /><col style="width: 14%" /><col style="width: 24%" /></colgroup>
+            <thead><tr><th>用户</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th>时间</th></tr></thead>
+            <tbody id="anomalies"></tbody>
+          </table>
+        </div>
+      </details>
     </div>
   </main>
 
@@ -770,6 +930,7 @@ export function adminPage(): string {
     const authPanel = document.getElementById('authPanel');
     const tokenInput = document.getElementById('token');
     const loginButton = document.getElementById('login');
+    const changeTokenButton = document.getElementById('changeToken');
     const refreshButton = document.getElementById('refresh');
     const statusEl = document.getElementById('status');
     const usersBody = document.getElementById('users');
@@ -810,7 +971,8 @@ export function adminPage(): string {
 
     const sessionToken = sessionStorage.getItem('youyu_admin_token') || '';
     const legacyToken = localStorage.getItem('youyu_admin_token') || '';
-    tokenInput.value = sessionToken || legacyToken;
+    let committedToken = sessionToken || legacyToken;
+    tokenInput.value = committedToken;
     if (!sessionToken && legacyToken) {
       sessionStorage.setItem('youyu_admin_token', legacyToken);
       localStorage.removeItem('youyu_admin_token');
@@ -820,9 +982,15 @@ export function adminPage(): string {
       event.preventDefault();
       runAction(loginButton, '验证中', authenticate);
     });
-    document.getElementById('changeToken').addEventListener('click', () => {
-      authPanel.hidden = !authPanel.hidden;
-      if (!authPanel.hidden) tokenInput.focus();
+    changeTokenButton.addEventListener('click', () => {
+      setAuthPanelOpen(authPanel.hidden);
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !adminWorkspace.hidden && !authPanel.hidden) setAuthPanelOpen(false);
+    });
+    document.addEventListener('pointerdown', (event) => {
+      if (adminWorkspace.hidden || authPanel.hidden) return;
+      if (!authPanel.contains(event.target) && !changeTokenButton.contains(event.target)) setAuthPanelOpen(false);
     });
     refreshButton.addEventListener('click', () => runAction(refreshButton, '刷新中', () => loadAll(true)));
     document.getElementById('globalConfigForm').addEventListener('submit', (event) => {
@@ -865,8 +1033,10 @@ export function adminPage(): string {
         tokenInput.focus();
         throw new Error('请输入管理令牌');
       }
-      sessionStorage.setItem('youyu_admin_token', token);
-      await loadAll(false);
+      await loadAll(false, token);
+      committedToken = token;
+      sessionStorage.setItem('youyu_admin_token', committedToken);
+      tokenInput.value = committedToken;
       setAuthenticated(true);
       statusEl.textContent = '已更新';
     }
@@ -875,6 +1045,15 @@ export function adminPage(): string {
       adminWorkspace.hidden = !value;
       authPanel.hidden = value;
       refreshButton.disabled = !value;
+      adminShell.classList.toggle('is-authenticated', value);
+      changeTokenButton.setAttribute('aria-expanded', authPanel.hidden ? 'false' : 'true');
+    }
+
+    function setAuthPanelOpen(value) {
+      authPanel.hidden = !value;
+      changeTokenButton.setAttribute('aria-expanded', value ? 'true' : 'false');
+      tokenInput.value = committedToken;
+      if (value) tokenInput.focus();
     }
 
     async function runAction(button, loadingText, action) {
@@ -905,8 +1084,8 @@ export function adminPage(): string {
       }
     }
 
-    async function api(path, options) {
-      const token = tokenInput.value.trim() || sessionStorage.getItem('youyu_admin_token') || '';
+    async function api(path, options, tokenOverride) {
+      const token = tokenOverride || committedToken;
       const headers = Object.assign({ authorization: 'Bearer ' + token }, options && options.headers ? options.headers : {});
       const response = await fetch(path, Object.assign({}, options || {}, { headers: headers }));
       const text = await response.text();
@@ -920,9 +1099,9 @@ export function adminPage(): string {
       return data || {};
     }
 
-    async function loadAll(refreshActive) {
+    async function loadAll(refreshActive, tokenOverride) {
       const selectedId = refreshActive ? activeUserId : '';
-      await Promise.all([loadGlobalConfig(), loadUsers(), loadAnomalies()]);
+      await Promise.all([loadGlobalConfig(tokenOverride), loadUsers(tokenOverride), loadAnomalies(tokenOverride)]);
       if (selectedId) {
         const selected = loadedUsers.find((user) => user.id === selectedId);
         if (selected) await loadUserOverview(selected.id, selected.name || selected.id || '未命名');
@@ -930,8 +1109,8 @@ export function adminPage(): string {
       }
     }
 
-    async function loadGlobalConfig() {
-      const data = await api('/api/admin/config');
+    async function loadGlobalConfig(tokenOverride) {
+      const data = await api('/api/admin/config', undefined, tokenOverride);
       const config = data.config || {};
       document.getElementById('globalEnabled').value = config.enabled === false ? 'false' : 'true';
       document.getElementById('globalSubscription').value = config.subscriptionUrl || '';
@@ -980,8 +1159,8 @@ export function adminPage(): string {
       statusEl.textContent = '已清除 ' + (data.clearedUsers || 0) + ' 个覆盖';
     }
 
-    async function loadUsers() {
-      const data = await api('/api/admin/users');
+    async function loadUsers(tokenOverride) {
+      const data = await api('/api/admin/users', undefined, tokenOverride);
       loadedUsers = Array.isArray(data.users) ? data.users : [];
       renderUsers();
       userCountEl.textContent = loadedUsers.length + ' 个用户';
@@ -1077,7 +1256,6 @@ export function adminPage(): string {
       populateMergeTargets();
       resetMergePreview();
       statusEl.textContent = name + ' 已加载';
-      if (window.matchMedia('(max-width: 1180px)').matches) userConfigPanel.scrollIntoView({ block: 'start', behavior: 'smooth' });
     }
 
     function renderUserConfig(name, data) {
@@ -1201,8 +1379,8 @@ export function adminPage(): string {
       }
     }
 
-    async function loadAnomalies() {
-      const data = await api('/api/admin/anomalies');
+    async function loadAnomalies(tokenOverride) {
+      const data = await api('/api/admin/anomalies', undefined, tokenOverride);
       const anomalies = Array.isArray(data.anomalies) ? data.anomalies : [];
       anomaliesBody.innerHTML = '';
       for (const row of anomalies.slice(0, 20)) {

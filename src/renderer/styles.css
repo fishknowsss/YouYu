@@ -23,6 +23,7 @@
   --workspace-header-height: 56px;
   --workspace-content-gap: 12px;
   --header-action-height: 40px;
+  --header-action-width: 112px;
   --header-action-gap: 8px;
   --dashboard-panel-padding-x: 14px;
   --dashboard-panel-padding-y: 12px;
@@ -427,21 +428,33 @@ select:focus-visible {
 
 .header-actions > button,
 .header-actions > .status-badge {
+  width: var(--header-action-width);
   height: var(--header-action-height);
   min-height: var(--header-action-height);
   line-height: 1;
 }
 
 .header-actions > button {
-  width: 112px;
   padding: 0 12px;
-  color: var(--ink-soft);
-  background: var(--interactive-hover);
   font-size: 16px;
 }
 
-.header-actions > button:hover:not(:disabled) {
+.header-actions > .secondary-button {
+  color: var(--ink-soft);
+  background: var(--interactive-hover);
+}
+
+.header-actions > .secondary-button:hover:not(:disabled) {
   background: var(--interactive-hover-strong);
+}
+
+.header-actions > .wide-button {
+  color: #fff;
+  background: var(--accent);
+}
+
+.header-actions > .wide-button:hover:not(:disabled) {
+  background: var(--accent-strong);
 }
 
 .section-label,
@@ -463,7 +476,7 @@ select:focus-visible {
 }
 
 .status-badge {
-  width: 70px;
+  width: var(--header-action-width);
   height: var(--header-action-height);
   min-height: var(--header-action-height);
   flex: none;
@@ -1155,7 +1168,7 @@ select:focus-visible {
 
 .pet-preview-page {
   width: min(100%, 1100px);
-  grid-template-rows: 56px minmax(0, 1fr);
+  grid-template-rows: var(--workspace-header-height) minmax(0, 1fr);
 }
 
 .pet-preview-layout {
@@ -1182,7 +1195,7 @@ select:focus-visible {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   padding: 6px;
-  border: 1px solid transparent;
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
   color: var(--ink);
@@ -1194,7 +1207,7 @@ select:focus-visible {
 }
 
 .pet-preview-card:hover {
-  border-color: var(--line);
+  border-color: var(--line-strong);
   background: var(--accent-tint);
 }
 
@@ -1332,6 +1345,7 @@ select:focus-visible {
 .pet-preview-large,
 .pet-preview-detail {
   min-width: 0;
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
 }
