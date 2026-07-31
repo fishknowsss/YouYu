@@ -252,17 +252,19 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
         </div>
 
         <div className="route-test-table" role="table" aria-label="网站分流测试">
-          <div className="route-test-head" role="row">
-            <span>网站</span>
-            <span>类型</span>
-            <span>状态</span>
-            <span>出口 IP</span>
-            <span>归属地</span>
-            <span>耗时</span>
-            <span>策略链</span>
-            <span />
+          <div className="route-test-head" role="rowgroup">
+            <div className="route-test-head-row" role="row">
+              <span role="columnheader">网站</span>
+              <span role="columnheader">类型</span>
+              <span role="columnheader">状态</span>
+              <span role="columnheader">出口 IP</span>
+              <span role="columnheader">归属地</span>
+              <span role="columnheader">耗时</span>
+              <span role="columnheader">策略链</span>
+              <span role="columnheader" aria-label="操作" />
+            </div>
           </div>
-          <div className="route-test-body">
+          <div className="route-test-body" role="rowgroup">
             {rows.map((row) => (
               <div
                 key={row.key}
@@ -277,25 +279,39 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
                   }
                 }}
               >
-                <span className="test-service-name">{row.name}</span>
-                <span className={`test-category ${row.category ?? 'global'}`}>{getCategoryText(row.category)}</span>
-                <span className={`test-status ${getStatusClass(row.status, row.testing)}`}>
+                <span className="test-service-name" role="cell">
+                  {row.name}
+                </span>
+                <span className={`test-category ${row.category ?? 'global'}`} role="cell">
+                  {getCategoryText(row.category)}
+                </span>
+                <span className={`test-status ${getStatusClass(row.status, row.testing)}`} role="cell">
                   {row.testing ? '测试中' : row.statusText}
                 </span>
-                <span className="test-ip">{row.ip || '-'}</span>
-                <span className="test-region">{row.region || '-'}</span>
-                <span className="test-number">{formatMs(row.timings.totalMs)}</span>
-                <span className="test-chain">{row.chains?.length ? row.chains.join(' / ') : '-'}</span>
-                <button
-                  className="test-retry"
-                  disabled={!apiReady || !proxyReady || row.testing || busyAll}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void testOne(row.key);
-                  }}
-                >
-                  重测
-                </button>
+                <span className="test-ip" role="cell">
+                  {row.ip || '-'}
+                </span>
+                <span className="test-region" role="cell">
+                  {row.region || '-'}
+                </span>
+                <span className="test-number" role="cell">
+                  {formatMs(row.timings.totalMs)}
+                </span>
+                <span className="test-chain" role="cell">
+                  {row.chains?.length ? row.chains.join(' / ') : '-'}
+                </span>
+                <span className="test-retry-cell" role="cell">
+                  <button
+                    className="test-retry"
+                    disabled={!apiReady || !proxyReady || row.testing || busyAll}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void testOne(row.key);
+                    }}
+                  >
+                    重测
+                  </button>
+                </span>
               </div>
             ))}
           </div>

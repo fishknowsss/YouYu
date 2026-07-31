@@ -209,7 +209,14 @@ function AdvancedHome(props: HomeProps) {
             <button className="secondary-button" onClick={() => props.onUsageModeChange('easy')}>
               返回小白
             </button>
-            <span className={`status-badge ${props.snapshot.status}`}>{statusLabel}</span>
+            <span
+              className={`status-badge ${props.snapshot.status}`}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {statusLabel}
+            </span>
           </>
         }
       />

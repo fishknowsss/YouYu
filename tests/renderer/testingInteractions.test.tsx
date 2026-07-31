@@ -21,6 +21,29 @@ afterEach(async () => {
 });
 
 describe('testing interactions', () => {
+  it('exposes the connectivity grid with table, header, row-group, and cell semantics', async () => {
+    const snapshot = await createRunningSnapshot();
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<TestPage snapshot={snapshot} />));
+
+    const table = container.querySelector<HTMLElement>('[role="table"]');
+    const rowGroups = [...(table?.children ?? [])].filter((element) => element.getAttribute('role') === 'rowgroup');
+    const columnHeaders = table?.querySelectorAll('[role="columnheader"]');
+    const dataRows = rowGroups[1]?.querySelectorAll<HTMLElement>(':scope > [role="row"]') ?? [];
+
+    expect(rowGroups).toHaveLength(2);
+    expect(columnHeaders).toHaveLength(8);
+    expect(dataRows.length).toBeGreaterThan(0);
+    for (const row of dataRows) {
+      const cells = [...row.children].filter((element) => element.getAttribute('role') === 'cell');
+      expect(cells).toHaveLength(8);
+      expect(cells.at(-1)?.querySelector('button.test-retry')).not.toBeNull();
+    }
+  });
+
   it('keeps node selection clickable while the all-node speed test is running', async () => {
     const snapshot = await createRunningSnapshot();
     const onSelect = vi.fn();

@@ -5,6 +5,7 @@ import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { resolveBuildMode } from './build-mode.mjs';
+import { mihomoResourceRelativePath, validateMihomoDistribution } from './mihomo-distribution.mjs';
 
 const root = process.cwd();
 const releaseDir = join(root, 'release');
@@ -27,10 +28,17 @@ const expectedUpdateMetadataPath = join(releaseDir, expectedUpdateMetadataName);
 const bundledSubscriptionPath = join(releaseDir, 'win-unpacked', 'resources', 'default-subscription.txt');
 const fullscreenProbePath = join(releaseDir, 'win-unpacked', 'resources', 'windows-fullscreen-probe.exe');
 const trafficApiUrlPath = join(releaseDir, 'win-unpacked', 'resources', 'traffic-api-url.txt');
+const packagedMihomoPath = join(releaseDir, 'win-unpacked', 'resources', 'mihomo', 'win-x64');
 
 await access(expectedInstallerPath);
 await access(expectedBlockmapPath);
 await access(expectedUpdateMetadataPath);
+
+const sourceMihomo = await validateMihomoDistribution(join(root, mihomoResourceRelativePath));
+const packagedMihomo = await validateMihomoDistribution(packagedMihomoPath);
+if (JSON.stringify(packagedMihomo.manifest) !== JSON.stringify(sourceMihomo.manifest)) {
+  throw new Error('Packaged Mihomo manifest does not match the repository manifest');
+}
 
 const updateMetadata = parse(await readFile(expectedUpdateMetadataPath, 'utf8')) as {
   version?: unknown;

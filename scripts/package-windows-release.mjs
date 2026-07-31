@@ -40,10 +40,16 @@ try {
     `YouYu-${version}-x64-in.exe.blockmap`,
     'latest-in.yml'
   ]);
+  await run('node', ['scripts/prepare-mihomo-source.mjs']);
   await run('npm', ['run', 'smoke']);
 
   const entries = (await readdir(releaseDir))
-    .filter((name) => name.startsWith(`YouYu-${version}-x64`) || /^latest(?:-in|-no)?\.yml$/.test(name))
+    .filter(
+      (name) =>
+        name.startsWith(`YouYu-${version}-x64`) ||
+        name.startsWith(`YouYu-${version}-Mihomo-`) ||
+        /^latest(?:-in|-no)?\.yml$/.test(name)
+    )
     .sort();
   console.log(entries.join('\n'));
 } finally {

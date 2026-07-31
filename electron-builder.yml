@@ -20,7 +20,10 @@ extraResources:
   - from: resources/mihomo
     to: mihomo
     filter:
-      - '**/*'
+      - win-x64/mihomo.exe
+      - win-x64/manifest.json
+      - win-x64/LICENSE-GPL-3.0.txt
+      - win-x64/SOURCE.md
   - from: resources/generated/default-subscription.txt
     to: default-subscription.txt
   - from: resources/generated/windows-fullscreen-probe.exe

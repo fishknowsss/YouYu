@@ -1,5 +1,11 @@
 import { access, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import {
+  mihomoResourceRelativePath,
+  resolveMihomoSourceReleaseAssetName,
+  validateMihomoDistribution,
+  validateMihomoSourceArchive
+} from './mihomo-distribution.mjs';
 
 const requiredPaths = [
   'package.json',
@@ -24,6 +30,8 @@ const root = process.cwd();
 for (const path of requiredPaths) {
   await assertExists(path);
 }
+
+const sourceMihomo = await validateMihomoDistribution(join(root, mihomoResourceRelativePath));
 
 const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
   main?: string;
@@ -51,6 +59,20 @@ if (await exists(unpackedDir)) {
   ]) {
     await assertExists(path);
   }
+
+  const packagedMihomo = await validateMihomoDistribution(join(unpackedDir, 'resources', 'mihomo', 'win-x64'));
+  if (JSON.stringify(packagedMihomo.manifest) !== JSON.stringify(sourceMihomo.manifest)) {
+    throw new Error('Packaged Mihomo manifest does not match the repository manifest');
+  }
+}
+
+const publicChannelMetadata = ['latest.yml', 'latest-in.yml', 'latest-no.yml'].map((name) =>
+  join(root, 'release', name)
+);
+if ((await Promise.all(publicChannelMetadata.map(exists))).every(Boolean)) {
+  if (!packageJson.version) throw new Error('Missing package version for Mihomo source archive');
+  const sourceAssetName = resolveMihomoSourceReleaseAssetName(sourceMihomo.manifest, packageJson.version);
+  await validateMihomoSourceArchive(join(root, 'release', sourceAssetName), sourceMihomo.manifest);
 }
 
 const installerPath = `release/YouYu-${packageJson.version}-x64.exe`;

@@ -37,10 +37,32 @@ describe('professional workspace layout contract', () => {
     const sidebarHover = getCssRule(styles, '.nav-list button:not(.active):hover:not(:disabled)');
 
     expect(styles).toContain('--interactive-hover: #efe4fb;');
-    expect(headerButton).toContain('font-size: 16px;');
+    expect(headerButton).toContain('padding: 0 12px;');
     expect(headerSecondary).toContain('color: var(--ink-soft);');
     expect(headerSecondary).toContain('background: var(--interactive-hover);');
     expect(sidebarHover).toContain('background: var(--interactive-hover);');
+  });
+
+  it('keeps header buttons and status badges on one typography contract', async () => {
+    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const sharedHeaderAction = getCssRule(styles, '.header-actions > button,\n.header-actions > .status-badge');
+    const statusBadge = getCssRule(styles, '.status-badge');
+
+    expect(styles).toContain('--font-size-action: 16px;');
+    expect(styles).toContain('--line-height-action: 20px;');
+    expect(styles).toContain('--font-weight-bold: 700;');
+    expect(sharedHeaderAction).toContain('font-size: var(--font-size-action);');
+    expect(sharedHeaderAction).toContain('font-weight: var(--font-weight-bold);');
+    expect(sharedHeaderAction).toContain('line-height: var(--line-height-action);');
+    expect(statusBadge).not.toMatch(/font-(?:size|weight):/);
+  });
+
+  it('announces home runtime status without interrupting the user', async () => {
+    const home = await readFile('src/renderer/pages/Home.tsx', 'utf8');
+
+    expect(home).toContain('role="status"');
+    expect(home).toContain('aria-live="polite"');
+    expect(home).toContain('aria-atomic="true"');
   });
 
   it('keeps batch tests primary while subscription refresh stays secondary', async () => {
@@ -52,6 +74,14 @@ describe('professional workspace layout contract', () => {
     expect(nodes).toContain('className="wide-button"');
     expect(nodes).toContain('className="secondary-button"');
     expect(testing).toContain('className="wide-button"');
+  });
+
+  it('reserves the Windows thin-scrollbar gutter in the route-test header', async () => {
+    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const routeTestHead = getCssRule(styles, '.route-test-head');
+
+    expect(styles).toContain('--route-test-scrollbar-gutter: 10px;');
+    expect(routeTestHead).toContain('padding: 0 calc(10px + var(--route-test-scrollbar-gutter)) 0 10px;');
   });
 
   it('uses the shared thin border on every pet preview surface', async () => {
@@ -75,9 +105,10 @@ describe('professional workspace layout contract', () => {
 });
 
 function getCssRule(source: string, selector: string): string {
-  const normalized = source.replace(/\r\n/g, '\n');
-  const start = normalized.indexOf(`${selector} {`);
-  expect(start).toBeGreaterThanOrEqual(0);
+  const normalized = `\n${source.replace(/\r\n/g, '\n')}`;
+  const markerStart = normalized.indexOf(`\n${selector} {`);
+  expect(markerStart).toBeGreaterThanOrEqual(0);
+  const start = markerStart + 1;
   const end = normalized.indexOf('\n}', start);
   expect(end).toBeGreaterThan(start);
   return normalized.slice(start, end + 2);

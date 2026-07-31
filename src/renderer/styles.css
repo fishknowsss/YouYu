@@ -1,8 +1,16 @@
 :root {
-  --font-sans:
-    'Segoe UI Variable Text', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC',
-    'Noto Sans CJK SC', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'Cascadia Mono', 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --font-sans: system-ui, sans-serif;
+  --font-size-caption: 12px;
+  --line-height-caption: 16px;
+  --font-size-body-small: 13px;
+  --line-height-body-small: 18px;
+  --font-size-body: 15px;
+  --line-height-body: 20px;
+  --font-size-action: 16px;
+  --line-height-action: 20px;
+  --font-size-title-small: 17px;
+  --line-height-title-small: 22px;
+  --font-weight-bold: 700;
   --ink: #20192a;
   --ink-soft: #4a4255;
   --muted: #70677a;
@@ -27,6 +35,7 @@
   --header-action-gap: 8px;
   --dashboard-panel-padding-x: 14px;
   --dashboard-panel-padding-y: 12px;
+  --route-test-scrollbar-gutter: 10px;
   color: var(--ink);
   background: var(--surface);
   font-family: var(--font-sans);
@@ -80,6 +89,7 @@ body.pet-window {
 button,
 input,
 select,
+textarea,
 a {
   font: inherit;
   -webkit-app-region: no-drag;
@@ -138,7 +148,8 @@ button:disabled {
 
 button:focus-visible,
 input:focus-visible,
-select:focus-visible {
+select:focus-visible,
+textarea:focus-visible {
   outline: 3px solid rgb(143 88 215 / 24%);
   outline-offset: 2px;
 }
@@ -235,15 +246,15 @@ select:focus-visible {
 
 .brand-text span {
   color: var(--ink);
-  font-size: 17px;
-  font-weight: 850;
-  line-height: 1;
+  font-size: var(--font-size-title-small);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-title-small);
 }
 
 .brand-text strong {
   color: var(--accent);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: var(--font-weight-bold);
 }
 
 .usage-switch {
@@ -264,7 +275,7 @@ select:focus-visible {
   color: var(--ink-soft);
   background: transparent;
   font-size: 13px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
   transition:
     background 140ms ease,
     color 140ms ease,
@@ -288,7 +299,7 @@ select:focus-visible {
   border-radius: 8px;
   color: var(--ink-soft);
   background: transparent;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
   text-align: left;
   padding: 0 14px;
   transition:
@@ -335,10 +346,10 @@ select:focus-visible {
   color: var(--muted);
   background: transparent;
   box-shadow: none;
-  font-size: 13px;
-  font-weight: 950;
+  font-size: var(--font-size-body-small);
+  font-weight: var(--font-weight-bold);
   letter-spacing: 0;
-  line-height: 1;
+  line-height: var(--line-height-body-small);
   cursor: default;
 }
 
@@ -431,12 +442,13 @@ select:focus-visible {
   width: var(--header-action-width);
   height: var(--header-action-height);
   min-height: var(--header-action-height);
-  line-height: 1;
+  font-size: var(--font-size-action);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-action);
 }
 
 .header-actions > button {
   padding: 0 12px;
-  font-size: 16px;
 }
 
 .header-actions > .secondary-button {
@@ -465,14 +477,14 @@ select:focus-visible {
   min-height: 26px;
   padding: 0 10px;
   border-radius: 999px;
-  font-size: 12px;
-  font-weight: 850;
-  line-height: 1;
 }
 
 .section-label {
   color: var(--accent);
   background: var(--accent-soft);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
 .status-badge {
@@ -482,7 +494,6 @@ select:focus-visible {
   flex: none;
   justify-content: center;
   border-radius: 8px;
-  font-size: 14px;
   white-space: nowrap;
   color: var(--ink-soft);
   background: #eee6f7;
@@ -603,16 +614,16 @@ select:focus-visible {
 
 .easy-update-copy span {
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 850;
-  line-height: 1;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
 .easy-update-copy strong {
   min-width: 0;
   color: var(--ink);
   font-size: 13px;
-  font-weight: 950;
+  font-weight: var(--font-weight-bold);
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -657,7 +668,7 @@ select:focus-visible {
   border-radius: 8px;
   color: #fff;
   background: var(--danger);
-  font-weight: 900;
+  font-weight: var(--font-weight-bold);
 }
 
 .easy-update-state {
@@ -669,9 +680,9 @@ select:focus-visible {
   border-radius: 8px;
   color: var(--ink-soft);
   background: #f0e8f7;
-  font-size: 13px;
-  font-weight: 900;
-  line-height: 1;
+  font-size: var(--font-size-body-small);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-body-small);
 }
 
 .easy-update-progress {
@@ -694,9 +705,9 @@ select:focus-visible {
 .easy-update-transfer {
   min-width: 0;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1076,7 +1087,7 @@ select:focus-visible {
   bottom: 0;
   display: block;
   font-size: calc(18px * var(--pet-scale));
-  font-weight: 900;
+  font-weight: var(--font-weight-bold);
   line-height: 1;
   opacity: 0;
   text-shadow:
@@ -1146,7 +1157,7 @@ select:focus-visible {
   z-index: 1;
   color: #6f48a8;
   font-size: 18px;
-  font-weight: 900;
+  font-weight: var(--font-weight-bold);
   line-height: 1;
   text-shadow:
     0 1px 0 #fff,
@@ -1401,7 +1412,7 @@ select:focus-visible {
   margin: 0;
   color: var(--ink);
   font-size: 14px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
   line-height: 1.45;
 }
 
@@ -1428,13 +1439,13 @@ select:focus-visible {
 
 .pet-preview-detail dt {
   color: var(--muted);
-  font-weight: 750;
+  font-weight: var(--font-weight-bold);
 }
 
 .pet-preview-detail dd {
   min-width: 0;
   color: var(--ink);
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
   overflow-wrap: anywhere;
 }
 
@@ -1587,7 +1598,7 @@ select:focus-visible {
 .quick-field span {
   color: var(--muted);
   font-size: 12px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .quick-status-panel strong,
@@ -1606,7 +1617,7 @@ select:focus-visible {
   display: grid;
   gap: 7px;
   color: var(--ink);
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .quick-field input,
@@ -1655,8 +1666,8 @@ select:focus-visible {
   gap: 8px;
   border-radius: 8px;
   padding: 0 13px;
-  font-weight: 850;
-  line-height: 1;
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-action);
   white-space: nowrap;
   transition:
     transform 140ms ease,
@@ -1706,7 +1717,7 @@ select:focus-visible {
   margin: 0;
   color: var(--accent-strong);
   font-size: 13px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
   line-height: 22px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1722,7 +1733,7 @@ select:focus-visible {
   gap: 8px;
   color: var(--accent-strong);
   font-size: 13px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
   line-height: 22px;
 }
 
@@ -1785,9 +1796,9 @@ select:focus-visible {
 
 .connection-identity span {
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
 .connection-identity h2 {
@@ -1830,9 +1841,9 @@ select:focus-visible {
 .node-health-metric span {
   min-width: 0;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 850;
-  line-height: 1;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1841,9 +1852,9 @@ select:focus-visible {
 .node-health-metric strong {
   min-width: 0;
   color: var(--ink-soft);
-  font-size: 16px;
-  font-weight: 950;
-  line-height: 1;
+  font-size: var(--font-size-action);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-action);
   overflow: visible;
   white-space: nowrap;
 }
@@ -1892,9 +1903,9 @@ select:focus-visible {
   border-radius: 6px;
   color: var(--ink-soft);
   background: transparent;
-  font-size: 13px;
-  font-weight: 850;
-  line-height: 1;
+  font-size: var(--font-size-body-small);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-body-small);
 }
 
 .node-mode-toggle button.active {
@@ -1911,7 +1922,7 @@ select:focus-visible {
   color: var(--ink);
   font-size: 14px;
   line-height: 1.2;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .mode-panel {
@@ -1942,7 +1953,7 @@ select:focus-visible {
 .dashboard-panel-heading span {
   color: var(--muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: var(--font-weight-bold);
 }
 
 .dashboard-panel-body {
@@ -1982,7 +1993,7 @@ select:focus-visible {
   margin: 0;
   color: var(--ink-soft);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: var(--font-weight-bold);
   line-height: 1.35;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1991,7 +2002,7 @@ select:focus-visible {
 
 .diagnostics-status p.diagnostics-error {
   color: var(--danger);
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .diagnostics-repair {
@@ -2003,7 +2014,7 @@ select:focus-visible {
   color: var(--danger);
   background: #fff;
   font-size: 12px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .diagnostics-log {
@@ -2020,10 +2031,9 @@ select:focus-visible {
 .diagnostics-log span {
   min-width: 0;
   color: #5f526f;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 700;
-  line-height: 1.45;
+  line-height: var(--line-height-caption);
   display: block;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2045,7 +2055,7 @@ select:focus-visible {
   border-radius: 6px;
   color: var(--ink-soft);
   background: transparent;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .mode-strip button.active {
@@ -2073,14 +2083,14 @@ select:focus-visible {
 .label {
   color: var(--muted);
   font-size: 13px;
-  font-weight: 750;
+  font-weight: var(--font-weight-bold);
 }
 
 .metric-row strong {
   min-width: 0;
   color: var(--ink);
   font-size: 18px;
-  line-height: 1;
+  line-height: var(--line-height-title-small);
   text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2124,15 +2134,15 @@ select:focus-visible {
 .runtime-metric strong {
   color: var(--ink);
   font-size: 16px;
-  font-weight: 950;
+  font-weight: var(--font-weight-bold);
   line-height: 1.1;
 }
 
 .runtime-metric small {
   color: var(--accent-strong);
-  font-size: 11px;
-  font-weight: 850;
-  line-height: 1;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
 .runtime-metric-node {
@@ -2147,15 +2157,15 @@ select:focus-visible {
 .runtime-metric-node .label {
   grid-column: 1;
   grid-row: 1;
-  font-size: 12px;
-  line-height: 1;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
 }
 
 .runtime-metric-node strong {
   grid-column: 1 / -1;
   grid-row: 2;
-  font-size: 15px;
-  line-height: 1;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
 }
 
 .runtime-metric-node small {
@@ -2248,7 +2258,7 @@ select:focus-visible {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow-wrap: anywhere;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
   line-height: 1.25;
 }
 
@@ -2258,7 +2268,7 @@ select:focus-visible {
   border-radius: 7px;
   color: var(--accent);
   background: var(--accent-soft);
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
   transition:
     background 140ms ease,
     color 140ms ease,
@@ -2284,7 +2294,7 @@ select:focus-visible {
   border-radius: 6px;
   background: rgb(255 255 255 / 60%);
   font-size: 14px;
-  font-weight: 950;
+  font-weight: var(--font-weight-bold);
   text-align: center;
   white-space: nowrap;
 }
@@ -2322,7 +2332,7 @@ select:focus-visible {
   color: var(--muted);
   border: 1px dashed var(--line-strong);
   background: var(--accent-tint);
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .settings-panel {
@@ -2380,7 +2390,7 @@ select:focus-visible {
   height: var(--settings-control-height);
   padding: 0 42px 0 14px;
   font-size: 18px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .settings-panel .field input {
@@ -2432,14 +2442,14 @@ select:focus-visible {
   flex: none;
   color: var(--muted);
   font-size: 14px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .settings-diagnostics-count {
   flex: none;
   color: var(--accent-strong);
   font-size: 16px;
-  font-weight: 950;
+  font-weight: var(--font-weight-bold);
   font-variant-numeric: tabular-nums;
 }
 
@@ -2447,7 +2457,7 @@ select:focus-visible {
   min-width: 0;
   color: var(--accent-strong);
   font-size: 14px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
   line-height: 17px;
   overflow: hidden;
   display: -webkit-box;
@@ -2485,9 +2495,9 @@ select:focus-visible {
 }
 
 .busy-overlay span {
-  font-size: 15px;
-  font-weight: 900;
-  line-height: 1;
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-body);
 }
 
 .busy-spinner {
@@ -2538,7 +2548,7 @@ select:focus-visible {
   margin: 6px 0 0;
   color: var(--muted);
   font-size: 14px;
-  font-weight: 750;
+  font-weight: var(--font-weight-bold);
 }
 
 .registration-form {
@@ -2566,7 +2576,7 @@ select:focus-visible {
   display: grid;
   place-items: center;
   color: var(--accent-strong);
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .field {
@@ -2574,7 +2584,7 @@ select:focus-visible {
   display: grid;
   gap: 7px;
   color: var(--ink);
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .field span {
@@ -2637,14 +2647,14 @@ select:focus-visible {
 
 .network-route-main strong {
   font-size: 16px;
-  font-weight: 950;
+  font-weight: var(--font-weight-bold);
 }
 
 .network-route-note {
   min-width: 0;
   color: var(--accent-strong);
   font-size: 14px;
-  font-weight: 900;
+  font-weight: var(--font-weight-bold);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2673,13 +2683,13 @@ select:focus-visible {
 .network-status-item span {
   color: var(--muted);
   font-size: 14px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
 }
 
 .network-status-item strong {
   color: var(--accent-strong);
   font-size: 16px;
-  font-weight: 950;
+  font-weight: var(--font-weight-bold);
 }
 
 .update-row {
@@ -2708,16 +2718,16 @@ select:focus-visible {
 
 .update-copy span {
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 850;
-  line-height: 1;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
 .update-copy strong {
   min-width: 0;
   color: var(--ink);
   font-size: 14px;
-  font-weight: 950;
+  font-weight: var(--font-weight-bold);
   line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2730,10 +2740,10 @@ select:focus-visible {
 .update-copy em {
   min-width: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-style: normal;
-  font-weight: 800;
-  line-height: 1.15;
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2794,8 +2804,8 @@ select:focus-visible {
 .usage-registration-title h2 {
   margin: 0;
   color: var(--ink);
-  font-size: 15px;
-  line-height: 1;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
 }
 
 .usage-registration-title span,
@@ -2803,7 +2813,7 @@ select:focus-visible {
   min-width: 0;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 850;
+  font-weight: var(--font-weight-bold);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2846,16 +2856,17 @@ select:focus-visible {
 
 .test-summary-item span {
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 850;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
 .test-summary-item strong {
   min-width: 0;
   color: var(--ink);
-  font-size: 16px;
-  font-weight: 950;
-  line-height: 1;
+  font-size: var(--font-size-action);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-action);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2880,7 +2891,7 @@ select:focus-visible {
   overflow: hidden;
 }
 
-.route-test-head,
+.route-test-head-row,
 .route-test-row {
   min-width: 0;
   display: grid;
@@ -2898,16 +2909,22 @@ select:focus-visible {
 }
 
 .route-test-head {
-  padding: 0 10px;
+  min-width: 0;
+  padding: 0 calc(10px + var(--route-test-scrollbar-gutter)) 0 10px;
   color: var(--muted);
   background: var(--surface-raised);
   border-bottom: 1px solid var(--line);
-  font-size: 11px;
-  font-weight: 900;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
-.route-test-head span:nth-child(2),
-.route-test-head span:nth-child(3),
+.route-test-head-row {
+  height: 100%;
+}
+
+.route-test-head-row span:nth-child(2),
+.route-test-head-row span:nth-child(3),
 .test-category,
 .test-status {
   justify-self: center;
@@ -2966,24 +2983,24 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
-  font-weight: 850;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
 .test-service-name {
-  font-size: 13px;
-  font-weight: 950;
+  font-size: var(--font-size-body-small);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-body-small);
 }
 
 .test-number {
   color: var(--ink-soft);
-  font-family: var(--font-mono);
   text-align: right;
 }
 
 .test-ip {
   color: var(--ink);
-  font-family: var(--font-mono);
 }
 
 .test-region,
@@ -2994,7 +3011,7 @@ select:focus-visible {
 .test-category {
   width: fit-content;
   min-width: 34px;
-  height: 18px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3003,9 +3020,9 @@ select:focus-visible {
   padding: 0 7px;
   color: #2250b8;
   background: #edf3ff;
-  font-size: 11px;
-  font-weight: 900;
-  line-height: 1;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
 .test-category.domestic {
@@ -3028,14 +3045,14 @@ select:focus-visible {
 
 .test-status {
   width: 50px;
-  height: 19px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  font-size: 11px;
-  font-weight: 950;
-  line-height: 1;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
 .test-status.available {
@@ -3061,12 +3078,13 @@ select:focus-visible {
 
 .test-retry {
   width: 44px;
-  height: 22px;
+  height: 24px;
   border-radius: 7px;
   color: var(--accent);
   background: var(--accent-soft);
-  font-size: 11px;
-  font-weight: 950;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
 }
 
 .test-retry:hover {
@@ -3094,16 +3112,23 @@ select:focus-visible {
 
 .test-detail-strip span {
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 850;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
+}
+
+.test-retry-cell {
+  min-width: 0;
+  display: grid;
+  place-items: center;
 }
 
 .test-detail-strip strong {
   min-width: 0;
   color: var(--ink);
-  font-size: 12px;
-  font-weight: 850;
-  line-height: 1.35;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3152,7 +3177,7 @@ select:focus-visible {
     height: 38px;
   }
 
-  .route-test-head,
+  .route-test-head-row,
   .route-test-row {
     grid-template-columns:
       minmax(70px, 1fr)
