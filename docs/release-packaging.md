@@ -40,7 +40,7 @@
 
 ## Electron 运行时缓存
 
-`scripts/electron-win-x64.json` 固定 Windows x64 Electron 官方 ZIP 的精确版本、官方资产 URL、字节数和 SHA256。`npm run cache:electron:win` 必须先完整验证本机 electron-builder 缓存；验证一致时允许离线复用，缺失或不一致时才从官方 GitHub Release 有界重试下载，并在复制前后再次验证。不得使用第三方镜像、仅凭文件名复用缓存或跳过哈希校验。
+`scripts/electron-win-x64.json` 固定 Windows x64 Electron 官方 ZIP 的精确版本、官方资产 URL、字节数和 SHA256。`npm run cache:electron:win` 必须先完整验证本机 electron-builder 缓存；验证一致时允许离线复用，缺失或不一致时才从官方 GitHub Release 有界重试下载，并在复制前后再次验证。打包脚本会把再次验证通过的 ZIP 作为 `electronDist` 直接交给 electron-builder，避免缓存命中后仍联网读取校验清单；`afterPack` 会精确移除官方 ZIP 自带的 `resources/default_app.asar` 与根 `version` 标记，使产物与默认下载路径保持一致。不得使用第三方镜像、仅凭文件名复用缓存或跳过哈希校验。
 
 升级 Electron 时，必须同时更新 `package.json`、lockfile 与该 manifest；官方 ZIP 的 SHA256 必须和同一 Release 的 `SHASUMS256.txt` 一致，并运行 Electron distribution 回归测试和 Windows 安装包验证。
 

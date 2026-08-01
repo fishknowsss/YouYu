@@ -806,12 +806,13 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         });
         spawned.once('exit', (code, exitSignal) => {
           const reason = code == null ? `signal ${exitSignal ?? 'unknown'}` : `exit code ${code.toString()}`;
+          const expectedStop = stoppingChildren.has(current);
           if (ready) {
-            options.logLine?.(`mihomo exited after ready: ${reason}`);
-            if (!stoppingChildren.has(current)) {
+            if (!expectedStop) {
+              options.logLine?.(`mihomo exited after ready: ${reason}`);
               options.onUnexpectedExit?.(reason);
             }
-          } else {
+          } else if (!expectedStop) {
             options.logLine?.(`mihomo exited before ready: ${reason}`);
           }
           settleExit({ kind: 'exit', code, signal: exitSignal });

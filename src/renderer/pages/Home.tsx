@@ -83,20 +83,22 @@ function EasyHome(props: HomeProps) {
             <span className={`startup-ring ${starting ? 'is-starting' : ''}`} aria-hidden="true" />
           </button>
         </div>
-        {isActionErrorMessage(props.message) && (
-          <aside className="easy-error-notice" role="alert">
-            <strong>{props.message}</strong>
-            <button disabled={props.busy} onClick={props.onRepair}>
-              修复
-            </button>
-          </aside>
-        )}
-        <EasyUpdateNotice
-          snapshot={props.snapshot}
-          busy={props.busy}
-          busyLabel={props.busyLabel}
-          onInstallUpdate={props.onInstallUpdate}
-        />
+        <div className="easy-notice-stack">
+          {isActionErrorMessage(props.message) && (
+            <aside className="easy-error-notice" role="alert" aria-atomic="true">
+              <strong>{props.message}</strong>
+              <button disabled={props.busy} onClick={props.onRepair}>
+                修复
+              </button>
+            </aside>
+          )}
+          <EasyUpdateNotice
+            snapshot={props.snapshot}
+            busy={props.busy}
+            busyLabel={props.busyLabel}
+            onInstallUpdate={props.onInstallUpdate}
+          />
+        </div>
       </section>
     </div>
   );
@@ -164,7 +166,7 @@ function EasyUpdateNotice({
           : '准备中';
 
   return (
-    <aside className={`easy-update-notice ${noticeClass}`} aria-live="polite">
+    <aside className={`easy-update-notice ${noticeClass}`} role="status" aria-live="polite" aria-atomic="true">
       <div className="easy-update-copy">
         <span>软件更新</span>
         <strong>{text}</strong>
@@ -199,10 +201,11 @@ function AdvancedHome(props: HomeProps) {
   const longestUsedNode = props.snapshot.traffic.nodeUsage.longestUsed;
   const diagnosticsLogs = props.snapshot.diagnostics.logs;
   const diagnosticLogCount = props.snapshot.diagnostics.logCount ?? diagnosticsLogs.length;
-  const logLines = diagnosticsLogs.slice(-7);
+  const logLines = diagnosticsLogs.slice(-7).map(toVisibleDiagnosticText);
   const diagnosticsLogRef = useRef<HTMLDivElement>(null);
-  const diagnosticMessage =
+  const rawDiagnosticMessage =
     (isActionErrorMessage(props.message) ? props.message : undefined) || props.snapshot.diagnostics.lastError;
+  const diagnosticMessage = rawDiagnosticMessage ? toVisibleDiagnosticText(rawDiagnosticMessage) : undefined;
 
   useEffect(() => {
     const diagnosticsLog = diagnosticsLogRef.current;
@@ -442,6 +445,21 @@ function formatAvailability(availability: AppSnapshot['nodeHealth']['availabilit
 function getDisplayUpdateProgress(update: AppSnapshot['update']): number {
   if (typeof update.percent !== 'number') return 0;
   return Math.max(0, Math.min(100, Math.round(update.percent)));
+}
+
+function toVisibleDiagnosticText(value: string): string {
+  const registryCommandIndex = value.search(/Command failed:\s*(?:"[^"]*[\\/])?reg\.exe\b/i);
+  if (registryCommandIndex >= 0) {
+    return `${value.slice(0, registryCommandIndex)}系统代理设置读取失败`.trim();
+  }
+
+  const undecodableIndex = value.search(/�{2,}/);
+  if (undecodableIndex < 0) return value;
+  const context = value
+    .slice(0, undecodableIndex)
+    .replace(/[\s↩:：;；-]+$/u, '')
+    .trim();
+  return context ? `${context}: 系统返回的错误信息无法识别` : '系统返回的错误信息无法识别';
 }
 
 function formatUpdateTransfer(update: AppSnapshot['update']): string {

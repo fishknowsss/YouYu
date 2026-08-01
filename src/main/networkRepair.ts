@@ -12,6 +12,7 @@ export type NetworkRepairDependencies<TSnapshot> = {
   prepareRunningRuntime: () => Promise<void>;
   runTargetedRepair?: (issueKind: DiagnosticIssueKind, signal?: AbortSignal) => Promise<void>;
   onTargetedRepairError?: (issueKind: DiagnosticIssueKind, error: unknown) => void;
+  onSupplementalRepairError?: (error: unknown) => void;
   repairLifecycle: (signal?: AbortSignal) => Promise<void>;
   clearRuntimeCache: () => Promise<void>;
   startRuntime: (signal: AbortSignal | undefined, intentGeneration: number) => Promise<void>;
@@ -65,22 +66,42 @@ export async function runNetworkRepair<TSnapshot>(
     }
   }
 
-  if (repairError !== undefined && cacheError !== undefined) {
-    throw new AggregateError([repairError, cacheError], 'network repair and runtime cache cleanup failed', {
-      cause: repairError
-    });
-  }
-  if (repairError !== undefined) throw repairError;
-  if (cacheError !== undefined) throw cacheError;
+  const stoppedAfterRepair = deps.getStatus() === 'stopped';
+  if (repairError !== undefined && !stoppedAfterRepair) throw repairError;
+  const supplementalFailures = [repairError, cacheError].filter((error) => error !== undefined);
   signal?.throwIfAborted();
 
   if (options.resumeRuntime !== false && intentGeneration !== undefined) {
     if (!deps.isRuntimeIntentCurrent(intentGeneration)) throw new Error('proxy start canceled');
-    await deps.startRuntime(signal, intentGeneration);
+    try {
+      await deps.startRuntime(signal, intentGeneration);
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (supplementalFailures.length === 0) throw error;
+      throw new AggregateError([...supplementalFailures, error], 'network repair and runtime recovery failed', {
+        cause: error
+      });
+    }
     signal?.throwIfAborted();
     if (!deps.isRuntimeIntentCurrent(intentGeneration)) throw new Error('proxy start canceled');
-    if (deps.getStatus() !== 'running') throw new Error('network repair did not restore the runtime');
+    if (deps.getStatus() !== 'running') {
+      const error = new Error('network repair did not restore the runtime');
+      if (supplementalFailures.length === 0) throw error;
+      throw new AggregateError([...supplementalFailures, error], 'network repair and runtime recovery failed', {
+        cause: error
+      });
+    }
     deps.resumeRunningWork();
+  }
+
+  if (supplementalFailures.length === 1) {
+    deps.onSupplementalRepairError?.(supplementalFailures[0]);
+  } else if (supplementalFailures.length > 1) {
+    deps.onSupplementalRepairError?.(
+      new AggregateError(supplementalFailures, 'network repair completed with supplemental failures', {
+        cause: supplementalFailures[0]
+      })
+    );
   }
 
   return deps.createSnapshot();

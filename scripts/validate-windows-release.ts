@@ -34,10 +34,14 @@ const bundledSubscriptionPath = join(releaseDir, 'win-unpacked', 'resources', 'd
 const fullscreenProbePath = join(releaseDir, 'win-unpacked', 'resources', 'windows-fullscreen-probe.exe');
 const trafficApiUrlPath = join(releaseDir, 'win-unpacked', 'resources', 'traffic-api-url.txt');
 const packagedMihomoPath = join(releaseDir, 'win-unpacked', 'resources', 'mihomo', 'win-x64');
+const electronDefaultAppPath = join(releaseDir, 'win-unpacked', 'resources', 'default_app.asar');
+const electronVersionMarkerPath = join(releaseDir, 'win-unpacked', 'version');
 
 await access(expectedInstallerPath);
 await access(expectedBlockmapPath);
 await access(expectedUpdateMetadataPath);
+await assertPathMissing(electronDefaultAppPath, 'Packaged app must not retain Electron default_app.asar');
+await assertPathMissing(electronVersionMarkerPath, 'Packaged app must not retain Electron version marker');
 
 const sourceMihomo = await validateMihomoDistribution(join(root, mihomoResourceRelativePath));
 const packagedMihomo = await validateMihomoDistribution(packagedMihomoPath);
@@ -142,6 +146,16 @@ if (noPetBuild) {
 }
 
 console.log(`validated Windows x64 installer: ${expectedInstallerName}`);
+
+async function assertPathMissing(path: string, message: string): Promise<void> {
+  try {
+    await access(path);
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  throw new Error(message);
+}
 
 async function hashFileSha512(path: string): Promise<string> {
   const hash = createHash('sha512');

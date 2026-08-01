@@ -90,6 +90,7 @@ export function AppShell({
           type="button"
           className="advanced-unlock-hotspot"
           aria-label="进入专业模式"
+          tabIndex={-1}
           onClick={onAdvancedUnlock}
         />
       )}

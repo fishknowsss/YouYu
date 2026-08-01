@@ -50,7 +50,7 @@ jobs:
           path: |
             ~\AppData\Local\electron-builder\Cache
             ~\AppData\Local\electron\Cache
-          key: electron-builder-${{ runner.os }}-${{ hashFiles('package-lock.json', 'electron-builder.yml', 'scripts/cache-electron-win.mjs') }}
+          key: electron-builder-${{ runner.os }}-${{ hashFiles('package-lock.json', 'electron-builder.yml', 'scripts/cache-electron-win.mjs', 'scripts/electron-distribution.mjs', 'scripts/electron-win-x64.json') }}
           restore-keys: |
             electron-builder-${{ runner.os }}-
 

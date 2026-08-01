@@ -999,19 +999,22 @@ proxies:
       return true;
     });
     const onUnexpectedExit = vi.fn();
+    const logLine = vi.fn();
     const runtime = createMihomoRuntime({
       binaryPath: 'C:/YouYu/mihomo.exe',
       userDataDir,
       readSettings: async () => makeSettings(),
       spawnProcess: () => child as never,
       waitForReady: vi.fn(async () => undefined),
-      onUnexpectedExit
+      onUnexpectedExit,
+      logLine
     });
 
     await runtime.start();
     await runtime.stop();
 
     expect(onUnexpectedExit).not.toHaveBeenCalled();
+    expect(logLine).not.toHaveBeenCalledWith(expect.stringContaining('mihomo exited after ready'));
     expect(runtime.isRunning?.()).toBe(false);
   });
 

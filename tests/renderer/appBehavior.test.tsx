@@ -290,6 +290,61 @@ describe('renderer action behavior', () => {
     expect(container.textContent).toContain('已导出');
   });
 
+  it('keeps the easy-mode recovery notice away from the seven-click advanced entry', async () => {
+    const snapshot = createRegisteredRendererSnapshot();
+    snapshot.status = 'stopped';
+    snapshot.update = {
+      ...snapshot.update,
+      status: 'available',
+      availableVersion: '1.6.10'
+    };
+    const api = {
+      getSnapshot: vi.fn(async () => snapshot),
+      saveSettings: vi.fn(async () => snapshot),
+      start: vi.fn(async () => {
+        throw new Error('Command failed: reg.exe query ProxyServer');
+      }),
+      repair: vi.fn(async () => snapshot),
+      cancelNodeTests: vi.fn(async () => undefined),
+      cancelOperation: vi.fn(async () => undefined),
+      onSnapshotUpdated: vi.fn(() => () => undefined)
+    } as unknown as NonNullable<Window['youyu']>;
+    Object.defineProperty(window, 'youyu', { configurable: true, value: api });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<App />));
+    await act(async () => Promise.resolve());
+    const powerButton = container.querySelector<HTMLButtonElement>('.easy-power-button');
+    expect(powerButton).toBeTruthy();
+
+    await act(async () => {
+      powerButton?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const noticeStack = container.querySelector('.easy-notice-stack');
+    const errorNotice = container.querySelector('.easy-error-notice');
+    const updateNotice = container.querySelector('.easy-update-notice');
+    expect(errorNotice?.parentElement).toBe(noticeStack);
+    expect(errorNotice?.getAttribute('role')).toBe('alert');
+    expect(errorNotice?.getAttribute('aria-atomic')).toBe('true');
+    expect(updateNotice?.parentElement).toBe(noticeStack);
+    expect(updateNotice?.getAttribute('role')).toBe('status');
+    expect(updateNotice?.getAttribute('aria-live')).toBe('polite');
+    expect(updateNotice?.getAttribute('aria-atomic')).toBe('true');
+
+    const advancedEntry = container.querySelector<HTMLButtonElement>('.advanced-unlock-hotspot');
+    expect(advancedEntry?.tabIndex).toBe(-1);
+    await act(async () => {
+      for (let count = 0; count < 7; count += 1) advancedEntry?.click();
+    });
+
+    expect(container.querySelector('.advanced-shell')).toBeTruthy();
+    expect(container.querySelector('.easy-shell')).toBeNull();
+  });
+
   it('shows only the centered re-registration view after the advanced version entry is clicked seven times', async () => {
     window.history.replaceState({}, '', '/?mode=advanced&page=settings');
     const snapshot = createRegisteredRendererSnapshot();
@@ -567,6 +622,38 @@ describe('RegistrationGate', () => {
 });
 
 describe('advanced home diagnostics', () => {
+  it('keeps raw registry commands and undecodable Windows output out of the visible diagnostics', () => {
+    const snapshot = createRegisteredRendererSnapshot();
+    const rawFailure =
+      '2026-08-01 22:27:38 启动失败: Command failed: reg.exe query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings /v ProxyServer ↩ ����: ϵͳ�Ҳ���ָ����ע������ֵ��';
+    snapshot.status = 'failed';
+    snapshot.diagnostics = { logs: [rawFailure], logCount: 1, lastError: rawFailure };
+
+    const html = renderToStaticMarkup(
+      <Home
+        usageMode="advanced"
+        snapshot={snapshot}
+        busy={false}
+        busyLabel=""
+        message=""
+        onQuickStart={vi.fn()}
+        onStart={vi.fn()}
+        onStop={vi.fn()}
+        onRepair={vi.fn()}
+        onModeChange={vi.fn()}
+        onStrategyChange={vi.fn()}
+        onOpenNodes={vi.fn()}
+        onUsageModeChange={vi.fn()}
+        onInstallUpdate={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('启动失败: 系统代理设置读取失败');
+    expect(html).not.toContain('Command failed: reg.exe');
+    expect(html).not.toContain('ProxyServer');
+    expect(html).not.toContain('����');
+  });
+
   it('shows the retained log total when the snapshot only includes recent entries', () => {
     const snapshot = createRegisteredRendererSnapshot();
     snapshot.diagnostics = { logs: ['recent entry'], logCount: 200 };

@@ -73,6 +73,21 @@ describe('professional workspace layout contract', () => {
     expect(home).toContain('aria-atomic="true"');
   });
 
+  it('stacks easy-mode notices away from the bottom-left advanced-mode hotspot', async () => {
+    const [styles, home] = await Promise.all([readRendererStyles(), readFile('src/renderer/pages/Home.tsx', 'utf8')]);
+    const noticeStack = getCssRule(styles, '.easy-notice-stack');
+    const errorNotice = getCssRule(styles, '.easy-error-notice');
+    const updateNotice = getCssRule(styles, '.easy-update-notice');
+
+    expect(home).toContain('className="easy-notice-stack"');
+    expect(noticeStack).toContain('position: fixed;');
+    expect(noticeStack).toContain('right: 12px;');
+    expect(noticeStack).toContain('bottom: 12px;');
+    expect(noticeStack).not.toContain('left:');
+    expect(errorNotice).not.toContain('position: fixed;');
+    expect(updateNotice).not.toContain('position: fixed;');
+  });
+
   it('keeps batch tests primary while subscription refresh stays secondary', async () => {
     const [nodes, testing] = await Promise.all([
       readFile('src/renderer/pages/NodeSelect.tsx', 'utf8'),

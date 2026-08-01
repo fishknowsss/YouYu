@@ -235,11 +235,15 @@ describe('runNetworkRepair', () => {
     expect(calls).toEqual(['prepare', 'pause', 'repair', 'clear-cache']);
   });
 
-  it('clears volatile Mihomo state after a supplemental repair failure stopped the core', async () => {
-    const repairError = new Error('dns repair failed');
+  it('restores the runtime and reports a supplemental repair failure after the core was stopped safely', async () => {
+    const repairError = new Error('privileged WinHTTP repair failed');
     let status: 'running' | 'stopped' | 'failed' = 'running';
     const clearRuntimeCache = vi.fn(async () => undefined);
-    const startRuntime = vi.fn(async () => undefined);
+    const startRuntime = vi.fn(async () => {
+      status = 'running';
+    });
+    const resumeRunningWork = vi.fn();
+    const onSupplementalRepairError = vi.fn();
 
     await expect(
       runNetworkRepair({
@@ -254,13 +258,47 @@ describe('runNetworkRepair', () => {
         },
         clearRuntimeCache,
         startRuntime,
-        resumeRunningWork: vi.fn(),
+        resumeRunningWork,
+        onSupplementalRepairError,
         createSnapshot: async () => ({ status })
       })
-    ).rejects.toBe(repairError);
+    ).resolves.toEqual({ status: 'running' });
 
     expect(clearRuntimeCache).toHaveBeenCalledOnce();
-    expect(startRuntime).not.toHaveBeenCalled();
+    expect(startRuntime).toHaveBeenCalledOnce();
+    expect(resumeRunningWork).toHaveBeenCalledOnce();
+    expect(onSupplementalRepairError).toHaveBeenCalledExactlyOnceWith(repairError);
+  });
+
+  it('aggregates supplemental cleanup failures when runtime recovery also fails', async () => {
+    const repairError = new Error('privileged repair failed');
+    const cacheError = new Error('cache cleanup failed');
+    const startError = new Error('runtime restart failed');
+    let status: 'running' | 'stopped' | 'failed' = 'failed';
+
+    const failure = await runNetworkRepair({
+      getStatus: () => status,
+      captureRuntimeIntent: () => 6,
+      isRuntimeIntentCurrent: () => true,
+      pauseBackgroundWork: vi.fn(),
+      prepareRunningRuntime: vi.fn(async () => undefined),
+      repairLifecycle: async () => {
+        status = 'stopped';
+        throw repairError;
+      },
+      clearRuntimeCache: async () => {
+        throw cacheError;
+      },
+      startRuntime: async () => {
+        throw startError;
+      },
+      resumeRunningWork: vi.fn(),
+      onSupplementalRepairError: vi.fn(),
+      createSnapshot: async () => ({ status })
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([repairError, cacheError, startError]);
   });
 
   it('does not clear live Mihomo state after the critical proxy-disable stage fails', async () => {

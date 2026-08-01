@@ -36,10 +36,26 @@ describe('Electron Windows distribution', () => {
 
   it('requires the cache script to verify size and SHA256 before reuse', async () => {
     const script = await readFile('scripts/cache-electron-win.mjs', 'utf8');
+    const distribution = await readFile('scripts/electron-distribution.mjs', 'utf8');
 
-    expect(script).toContain("import electronDistribution from './electron-win-x64.json'");
+    expect(script).toContain("from './electron-distribution.mjs'");
     expect(script).toContain('await isVerifiedElectronArchive(builderCachePath)');
-    expect(script).toContain('stats.size !== electronDistribution.size');
-    expect(script).toContain('sha256 !== electronDistribution.sha256');
+    expect(distribution).toContain('stats.size !== electronDistribution.size');
+    expect(distribution).toContain('sha256 !== electronDistribution.sha256');
+  });
+
+  it('passes the verified local archive directly to electron-builder without a checksum network request', async () => {
+    const runner = await readFile('scripts/run-electron-builder.mjs', 'utf8');
+    const distribution = await readFile('scripts/electron-distribution.mjs', 'utf8');
+    const afterPack = await readFile('scripts/electron-builder-after-pack.mjs', 'utf8');
+    const releaseValidation = await readFile('scripts/validate-windows-release.ts', 'utf8');
+
+    expect(distribution).toContain('return join(getElectronCacheRoot(options), electronDistribution.assetName)');
+    expect(runner).toContain('await validateElectronArchive(electronArchivePath)');
+    expect(runner).toContain('`-c.electronDist=${electronArchivePath}`');
+    expect(afterPack).toContain("rm(join(context.appOutDir, 'resources', 'default_app.asar'), { force: true })");
+    expect(afterPack).toContain("rm(join(context.appOutDir, 'version'), { force: true })");
+    expect(releaseValidation).toContain('assertPathMissing(electronDefaultAppPath');
+    expect(releaseValidation).toContain('assertPathMissing(electronVersionMarkerPath');
   });
 });

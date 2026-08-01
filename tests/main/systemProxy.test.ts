@@ -178,6 +178,31 @@ describe('createSystemProxyAdapter', () => {
     expect(proxyState).toEqual({ enabled: false, server: '', override: '' });
   });
 
+  it('treats an undecodable localized reg.exe missing-value result as an absent optional proxy string', async () => {
+    const proxyState = { enabled: false, server: '', override: '' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    const runCommand = async (command: { file: string; args: string[] }) => {
+      const missingOptionalValue =
+        command.file === 'reg.exe' &&
+        command.args[0] === 'query' &&
+        ((command.args.includes('ProxyServer') && !proxyState.server) ||
+          (command.args.includes('ProxyOverride') && !proxyState.override));
+      if (missingOptionalValue) {
+        throw Object.assign(new Error(`Command failed: ${command.file} ${command.args.join(' ')}`), {
+          code: 1,
+          stderr: '����: ϵͳ�Ҳ���ָ����ע������ֵ��'
+        });
+      }
+      return mutableCommands(command);
+    };
+    const proxy = createSystemProxyAdapter({ platform: 'win32', runCommand });
+
+    await expect(proxy.enable()).resolves.toBeUndefined();
+    await expect(proxy.restore()).resolves.toBeUndefined();
+
+    expect(proxyState).toEqual({ enabled: false, server: '', override: '' });
+  });
+
   it('rejects enable when the applied proxy cannot be verified after notification', async () => {
     const calls: string[] = [];
     const proxyState = {

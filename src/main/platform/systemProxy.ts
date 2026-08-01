@@ -153,7 +153,8 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
     try {
       return await reg(['query', internetSettingsKey, '/v', valueName]);
     } catch (error) {
-      if (isMissingRegistryValueError(error)) return '';
+      const keyOutput = await reg(['query', internetSettingsKey]);
+      if (!hasRegistryValue(keyOutput, valueName)) return '';
       throw error;
     }
   }
@@ -548,15 +549,9 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
   };
 }
 
-function isMissingRegistryValueError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const candidate = error as { message?: unknown; stderr?: unknown; stdout?: unknown };
-  const detail = [candidate.message, candidate.stderr, candidate.stdout]
-    .filter((value): value is string => typeof value === 'string')
-    .join('\n');
-  return /unable to find the specified registry (?:key or )?value|cannot find the file specified|找不到指定的注册表(?:项或值|值)|系统找不到指定的文件/i.test(
-    detail
-  );
+function hasRegistryValue(output: string, valueName: string): boolean {
+  const escapedName = valueName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|\\r?\\n)\\s*${escapedName}\\s+REG_[A-Z0-9_]+(?:\\s|$)`, 'i').test(output);
 }
 
 function asProxyRestoreError(error: unknown): RuntimeOperationError {

@@ -266,6 +266,83 @@ describe('elevated mihomo process script', () => {
 });
 
 describe('managed elevated process cancellation', () => {
+  it('binds a trusted bare PowerShell command to the absolute System32 executable', async () => {
+    const launcher = createStalledLauncher();
+    const pipe = createStalledPipeConnection();
+    let pipePath = '';
+    const elevated = spawnWindowsElevatedProcess('powershell.exe', [], {
+      resolveUserIdentity: async () => ({ userSid: binding.targetUserSid, sessionId: binding.targetSessionId }),
+      spawnLauncher: vi.fn(() => launcher as never),
+      createPipeConnection: vi.fn((path: string) => {
+        pipePath = path;
+        return pipe as never;
+      })
+    });
+    const error = vi.fn();
+    elevated.once('error', error);
+    await vi.waitFor(() => expect(pipePath).not.toBe(''));
+
+    const operationId = /([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(pipePath)?.[1];
+    expect(operationId).toBeDefined();
+    const runtimeBinding: ElevatedPipeBinding = {
+      operationId: operationId as string,
+      targetUserSid: binding.targetUserSid,
+      targetSessionId: binding.targetSessionId,
+      parentPid: process.pid,
+      parentExecutablePath: win32.resolve(process.execPath),
+      binaryPath: win32.join(
+        process.env.SystemRoot ?? 'C:\\Windows',
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe'
+      )
+    };
+
+    pipe.emit('connect');
+    pipe.emit(
+      'data',
+      encodeElevatedPipeFrame(
+        {
+          version: ELEVATED_PIPE_PROTOCOL_VERSION,
+          kind: 'server-challenge',
+          binding: runtimeBinding,
+          serverChallenge
+        },
+        ELEVATED_PIPE_CONTROL_MAX_BYTES
+      )
+    );
+
+    expect(error).not.toHaveBeenCalled();
+    expect(decodeSingleFrame(pipe.write.mock.calls[0][0] as Buffer)).toMatchObject({
+      kind: 'client-authenticate',
+      binding: runtimeBinding
+    });
+    expect(elevated.kill()).toBe(true);
+  });
+
+  it('does not misreport an elevated launcher failure as missing administrator rights', async () => {
+    const launcher = createStalledLauncher();
+    const pipe = createStalledPipeConnection();
+    const elevated = spawnWindowsElevatedProcess('C:\\Windows\\System32\\cmd.exe', ['/c', 'exit', '7'], {
+      resolveUserIdentity: async () => ({ userSid: binding.targetUserSid, sessionId: binding.targetSessionId }),
+      spawnLauncher: vi.fn(() => launcher as never),
+      createPipeConnection: vi.fn(() => pipe as never)
+    });
+    const failure = new Promise<Error>((resolve) => elevated.once('error', resolve));
+    await vi.waitFor(() => expect(launcher.listenerCount('exit')).toBe(1));
+
+    launcher.exitCode = 7;
+    launcher.emit('exit', 7, null);
+
+    await expect(failure).resolves.toMatchObject({
+      message: expect.stringContaining('退出码 7')
+    });
+    await expect(failure).resolves.not.toMatchObject({
+      message: expect.stringContaining('需要管理员权限')
+    });
+  });
+
   it('settles and disposes a stalled launcher immediately when killed before the pipe connects', async () => {
     const launcher = createStalledLauncher();
     const pipe = createStalledPipeConnection();

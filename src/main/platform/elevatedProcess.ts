@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createConnection, type Socket } from 'node:net';
-import { join, win32 } from 'node:path';
+import { win32 } from 'node:path';
 import {
   normalizeWindowsUserSid,
   resolveCurrentWindowsUserIdentity,
@@ -170,6 +170,18 @@ function validateBinding(binding: ElevatedPipeBinding): ElevatedPipeBinding {
     }
   }
   return binding;
+}
+
+function resolveWindowsElevatedBinaryPath(binaryPath: string): string {
+  const candidate = binaryPath.trim();
+  if (win32.isAbsolute(candidate)) return win32.resolve(candidate);
+  if (candidate.toLowerCase() !== 'powershell.exe') {
+    throw new Error('elevated target binary path must be absolute');
+  }
+
+  const systemRoot = (process.env.SystemRoot ?? 'C:\\Windows').trim();
+  if (!win32.isAbsolute(systemRoot)) throw new Error('Windows system root path must be absolute');
+  return win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
 export function createElevatedPipeChallenge(randomBytesSource: (size: number) => Buffer = randomBytes): string {
@@ -748,7 +760,7 @@ export function spawnWindowsElevatedProcess(
         targetSessionId: identity.sessionId,
         parentPid,
         parentExecutablePath: win32.resolve(options.parentExecutablePath ?? process.execPath),
-        binaryPath: win32.resolve(binaryPath)
+        binaryPath: resolveWindowsElevatedBinaryPath(binaryPath)
       });
       const clientChallenge = createElevatedPipeChallenge();
       protocol = createElevatedPipeClientProtocol({
@@ -766,13 +778,7 @@ export function spawnWindowsElevatedProcess(
         pollIntervalMs: options.pollIntervalMs ?? 250,
         receivesMihomoConfig: typeof options.mihomoConfig === 'string'
       });
-      const powershellPath = join(
-        process.env.SystemRoot ?? 'C:\\Windows',
-        'System32',
-        'WindowsPowerShell',
-        'v1.0',
-        'powershell.exe'
-      );
+      const powershellPath = resolveWindowsElevatedBinaryPath('powershell.exe');
       const innerEncoded = encodeCompressedPowerShellCommand(script);
       if (innerEncoded.length > 28_000) throw new Error('elevated helper exceeds the Windows command-line limit');
       const outerCommand = [
@@ -794,9 +800,14 @@ export function spawnWindowsElevatedProcess(
         { windowsHide: true, stdio: 'ignore' }
       );
       launcherErrorListener = fail;
-      launcherExitListener = (code) => {
+      launcherExitListener = (code, signal) => {
         if (!connected && !settled) {
-          fail(new Error(code === 0 ? '管理员操作未建立安全连接' : '需要管理员权限才能继续'));
+          const detail = code !== null ? `退出码 ${code}` : signal ? `信号 ${signal}` : '退出状态未知';
+          fail(
+            new Error(
+              code === 0 ? `管理员提升助手已退出，但未建立安全连接（${detail}）` : `管理员提升助手启动失败（${detail}）`
+            )
+          );
         }
       };
       launcher.once('error', launcherErrorListener);

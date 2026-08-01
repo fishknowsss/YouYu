@@ -2,7 +2,13 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createBuildEnvironment, resolveBuildMode } from './build-mode.mjs';
+import {
+  assertElectronDistributionManifest,
+  getElectronArchivePath,
+  validateElectronArchive
+} from './electron-distribution.mjs';
 import { assertWindowsSigningEnvironment, validateWindowsReleaseSignatures } from './windows-signing.mjs';
+import packageJson from '../package.json' with { type: 'json' };
 
 const builderCli = join(process.cwd(), 'node_modules', 'electron-builder', 'cli.js');
 const mode = resolveBuildMode(process.argv.slice(2));
@@ -16,10 +22,23 @@ const releaseDir = join(process.cwd(), 'release');
 const updateMetadataName = internalBuild ? 'latest-in.yml' : noPetBuild ? 'latest-no.yml' : 'latest.yml';
 const nodeOptions = [process.env.NODE_OPTIONS, '--disable-warning=DEP0190'].filter(Boolean).join(' ');
 const signingPolicy = assertWindowsSigningEnvironment(process.env);
+const electronVersion = packageJson.devDependencies.electron;
+const electronArchivePath = getElectronArchivePath();
+
+assertElectronDistributionManifest(electronVersion);
+await validateElectronArchive(electronArchivePath);
 
 await prepareSubscriptionResource();
 
-const builderArgs = [builderCli, '--win', 'nsis', '--x64', '--publish', 'never'];
+const builderArgs = [
+  builderCli,
+  '--win',
+  'nsis',
+  '--x64',
+  '--publish',
+  'never',
+  `-c.electronDist=${electronArchivePath}`
+];
 if (signingPolicy.required) {
   builderArgs.push('-c.forceCodeSigning=true', `-c.win.signtoolOptions.publisherName=${signingPolicy.publisherName}`);
 }
@@ -34,7 +53,7 @@ await prepareUpdateMetadata();
 if (signingPolicy.required) {
   await validateWindowsReleaseSignatures({
     releaseDir,
-    version: (await import('../package.json', { with: { type: 'json' } })).default.version,
+    version: packageJson.version,
     channel: internalBuild ? 'in' : noPetBuild ? 'no' : 'standard',
     expectedPublisher: signingPolicy.publisherName
   });

@@ -1590,6 +1590,8 @@ async function repairProxy(signal?: AbortSignal, options: NetworkRepairOptions =
         runTargetedRepair: runIssueTargetedRepair,
         onTargetedRepairError: (issueKind, error) =>
           appendLog(`针对性修复未完成，继续完整修复 (${issueKind}): ${formatError(error)}`),
+        onSupplementalRepairError: (error) =>
+          appendLog(`关键修复已完成，部分系统网络清理未完成: ${formatError(error)}`),
         repairLifecycle: (repairSignal) => lifecycle.repair(repairSignal),
         clearRuntimeCache: () => clearMihomoRepairCache(userDataDir),
         startRuntime: (startSignal, intentGeneration) =>

@@ -137,7 +137,7 @@ InstallDir "@@INSTALL_DIR@@"
   StrCmp "$R9" "true" `${_t}` `${_f}`
 !macroend
 !define isUpdated `"" isUpdated ""`
-!define VERSION "1.6.9"
+!define VERSION "1.6.10"
 !define BUILD_RESOURCES_DIR "@@BUILD_RESOURCES@@"
 !include "@@PRODUCTION_INCLUDE@@"
 !insertmacro customHeader
@@ -288,7 +288,7 @@ SectionEnd
     productionInclude = $productionInclude
     flow = @('customInit:WaitForExit', 'customCheckAppRunning:WaitForExit', 'customInstall:Consume')
     handoffConsumedAfterMarker = $true
-    legacyBridgeOneTimeTarget = '1.6.9'
+    legacyBridgeOneTimeTarget = '1.6.10'
   } | ConvertTo-Json -Depth 4
 } finally {
   if ($null -ne $virtualTargetProcess -and -not $virtualTargetProcess.HasExited) {
