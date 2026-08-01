@@ -111,18 +111,26 @@ describe('TrafficStore', () => {
   });
 
   it('persists a dirty in-memory snapshot when the checkpoint expires', async () => {
-    const store = new TrafficStore(dir, { checkpointIntervalMs: 5 });
-    await store.addTraffic(15, 25, new Date('2026-05-10T08:00:00.000Z'));
+    vi.useFakeTimers();
+    try {
+      const store = new TrafficStore(dir, { checkpointIntervalMs: 5 });
+      await store.addTraffic(15, 25, new Date('2026-05-10T08:00:00.000Z'));
 
-    await vi.waitFor(
-      async () => {
-        expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8'))).toMatchObject({
-          totalUpload: 15,
-          totalDownload: 25
-        });
-      },
-      { timeout: 500, interval: 5 }
-    );
+      expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8'))).toMatchObject({
+        totalUpload: 0,
+        totalDownload: 0
+      });
+
+      await vi.advanceTimersByTimeAsync(5);
+      await store.read();
+
+      expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8'))).toMatchObject({
+        totalUpload: 15,
+        totalDownload: 25
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not expose the mutable in-memory snapshot to callers', async () => {
