@@ -63,6 +63,24 @@ type RemoteConfigInput = {
   ruleProfile?: string | null;
 };
 
+type UserProfileInput = {
+  name?: unknown;
+  requestId?: unknown;
+};
+
+type UserNoticeInput = {
+  enabled?: unknown;
+  message?: unknown;
+  tone?: unknown;
+  expiresAt?: unknown;
+};
+
+type UserNoticeAcknowledgementInput = {
+  userId?: unknown;
+  deviceId?: unknown;
+  revision?: unknown;
+};
+
 type AdminTrafficLimitInput = {
   trafficLimitBytes?: unknown;
   trafficExpiresAt?: unknown;
@@ -130,6 +148,16 @@ type EffectiveDeviceConfigRow = RemoteConfigRow & {
   user_subscription_url?: string | null;
   user_rule_profile?: string | null;
   user_updated_at?: string | null;
+  user_id?: string | null;
+  user_name?: string | null;
+  profile_updated_at?: string | null;
+  notice_revision?: number | null;
+  notice_enabled?: number | null;
+  notice_message?: string | null;
+  notice_tone?: string | null;
+  notice_expires_at?: string | null;
+  notice_updated_at?: string | null;
+  notice_acknowledged_at?: string | null;
 };
 
 type RemoteControlConfig = {
@@ -141,6 +169,26 @@ type RemoteControlConfig = {
   proxyRules: string[];
   anomalyThresholdBytes: number;
   updatedAt: string;
+};
+
+type RemoteUserProfile = {
+  userId: string;
+  name: string;
+  updatedAt: string;
+};
+
+type RemoteUserNotice = {
+  revision: number;
+  message: string;
+  tone: 'info' | 'warning';
+  expiresAt: string;
+  updatedAt: string;
+};
+
+type EffectiveClientState = {
+  config: RemoteControlConfig;
+  profile: RemoteUserProfile;
+  notice?: RemoteUserNotice;
 };
 
 type UserMergeInput = {
@@ -165,6 +213,7 @@ const ADMIN_ANOMALIES_DEFAULT_PAGE_SIZE = 100;
 const JSON_REQUEST_MAX_BODY_BYTES = 16 * 1024;
 const ADMIN_CONFIG_MAX_BODY_BYTES = 64 * 1024;
 const ACTIVATION_MAX_NAME_LENGTH = 80;
+const USER_NOTICE_MAX_MESSAGE_LENGTH = 500;
 const ACTIVATION_MAX_DEVICE_NAME_LENGTH = 120;
 const ACTIVATION_MAX_PLATFORM_LENGTH = 32;
 const ACTIVATION_MAX_APP_VERSION_LENGTH = 64;
@@ -221,6 +270,9 @@ async function dispatchRequest(request: Request, env: Env, url: URL): Promise<Re
   if (request.method === 'OPTIONS') return optionsResponse();
   if (request.method === 'POST' && url.pathname === '/api/activate') return activate(request, env);
   if (request.method === 'POST' && url.pathname === '/api/traffic/report') return reportTraffic(request, env);
+  if (request.method === 'POST' && url.pathname === '/api/notices/acknowledge') {
+    return acknowledgeUserNotice(request, env);
+  }
   if (request.method === 'GET' && url.pathname === '/api/config') return getClientConfig(request, env);
   if (request.method === 'GET' && url.pathname === '/api/admin/users') {
     await requireAdmin(request, env);
@@ -279,6 +331,24 @@ async function dispatchRequest(request: Request, env: Env, url: URL): Promise<Re
   if (request.method === 'GET' && userTrafficMatch) {
     await requireAdmin(request, env);
     return getUserTraffic(env, userTrafficMatch[1], parseAdminPagination(url, ADMIN_TRAFFIC_DEFAULT_PAGE_SIZE));
+  }
+  const userProfileMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/profile$/);
+  if (userProfileMatch) {
+    await requireAdmin(request, env);
+    if (request.method === 'GET') return getAdminUserProfile(env, userProfileMatch[1]);
+    if (request.method === 'POST') return updateAdminUserProfile(request, env, userProfileMatch[1]);
+  }
+  const userNoticeMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/notice$/);
+  if (userNoticeMatch) {
+    await requireAdmin(request, env);
+    if (request.method === 'GET') return getAdminUserNotice(env, userNoticeMatch[1]);
+    if (request.method === 'POST') return updateAdminUserNotice(request, env, userNoticeMatch[1]);
+  }
+  const userNoticeResetMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/notice\/reset$/);
+  if (request.method === 'POST' && userNoticeResetMatch) {
+    await requireAdmin(request, env);
+    await requireEmptyBody(request);
+    return resetAdminUserNotice(env, userNoticeResetMatch[1]);
   }
   const userMergePreviewMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/merge-preview$/);
   if (request.method === 'GET' && userMergePreviewMatch) {
@@ -374,21 +444,34 @@ async function activate(request: Request, env: Env): Promise<Response> {
   await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO users (id, name, normalized_name, status, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).bind(proposedUserId, name, normalizedName, 'active', now),
+       SELECT ?, ?, ?, ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM user_name_aliases WHERE normalized_name = ?
+       )`
+    ).bind(proposedUserId, name, normalizedName, 'active', now, normalizedName),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO user_name_aliases (normalized_name, user_id, created_at)
+       SELECT users.normalized_name, COALESCE(users.merged_into_user_id, users.id), ?
+       FROM users
+       WHERE users.normalized_name = ?`
+    ).bind(now, normalizedName),
     env.DB.prepare(
       `INSERT OR IGNORE INTO devices
          (id, user_id, device_seed, device_key, device_name, platform, app_version, first_seen_at, last_seen_at)
-       SELECT ?, COALESCE(users.merged_into_user_id, users.id), ?, ?, ?, ?, ?, ?, ?
-       FROM users
-       WHERE users.normalized_name = ?`
+       SELECT ?, canonical.id, ?, ?, ?, ?, ?, ?, ?
+       FROM user_name_aliases names
+       INNER JOIN users requested ON requested.id = names.user_id
+       INNER JOIN users canonical ON canonical.id = COALESCE(requested.merged_into_user_id, requested.id)
+       WHERE names.normalized_name = ? AND canonical.status = 'active'`
     ).bind(proposedDeviceId, deviceSeed, deviceKey || null, deviceName, platform, appVersion, now, now, normalizedName),
     env.DB.prepare(
       `UPDATE devices
        SET user_id = (
-             SELECT COALESCE(merged_into_user_id, id)
-             FROM users
-             WHERE normalized_name = ?
+             SELECT canonical.id
+             FROM user_name_aliases names
+             INNER JOIN users requested ON requested.id = names.user_id
+             INNER JOIN users canonical ON canonical.id = COALESCE(requested.merged_into_user_id, requested.id)
+             WHERE names.normalized_name = ? AND canonical.status = 'active'
            ),
            device_seed = ?,
            device_key = COALESCE(?, device_key),
@@ -412,10 +495,11 @@ async function activate(request: Request, env: Env): Promise<Response> {
 
   const registration = await env.DB.prepare(
     `SELECT canonical.id AS userId, canonical.name, devices.id AS deviceId
-     FROM users requested
+     FROM user_name_aliases names
+     INNER JOIN users requested ON requested.id = names.user_id
      INNER JOIN users canonical ON canonical.id = COALESCE(requested.merged_into_user_id, requested.id)
      INNER JOIN devices ON devices.user_id = canonical.id
-     WHERE requested.normalized_name = ? AND devices.device_seed = ?`
+     WHERE names.normalized_name = ? AND devices.device_seed = ?`
   )
     .bind(normalizedName, deviceSeed)
     .first<{ userId: string; name: string; deviceId: string }>();
@@ -438,7 +522,12 @@ async function getClientConfig(request: Request, env: Env): Promise<Response> {
   if (!userId || !deviceId) throw new HttpError(400, 'missing identity');
 
   await verifyDeviceRequest(request, env, userId, deviceId, '');
-  return json({ config: await getEffectiveRemoteConfigForDevice(env, deviceId) });
+  const state = await getEffectiveClientStateForDevice(env, deviceId);
+  return json({
+    config: state.config,
+    profile: { ...state.profile, userId },
+    ...(state.notice ? { notice: state.notice } : {})
+  });
 }
 
 async function getAdminConfig(env: Env): Promise<Response> {
@@ -612,6 +701,276 @@ async function resetAdminUserConfig(env: Env, userId: string): Promise<Response>
   });
 }
 
+type AdminUserProfileRow = {
+  id: string;
+  name: string;
+  normalizedName: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AdminUserProfileAuditRow = {
+  requestId: string;
+  userId: string;
+  newName: string;
+  newNormalizedName: string;
+};
+
+type AdminUserNoticeRow = {
+  revision: number;
+  enabled: number;
+  message: string;
+  tone: string;
+  expiresAt: string;
+  updatedAt: string;
+};
+
+async function getAdminUserProfile(env: Env, userId: string): Promise<Response> {
+  return json({ user: toAdminUserProfile(await requireAdminUserProfile(env, userId)) });
+}
+
+async function updateAdminUserProfile(request: Request, env: Env, userId: string): Promise<Response> {
+  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserProfileInput;
+  assertOnlyFields(input, ['name', 'requestId'], 'unsupported profile field');
+  const name = typeof input.name === 'string' ? input.name.trim() : '';
+  if (!name || !isBoundedText(name, ACTIVATION_MAX_NAME_LENGTH)) throw new HttpError(400, 'invalid name');
+  const normalizedName = normalizeName(name);
+  if (!normalizedName) throw new HttpError(400, 'invalid name');
+  const requestId =
+    typeof input.requestId === 'string' && input.requestId.trim()
+      ? input.requestId.trim().toLowerCase()
+      : crypto.randomUUID();
+  if (!isUuid(requestId)) throw new HttpError(400, 'invalid request id');
+
+  const recovered = await recoverAdminUserProfileUpdate(env, userId, name, normalizedName, requestId);
+  if (recovered) return recovered;
+
+  const current = await requireAdminUserProfile(env, userId);
+  if (current.name === name && current.normalizedName === normalizedName) {
+    return json({
+      ok: true,
+      alreadyApplied: true,
+      requestId,
+      user: toAdminUserProfile(current)
+    });
+  }
+  const now = new Date().toISOString();
+  const auditId = crypto.randomUUID();
+  const auditGuard = 'EXISTS (SELECT 1 FROM user_profile_audit WHERE id = ?)';
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO user_profile_audit
+           (id, request_id, user_id, old_name, new_name, old_normalized_name, new_normalized_name, renamed_at)
+         SELECT ?, ?, users.id, users.name, ?, users.normalized_name, ?, ?
+         FROM users
+         WHERE users.id = ?
+           AND users.status = 'active'
+           AND users.merged_into_user_id IS NULL
+           AND users.name = ?
+           AND users.normalized_name = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM users occupied
+             WHERE occupied.normalized_name = ? AND occupied.id <> users.id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM user_name_aliases occupied
+             WHERE occupied.normalized_name = ? AND occupied.user_id <> users.id
+           )`
+      ).bind(
+        auditId,
+        requestId,
+        name,
+        normalizedName,
+        now,
+        userId,
+        current.name,
+        current.normalizedName,
+        normalizedName,
+        normalizedName
+      ),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO user_name_aliases (normalized_name, user_id, created_at)
+         SELECT ?, ?, ? WHERE ${auditGuard}`
+      ).bind(current.normalizedName, userId, now, auditId),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO user_name_aliases (normalized_name, user_id, created_at)
+         SELECT ?, ?, ? WHERE ${auditGuard}`
+      ).bind(normalizedName, userId, now, auditId),
+      env.DB.prepare(
+        `UPDATE users SET name = ?, normalized_name = ?
+         WHERE id = ? AND ${auditGuard}`
+      ).bind(name, normalizedName, userId, auditId)
+    ]);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      const recoveredAfterConflict = await recoverAdminUserProfileUpdate(env, userId, name, normalizedName, requestId);
+      if (recoveredAfterConflict) return recoveredAfterConflict;
+      throw new HttpError(409, 'name conflict');
+    }
+    throw error;
+  }
+
+  const committed = await env.DB.prepare('SELECT id FROM user_profile_audit WHERE id = ? AND user_id = ?')
+    .bind(auditId, userId)
+    .first<{ id: string }>();
+  if (!committed) {
+    const recoveredAfterBatch = await recoverAdminUserProfileUpdate(env, userId, name, normalizedName, requestId);
+    if (recoveredAfterBatch) return recoveredAfterBatch;
+    const occupied = await findNameOwner(env, normalizedName);
+    if (occupied && occupied !== userId) throw new HttpError(409, 'name conflict');
+    throw new HttpError(409, 'profile state changed');
+  }
+
+  return json({
+    ok: true,
+    alreadyApplied: false,
+    requestId,
+    user: toAdminUserProfile(await requireAdminUserProfile(env, userId))
+  });
+}
+
+async function recoverAdminUserProfileUpdate(
+  env: Env,
+  userId: string,
+  name: string,
+  normalizedName: string,
+  requestId: string
+): Promise<Response | null> {
+  const audit = await env.DB.prepare(
+    `SELECT request_id AS requestId, user_id AS userId, new_name AS newName,
+            new_normalized_name AS newNormalizedName
+     FROM user_profile_audit WHERE request_id = ?`
+  )
+    .bind(requestId)
+    .first<AdminUserProfileAuditRow>();
+  if (!audit) return null;
+  if (audit.userId !== userId || audit.newName !== name || audit.newNormalizedName !== normalizedName) {
+    throw new HttpError(409, 'profile request conflict');
+  }
+  return json({
+    ok: true,
+    alreadyApplied: true,
+    requestId,
+    user: toAdminUserProfile(await requireAdminUserProfile(env, userId))
+  });
+}
+
+async function findNameOwner(env: Env, normalizedName: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    `SELECT user_id AS userId FROM user_name_aliases WHERE normalized_name = ?
+     UNION ALL
+     SELECT id AS userId FROM users WHERE normalized_name = ?
+     LIMIT 1`
+  )
+    .bind(normalizedName, normalizedName)
+    .first<{ userId: string }>();
+  return row?.userId ?? null;
+}
+
+async function requireAdminUserProfile(env: Env, userId: string): Promise<AdminUserProfileRow> {
+  const row = await env.DB.prepare(
+    `SELECT
+       users.id,
+       users.name,
+       users.normalized_name AS normalizedName,
+       users.created_at AS createdAt,
+       COALESCE((
+         SELECT renamed_at FROM user_profile_audit
+         WHERE user_id = users.id
+         ORDER BY renamed_at DESC
+         LIMIT 1
+       ), users.created_at) AS updatedAt
+     FROM users
+     WHERE users.id = ? AND users.status = 'active' AND users.merged_into_user_id IS NULL`
+  )
+    .bind(userId)
+    .first<AdminUserProfileRow>();
+  if (!row) throw new HttpError(404, 'unknown user');
+  return row;
+}
+
+function toAdminUserProfile(row: AdminUserProfileRow): Pick<AdminUserProfileRow, 'id' | 'name' | 'updatedAt'> {
+  return { id: row.id, name: row.name, updatedAt: row.updatedAt };
+}
+
+async function getAdminUserNotice(env: Env, userId: string): Promise<Response> {
+  await requireKnownUser(env, userId);
+  return json({ notice: await getAdminUserNoticeRow(env, userId) });
+}
+
+async function updateAdminUserNotice(request: Request, env: Env, userId: string): Promise<Response> {
+  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserNoticeInput;
+  assertOnlyFields(input, ['enabled', 'message', 'tone', 'expiresAt'], 'unsupported notice field');
+  if (typeof input.enabled !== 'boolean') throw new HttpError(400, 'invalid notice enabled');
+  const message = parseNoticeMessage(input.message);
+  const tone = parseNoticeTone(input.tone);
+  const expiresAt = parseNoticeExpiresAt(input.expiresAt);
+  const now = new Date().toISOString();
+
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO user_notices (user_id, revision, enabled, message, tone, expires_at, updated_at)
+       SELECT users.id, 1, ?, ?, ?, ?, ?
+       FROM users
+       WHERE users.id = ? AND users.status = 'active' AND users.merged_into_user_id IS NULL
+       ON CONFLICT(user_id) DO UPDATE SET
+         revision = user_notices.revision + 1,
+         enabled = excluded.enabled,
+         message = excluded.message,
+         tone = excluded.tone,
+         expires_at = excluded.expires_at,
+         updated_at = excluded.updated_at
+       WHERE user_notices.enabled <> excluded.enabled
+          OR user_notices.message <> excluded.message
+          OR user_notices.tone <> excluded.tone
+          OR user_notices.expires_at <> excluded.expires_at`
+    ).bind(input.enabled ? 1 : 0, message, tone, expiresAt, now, userId),
+    env.DB.prepare(
+      `DELETE FROM user_notice_acknowledgements
+       WHERE user_id = ?
+         AND revision <> COALESCE((SELECT revision FROM user_notices WHERE user_id = ?), -1)`
+    ).bind(userId, userId)
+  ]);
+  if (getD1Changes(results[0]) === 0) await requireKnownUser(env, userId);
+  return json({ notice: await getAdminUserNoticeRow(env, userId) });
+}
+
+async function resetAdminUserNotice(env: Env, userId: string): Promise<Response> {
+  await requireKnownUser(env, userId);
+  const now = new Date().toISOString();
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE user_notices
+       SET revision = revision + 1, enabled = 0, updated_at = ?
+       WHERE user_id = ?`
+    ).bind(now, userId),
+    env.DB.prepare('DELETE FROM user_notice_acknowledgements WHERE user_id = ?').bind(userId)
+  ]);
+  return json({ ok: true, cleared: getD1Changes(results[0]) > 0, notice: await getAdminUserNoticeRow(env, userId) });
+}
+
+async function getAdminUserNoticeRow(
+  env: Env,
+  userId: string
+): Promise<(RemoteUserNotice & { enabled: boolean }) | null> {
+  const row = await env.DB.prepare(
+    `SELECT revision, enabled, message, tone, expires_at AS expiresAt, updated_at AS updatedAt
+     FROM user_notices WHERE user_id = ?`
+  )
+    .bind(userId)
+    .first<AdminUserNoticeRow>();
+  if (!row) return null;
+  return {
+    revision: row.revision,
+    enabled: row.enabled === 1,
+    message: row.message,
+    tone: row.tone === 'warning' ? 'warning' : 'info',
+    expiresAt: row.expiresAt,
+    updatedAt: row.updatedAt
+  };
+}
+
 type AdminMergeUserRow = {
   id: string;
   name: string;
@@ -632,6 +991,15 @@ type AdminMergeAuditRow = {
   targetUserId: string;
   configResolution: string;
   mergedAt: string;
+};
+
+type AdminMergeNoticeRow = {
+  revision: number;
+  enabled: number;
+  message: string;
+  tone: string;
+  expiresAt: string;
+  updatedAt: string;
 };
 
 async function previewAdminUserMerge(request: Request, env: Env, sourceUserId: string): Promise<Response> {
@@ -715,11 +1083,21 @@ async function mergeAdminUser(request: Request, env: Env, sourceUserId: string):
            FROM user_remote_config
            WHERE user_id = source.id
          ), '') = ?
-         AND COALESCE((
-           SELECT json_array(enabled, subscription_url, rule_profile, updated_at)
-           FROM user_remote_config
-           WHERE user_id = target.id
-         ), '') = ?`
+          AND COALESCE((
+            SELECT json_array(enabled, subscription_url, rule_profile, updated_at)
+            FROM user_remote_config
+            WHERE user_id = target.id
+          ), '') = ?
+          AND COALESCE((
+            SELECT json_array(revision, enabled, message, tone, expires_at, updated_at)
+            FROM user_notices
+            WHERE user_id = source.id
+          ), '') = ?
+          AND COALESCE((
+            SELECT json_array(revision, enabled, message, tone, expires_at, updated_at)
+            FROM user_notices
+            WHERE user_id = target.id
+          ), '') = ?`
     ).bind(
       auditId,
       requestId,
@@ -728,7 +1106,9 @@ async function mergeAdminUser(request: Request, env: Env, sourceUserId: string):
       context.target.id,
       context.source.id,
       getAdminMergeConfigFingerprint(context.sourceConfig),
-      getAdminMergeConfigFingerprint(context.targetConfig)
+      getAdminMergeConfigFingerprint(context.targetConfig),
+      getAdminMergeNoticeFingerprint(context.sourceNotice),
+      getAdminMergeNoticeFingerprint(context.targetNotice)
     ),
     env.DB.prepare(
       `INSERT INTO traffic_daily (user_id, device_id, date, upload_bytes, download_bytes, updated_at)
@@ -758,8 +1138,41 @@ async function mergeAdminUser(request: Request, env: Env, sourceUserId: string):
       context.target.id,
       context.source.id,
       auditId
+    ),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO user_name_aliases (normalized_name, user_id, created_at)
+       SELECT normalized_name, ?, ? FROM users WHERE id = ? AND ${auditGuard}`
+    ).bind(context.target.id, now, context.source.id, auditId),
+    env.DB.prepare(`UPDATE user_name_aliases SET user_id = ? WHERE user_id = ? AND ${auditGuard}`).bind(
+      context.target.id,
+      context.source.id,
+      auditId
     )
   ];
+
+  if (context.sourceNotice && !context.targetNotice) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO user_notices (user_id, revision, enabled, message, tone, expires_at, updated_at)
+         SELECT ?, revision, enabled, message, tone, expires_at, updated_at
+         FROM user_notices
+         WHERE user_id = ? AND ${auditGuard}`
+      ).bind(context.target.id, context.source.id, auditId),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO user_notice_acknowledgements (user_id, revision, device_id, acknowledged_at)
+         SELECT ?, revision, device_id, acknowledged_at
+         FROM user_notice_acknowledgements
+         WHERE user_id = ? AND ${auditGuard}`
+      ).bind(context.target.id, context.source.id, auditId)
+    );
+  }
+  statements.push(
+    env.DB.prepare(`DELETE FROM user_notice_acknowledgements WHERE user_id = ? AND ${auditGuard}`).bind(
+      context.source.id,
+      auditId
+    ),
+    env.DB.prepare(`DELETE FROM user_notices WHERE user_id = ? AND ${auditGuard}`).bind(context.source.id, auditId)
+  );
 
   if (configResolution === 'use_source') {
     if (context.sourceConfig) {
@@ -850,18 +1263,29 @@ async function mergeAdminUser(request: Request, env: Env, sourceUserId: string):
 async function getAdminUserMergeContext(env: Env, sourceUserId: string, targetUserId: string) {
   if (!isUuid(sourceUserId) || !isUuid(targetUserId)) throw new HttpError(400, 'invalid user');
   if (sourceUserId === targetUserId) throw new HttpError(400, 'same user');
-  const [source, target, sourceConfig, targetConfig] = await Promise.all([
+  const [source, target, sourceConfig, targetConfig, sourceNotice, targetNotice] = await Promise.all([
     getAdminMergeUser(env, sourceUserId),
     getAdminMergeUser(env, targetUserId),
     getAdminMergeConfig(env, sourceUserId),
-    getAdminMergeConfig(env, targetUserId)
+    getAdminMergeConfig(env, targetUserId),
+    getAdminMergeNotice(env, sourceUserId),
+    getAdminMergeNotice(env, targetUserId)
   ]);
   if (!source || source.status !== 'active' || source.mergedIntoUserId) throw new HttpError(404, 'unknown user');
   if (!target || target.status !== 'active' || target.mergedIntoUserId) throw new HttpError(404, 'unknown target user');
   const configConflict = Boolean(sourceConfig && targetConfig && !sameAdminMergeConfig(sourceConfig, targetConfig));
   const recommendedResolution: NonNullable<UserMergeInput['configResolution']> =
     sourceConfig && !targetConfig ? 'use_source' : 'keep_target';
-  return { source, target, sourceConfig, targetConfig, configConflict, recommendedResolution };
+  return {
+    source,
+    target,
+    sourceConfig,
+    targetConfig,
+    sourceNotice,
+    targetNotice,
+    configConflict,
+    recommendedResolution
+  };
 }
 
 async function getAdminMergeUser(env: Env, userId: string): Promise<AdminMergeUserRow | null> {
@@ -882,6 +1306,15 @@ async function getAdminMergeConfig(env: Env, userId: string): Promise<AdminMerge
   )
     .bind(userId)
     .first<AdminMergeConfigRow>();
+}
+
+async function getAdminMergeNotice(env: Env, userId: string): Promise<AdminMergeNoticeRow | null> {
+  return env.DB.prepare(
+    `SELECT revision, enabled, message, tone, expires_at AS expiresAt, updated_at AS updatedAt
+     FROM user_notices WHERE user_id = ?`
+  )
+    .bind(userId)
+    .first<AdminMergeNoticeRow>();
 }
 
 async function recoverAdminUserMerge(
@@ -927,12 +1360,61 @@ function getAdminMergeConfigFingerprint(config: AdminMergeConfigRow | null): str
   return config ? JSON.stringify([config.enabled, config.subscriptionUrl, config.ruleProfile, config.updatedAt]) : '';
 }
 
+function getAdminMergeNoticeFingerprint(notice: AdminMergeNoticeRow | null): string {
+  return notice
+    ? JSON.stringify([notice.revision, notice.enabled, notice.message, notice.tone, notice.expiresAt, notice.updatedAt])
+    : '';
+}
+
 function sameAdminMergeConfig(left: AdminMergeConfigRow, right: AdminMergeConfigRow): boolean {
   return (
     left.enabled === right.enabled &&
     cleanOptional(left.subscriptionUrl) === cleanOptional(right.subscriptionUrl) &&
     normalizeOptionalRuleProfile(left.ruleProfile) === normalizeOptionalRuleProfile(right.ruleProfile)
   );
+}
+
+async function acknowledgeUserNotice(request: Request, env: Env): Promise<Response> {
+  await requireJsonMediaType(request);
+  const bodyText = await readRequestTextWithLimit(request, JSON_REQUEST_MAX_BODY_BYTES);
+  const input = safeParseJson(bodyText) as UserNoticeAcknowledgementInput;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'invalid json');
+  assertOnlyFields(input, ['userId', 'deviceId', 'revision'], 'unsupported notice acknowledgement field');
+  const userId = typeof input.userId === 'string' ? input.userId.trim().toLowerCase() : '';
+  const deviceId = typeof input.deviceId === 'string' ? input.deviceId.trim().toLowerCase() : '';
+  const revision = parseNoticeRevision(input.revision);
+  if (!userId || !deviceId) throw new HttpError(400, 'missing identity');
+  if (!isUuid(userId) || !isUuid(deviceId)) throw new HttpError(400, 'invalid identity');
+  const canonicalUserId = await verifyDeviceRequest(request, env, userId, deviceId, bodyText);
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare(
+    `INSERT INTO user_notice_acknowledgements (user_id, revision, device_id, acknowledged_at)
+     SELECT devices.user_id, user_notices.revision, devices.id, ?
+     FROM devices
+     INNER JOIN user_notices ON user_notices.user_id = devices.user_id
+     INNER JOIN users ON users.id = devices.user_id
+     WHERE devices.id = ?
+       AND devices.user_id = ?
+       AND users.status = 'active'
+       AND users.merged_into_user_id IS NULL
+       AND user_notices.revision = ?
+       AND user_notices.enabled = 1
+       AND user_notices.expires_at > ?
+     ON CONFLICT(user_id, revision, device_id) DO NOTHING`
+  )
+    .bind(now, deviceId, canonicalUserId, revision, now)
+    .run();
+  if (getD1Changes(result) === 0) {
+    const existing = await env.DB.prepare(
+      `SELECT 1 AS acknowledged
+       FROM user_notice_acknowledgements
+       WHERE user_id = ? AND revision = ? AND device_id = ?`
+    )
+      .bind(canonicalUserId, revision, deviceId)
+      .first<{ acknowledged: number }>();
+    if (!existing) throw new HttpError(409, 'notice state changed');
+  }
+  return json({ ok: true, revision });
 }
 
 async function reportTraffic(request: Request, env: Env): Promise<Response> {
@@ -1706,7 +2188,7 @@ async function getEffectiveRemoteConfig(env: Env, userId: string): Promise<Remot
   };
 }
 
-async function getEffectiveRemoteConfigForDevice(env: Env, deviceId: string): Promise<RemoteControlConfig> {
+async function getEffectiveClientStateForDevice(env: Env, deviceId: string): Promise<EffectiveClientState> {
   await getGlobalRemoteConfig(env);
   const row = await env.DB.prepare(
     `SELECT
@@ -1718,11 +2200,31 @@ async function getEffectiveRemoteConfigForDevice(env: Env, deviceId: string): Pr
        user_remote_config.enabled AS user_enabled,
        user_remote_config.subscription_url AS user_subscription_url,
        user_remote_config.rule_profile AS user_rule_profile,
-       user_remote_config.updated_at AS user_updated_at
+       user_remote_config.updated_at AS user_updated_at,
+       users.id AS user_id,
+       users.name AS user_name,
+       COALESCE((
+         SELECT renamed_at FROM user_profile_audit
+         WHERE user_id = users.id
+         ORDER BY renamed_at DESC
+         LIMIT 1
+       ), users.created_at) AS profile_updated_at,
+       user_notices.revision AS notice_revision,
+       user_notices.enabled AS notice_enabled,
+       user_notices.message AS notice_message,
+       user_notices.tone AS notice_tone,
+       user_notices.expires_at AS notice_expires_at,
+       user_notices.updated_at AS notice_updated_at,
+       user_notice_acknowledgements.acknowledged_at AS notice_acknowledged_at
      FROM devices
      INNER JOIN users ON users.id = devices.user_id
      INNER JOIN remote_config ON remote_config.id = 1
      LEFT JOIN user_remote_config ON user_remote_config.user_id = devices.user_id
+     LEFT JOIN user_notices ON user_notices.user_id = devices.user_id
+     LEFT JOIN user_notice_acknowledgements
+       ON user_notice_acknowledgements.user_id = devices.user_id
+      AND user_notice_acknowledgements.revision = user_notices.revision
+      AND user_notice_acknowledgements.device_id = devices.id
      WHERE devices.id = ?
        AND users.status = 'active'
        AND users.merged_into_user_id IS NULL`
@@ -1732,13 +2234,38 @@ async function getEffectiveRemoteConfigForDevice(env: Env, deviceId: string): Pr
   if (!row) throw new HttpError(409, 'device state changed');
 
   const global = normalizeRemoteConfigRow(row);
-  return {
+  const config = {
     ...global,
     enabled: typeof row.user_enabled === 'number' ? row.user_enabled === 1 : global.enabled,
     subscriptionUrl: normalizeStoredSubscriptionUrl(row.user_subscription_url) ?? global.subscriptionUrl,
     ruleProfile: normalizeOptionalRuleProfile(row.user_rule_profile) ?? global.ruleProfile,
     updatedAt: row.user_updated_at ?? global.updatedAt
   };
+  const userId = cleanOptional(row.user_id);
+  const name = cleanOptional(row.user_name);
+  if (!userId || !name) throw new HttpError(409, 'device state changed');
+  const profile: RemoteUserProfile = {
+    userId,
+    name,
+    updatedAt: row.profile_updated_at ?? new Date(0).toISOString()
+  };
+  const notice = normalizeRemoteNoticeRow(row);
+  return { config, profile, ...(notice ? { notice } : {}) };
+}
+
+function normalizeRemoteNoticeRow(row: EffectiveDeviceConfigRow, now = new Date()): RemoteUserNotice | undefined {
+  if (row.notice_enabled !== 1 || row.notice_acknowledged_at) return undefined;
+  const revision = row.notice_revision;
+  const message = cleanOptional(row.notice_message);
+  const tone = row.notice_tone === 'warning' ? 'warning' : row.notice_tone === 'info' ? 'info' : undefined;
+  const expiresAt = cleanOptional(row.notice_expires_at);
+  const updatedAt = cleanOptional(row.notice_updated_at);
+  if (!Number.isSafeInteger(revision) || (revision ?? 0) <= 0 || !message || !tone || !expiresAt || !updatedAt) {
+    return undefined;
+  }
+  const expires = Date.parse(expiresAt);
+  if (!Number.isFinite(expires) || expires <= now.getTime()) return undefined;
+  return { revision: revision!, message, tone, expiresAt, updatedAt };
 }
 
 function normalizeRemoteConfigRow(row: RemoteConfigRow): RemoteControlConfig {
@@ -1968,6 +2495,9 @@ function logRequestTelemetry(
 }
 
 function safeRouteLabel(pathname: string): string {
+  if (/^\/api\/admin\/users\/[^/]+\/profile$/.test(pathname)) return '/api/admin/users/:id/profile';
+  if (/^\/api\/admin\/users\/[^/]+\/notice\/reset$/.test(pathname)) return '/api/admin/users/:id/notice/reset';
+  if (/^\/api\/admin\/users\/[^/]+\/notice$/.test(pathname)) return '/api/admin/users/:id/notice';
   if (/^\/api\/admin\/users\/[^/]+\/merge-preview$/.test(pathname)) return '/api/admin/users/:id/merge-preview';
   if (/^\/api\/admin\/users\/[^/]+\/merge$/.test(pathname)) return '/api/admin/users/:id/merge';
   if (/^\/api\/admin\/users\/[^/]+\/config\/reset$/.test(pathname)) return '/api/admin/users/:id/config/reset';
@@ -1980,6 +2510,7 @@ function safeRouteLabel(pathname: string): string {
     '/admin/assets/app.js',
     '/api/activate',
     '/api/traffic/report',
+    '/api/notices/acknowledge',
     '/api/config',
     '/api/admin/users',
     '/api/admin/config',
@@ -2295,6 +2826,32 @@ function parseNullableSubscriptionUrl(value: unknown): string | null {
   }
 }
 
+function parseNoticeMessage(value: unknown): string {
+  if (typeof value !== 'string') throw new HttpError(400, 'invalid notice message');
+  const message = value.trim();
+  if (!message || !isBoundedText(message, USER_NOTICE_MAX_MESSAGE_LENGTH)) {
+    throw new HttpError(400, 'invalid notice message');
+  }
+  return message;
+}
+
+function parseNoticeTone(value: unknown): 'info' | 'warning' {
+  if (value === 'info' || value === 'warning') return value;
+  throw new HttpError(400, 'invalid notice tone');
+}
+
+function parseNoticeExpiresAt(value: unknown): string {
+  if (typeof value !== 'string') throw new HttpError(400, 'invalid notice expiry');
+  return parseStrictIsoDateTime(value.trim(), 'invalid notice expiry');
+}
+
+function parseNoticeRevision(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new HttpError(400, 'invalid notice revision');
+  }
+  return value;
+}
+
 function safeParseJson(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -2367,6 +2924,11 @@ function errorCodeFor(status: number, message: string): string {
     'invalid identity': 'INVALID_IDENTITY',
     'invalid json': 'INVALID_JSON',
     'invalid name': 'INVALID_NAME',
+    'invalid notice enabled': 'INVALID_NOTICE_ENABLED',
+    'invalid notice expiry': 'INVALID_NOTICE_EXPIRY',
+    'invalid notice message': 'INVALID_NOTICE_MESSAGE',
+    'invalid notice revision': 'INVALID_NOTICE_REVISION',
+    'invalid notice tone': 'INVALID_NOTICE_TONE',
     'invalid pagination': 'INVALID_PAGINATION',
     'invalid passphrase': 'INVALID_PASSPHRASE',
     'invalid platform': 'INVALID_PLATFORM',
@@ -2389,6 +2951,10 @@ function errorCodeFor(status: number, message: string): string {
     'missing name': 'MISSING_NAME',
     'missing report id': 'MISSING_REPORT_ID',
     'not found': 'NOT_FOUND',
+    'name conflict': 'NAME_CONFLICT',
+    'notice state changed': 'NOTICE_STATE_CHANGED',
+    'profile request conflict': 'PROFILE_REQUEST_CONFLICT',
+    'profile state changed': 'PROFILE_STATE_CHANGED',
     'registration conflict': 'REGISTRATION_CONFLICT',
     'registration disabled': 'REGISTRATION_DISABLED',
     'report id conflict': 'REPORT_ID_CONFLICT',
@@ -2404,6 +2970,9 @@ function errorCodeFor(status: number, message: string): string {
     'unsupported activation field': 'UNSUPPORTED_ACTIVATION_FIELD',
     'unsupported config field': 'UNSUPPORTED_CONFIG_FIELD',
     'unsupported merge field': 'UNSUPPORTED_MERGE_FIELD',
+    'unsupported notice acknowledgement field': 'UNSUPPORTED_NOTICE_ACKNOWLEDGEMENT_FIELD',
+    'unsupported notice field': 'UNSUPPORTED_NOTICE_FIELD',
+    'unsupported profile field': 'UNSUPPORTED_PROFILE_FIELD',
     'unsupported media type': 'UNSUPPORTED_MEDIA_TYPE',
     'unsupported traffic report field': 'UNSUPPORTED_TRAFFIC_REPORT_FIELD',
     'unsupported traffic limit field': 'UNSUPPORTED_TRAFFIC_LIMIT_FIELD',

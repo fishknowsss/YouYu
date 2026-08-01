@@ -30,7 +30,7 @@ import { createMihomoRuntime } from './mihomo/process';
 import { createWindowsDeviceKeyProvider } from './platform/deviceKey';
 import { createSystemProxyAdapter } from './platform/systemProxy';
 import { runWindowsElevatedProcess, spawnWindowsElevatedMihomo } from './platform/elevatedProcess';
-import { createWindowsStartupTask } from './platform/startupTask';
+import { createWindowsStartupTask, StartupTaskWriteError } from './platform/startupTask';
 import {
   createFullscreenSuppressionStabilizer,
   getNativeWindowHandleDecimal,
@@ -290,27 +290,13 @@ const updateCoordinator = createUpdateCoordinator({
     runUpdateCheckWithNetworkFallback({
       session: autoUpdater.netSession,
       check: () => autoUpdater.checkForUpdates(),
-      proxyUrl: getRuntimeTrafficProxyUrl(),
-      onRetry: (route, detail) => {
-        appendLog(
-          route === 'local-proxy'
-            ? `检查更新直连失败，改用本地代理重试 (${detail})`
-            : `检查更新直连失败，刷新 DNS 后重试 (${detail})`
-        );
-      }
+      getProxyUrl: getRuntimeTrafficProxyUrl
     }),
   executeDownload: () =>
     runUpdateDownloadWithNetworkFallback({
       session: autoUpdater.netSession,
       download: () => autoUpdater.downloadUpdate(),
-      proxyUrl: getRuntimeTrafficProxyUrl(),
-      onRetry: (route, detail) => {
-        appendLog(
-          route === 'local-proxy'
-            ? `更新下载直连失败，改用本地代理重试 (${detail})`
-            : `更新下载直连失败，刷新 DNS 后重试 (${detail})`
-        );
-      }
+      getProxyUrl: getRuntimeTrafficProxyUrl
     }),
   formatError,
   onLog: appendLog,
@@ -536,6 +522,7 @@ type RemoteConfigSyncExecutionOptions = RemoteConfigSyncRequest & { signal?: Abo
 
 async function performRemoteConfigSync(options: RemoteConfigSyncExecutionOptions = {}): Promise<boolean> {
   let subscriptionChanged = false;
+  let clientStateChanged = false;
   let restartAttempted = false;
   const restartIfNeeded = async () => {
     if (
@@ -556,11 +543,16 @@ async function performRemoteConfigSync(options: RemoteConfigSyncExecutionOptions
     subscriptionChanged = await applyRemoteSubscription(cachedSnapshot.config, cachedSnapshot);
     throwIfAborted(options.signal);
     const result = await remoteConfigClient.sync({ proxyUrl: options.proxyUrl, signal: options.signal });
+    clientStateChanged = Boolean(result.profileChanged || result.noticeChanged);
+    if (clientStateChanged) {
+      appendLog('remote user state updated');
+      await broadcastSnapshot().catch((error) => console.error('broadcast snapshot failed', error));
+    }
     throwIfAborted(options.signal);
     const syncedSnapshot = await remoteConfigClient.getActiveConfigSnapshot();
     subscriptionChanged = (await applyRemoteSubscription(syncedSnapshot.config, syncedSnapshot)) || subscriptionChanged;
     throwIfAborted(options.signal);
-    if (!result.changed && !subscriptionChanged) return false;
+    if (!result.changed && !subscriptionChanged) return clientStateChanged;
 
     appendLog(`remote config updated: v${syncedSnapshot.config?.version ?? 0}`);
     await restartIfNeeded();
@@ -583,7 +575,7 @@ async function performRemoteConfigSync(options: RemoteConfigSyncExecutionOptions
       appendLog(`remote config sync failed: ${formatError(reportedError)}`);
     }
     if (options.throwOnError) throw reportedError;
-    return subscriptionChanged;
+    return subscriptionChanged || clientStateChanged;
   }
 }
 
@@ -662,6 +654,12 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
     throw new Error('update not downloaded');
   }
 
+  const preparation = await updateCoordinator.prepareInstall();
+  if (!preparation.ready) return createSnapshot();
+  if (updateSnapshot.status !== 'downloaded' || updateInstallerLaunchPending) {
+    throw new Error('update not downloaded');
+  }
+
   updateInstallerLaunchPending = true;
   updateInstallerLaunchFailed = false;
   updateInstallerLaunchStarted = false;
@@ -724,7 +722,7 @@ function recoverFromUpdateInstallFailure(prefix: string, error: unknown) {
   lifecycle.resumeStarts();
   restartPetFullscreenProbe();
   appendLog(message);
-  setUpdateSnapshot({ status: 'downloaded', message });
+  setUpdateSnapshot({ status: 'downloaded', message, failureKind: 'installer-launch-failed' });
   refreshTrayMenu();
   startRemoteConfigPolling();
   if (shouldRestartRuntime && restartIntentGeneration !== undefined) {
@@ -1180,7 +1178,10 @@ async function createSnapshot(): Promise<AppSnapshot> {
         strategyTargets[settings.strategy === 'manual' ? 'auto' : settings.strategy]
       ];
   const activeStrategy = strategies.find((strategy) => strategy.active)?.key ?? settings.strategy;
-  const trafficSnapshot = await trafficStore.getSnapshot();
+  const [trafficSnapshot, userNotice] = await Promise.all([
+    trafficStore.getSnapshot(),
+    remoteConfigClient.getActiveNotice()
+  ]);
   const nodeHealth = await getCurrentNodeHealthSnapshot(currentNode, running, settings);
 
   return {
@@ -1204,6 +1205,7 @@ async function createSnapshot(): Promise<AppSnapshot> {
     runtime,
     traffic: trafficSnapshot.stats,
     trafficIdentity: trafficSnapshot.identity,
+    userNotice,
     subscriptionUrl: settings.subscriptionUrl,
     remoteSubscriptionUrl: settings.remoteSubscriptionUrl,
     subscriptionRevision,
@@ -2043,6 +2045,12 @@ function registerIpc() {
     sendSnapshotToWindows(snapshot);
     return snapshot;
   });
+  ipcMain.handle(ipcChannels.acknowledgeUserNotice, async (_event, revision) => {
+    await remoteConfigClient.acknowledgeNotice(revision, { proxyUrl: getRuntimeTrafficProxyUrl() });
+    const snapshot = await createSnapshot();
+    sendSnapshotToWindows(snapshot);
+    return snapshot;
+  });
   ipcMain.handle(ipcChannels.syncRemoteConfig, async (event, request?: OperationRequest) => {
     return runCancelableOperation(
       event.sender.id,
@@ -2409,6 +2417,15 @@ function clearLegacyLaunchAtLogin() {
   });
 }
 
+function enableLegacyLaunchAtLogin() {
+  app.setLoginItemSettings({
+    openAtLogin: true,
+    openAsHidden: true,
+    path: process.execPath,
+    args: ['--hidden']
+  });
+}
+
 function isLegacyLaunchAtLoginEnabled(): boolean {
   return app.getLoginItemSettings({ path: process.execPath, args: ['--hidden'] }).openAtLogin;
 }
@@ -2424,7 +2441,14 @@ async function setLaunchAtLogin(enabled: boolean) {
     return;
   }
 
-  await windowsStartupTask.setEnabled(enabled);
+  try {
+    await windowsStartupTask.setEnabled(enabled);
+  } catch (error) {
+    if (!enabled || !(error instanceof StartupTaskWriteError)) throw error;
+    enableLegacyLaunchAtLogin();
+    appendLog('计划任务不可用，已改用兼容开机自启');
+    return;
+  }
   clearLegacyLaunchAtLogin();
 }
 
@@ -2441,10 +2465,18 @@ async function toggleLaunchAtLogin(enabled: boolean) {
 async function reconcileLaunchAtLogin() {
   if (process.platform !== 'win32') return;
 
+  const legacyEnabled = isLegacyLaunchAtLoginEnabled();
   try {
-    await windowsStartupTask.reconcile(isLegacyLaunchAtLoginEnabled());
+    await windowsStartupTask.reconcile(legacyEnabled);
     clearLegacyLaunchAtLogin();
   } catch (error) {
+    if (error instanceof StartupTaskWriteError) {
+      if (windowsStartupTask.hasManagedLegacyTask()) {
+        clearLegacyLaunchAtLogin();
+        return;
+      }
+      if (legacyEnabled) return;
+    }
     recordError('同步开机自启失败', error);
   }
 }
@@ -3137,6 +3169,7 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
       void cleanupBeforeExit().catch((error) => recordError('退出清理失败', error));
       return;
     }
+    if (commandLine.includes('--hidden') || commandLine.includes('--startup')) return;
     showMainWindow();
   });
 

@@ -448,6 +448,33 @@ describe('TrafficStore', () => {
     });
   });
 
+  it('updates only the current verified identity name when a signed remote profile is synchronized', async () => {
+    const store = new TrafficStore(dir);
+    await store.registerIdentity({ userId: 'user-1', deviceId: 'device-1', name: 'Ailce', deviceName: 'PC' });
+
+    await expect(
+      store.syncIdentityProfile({ userId: 'user-1', deviceId: 'stale-device' }, { name: 'Wrong' })
+    ).resolves.toBe(false);
+    await expect(
+      store.syncIdentityProfile({ userId: 'user-1', deviceId: 'device-1' }, { name: 'Alice' })
+    ).resolves.toBe(true);
+    await expect(
+      store.syncIdentityProfile({ userId: 'user-1', deviceId: 'device-1' }, { name: 'Alice' })
+    ).resolves.toBe(false);
+    await expect(
+      store.syncIdentityProfile({ userId: 'user-1', deviceId: 'device-1' }, { name: 'A'.repeat(81) })
+    ).rejects.toThrow('invalid remote traffic profile');
+    await expect(
+      store.syncIdentityProfile({ userId: 'user-1', deviceId: 'device-1' }, { name: 'Alice\nAdmin' })
+    ).rejects.toThrow('invalid remote traffic profile');
+    await expect(store.getSnapshot()).resolves.toMatchObject({
+      identity: { userId: 'user-1', deviceId: 'device-1', name: 'Alice', verificationStatus: 'verified' }
+    });
+
+    const reopened = new TrafficStore(dir);
+    await expect(reopened.getSnapshot()).resolves.toMatchObject({ identity: { name: 'Alice' } });
+  });
+
   it('keeps the old identity and usage when the atomic activation write fails', async () => {
     const store = new TrafficStore(dir);
     const now = new Date('2026-05-10T08:10:00.000Z');

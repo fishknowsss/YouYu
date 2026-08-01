@@ -54,7 +54,8 @@ export const ADMIN_SCRIPT = String.raw`
     userLoadSequence: 0,
     mergePreviewSequence: 0,
     mergePreviewState: null,
-    mergeRequestId: ''
+    mergeRequestId: '',
+    profileRequestId: ''
   };
 
   const adminShell = document.getElementById('adminShell');
@@ -95,6 +96,14 @@ export const ADMIN_SCRIPT = String.raw`
   const globalSubscriptionState = document.getElementById('globalSubscriptionState');
   const userSubscriptionState = document.getElementById('userSubscriptionState');
   const userModeEl = document.getElementById('userMode');
+  const userProfileNameEl = document.getElementById('userProfileName');
+  const userProfileNameError = document.getElementById('userProfileNameError');
+  const userNoticeState = document.getElementById('userNoticeState');
+  const userNoticeEnabled = document.getElementById('userNoticeEnabled');
+  const userNoticeTone = document.getElementById('userNoticeTone');
+  const userNoticeMessage = document.getElementById('userNoticeMessage');
+  const userNoticeExpiresAt = document.getElementById('userNoticeExpiresAt');
+  const userNoticeError = document.getElementById('userNoticeError');
   const mergeTargetEl = document.getElementById('mergeTarget');
   const mergePreviewEl = document.getElementById('mergePreview');
   const mergePreviewSummary = document.getElementById('mergePreviewSummary');
@@ -188,6 +197,16 @@ export const ADMIN_SCRIPT = String.raw`
     runAction(document.getElementById('saveUserConfig'), '保存中', saveUserConfig);
   });
   document.getElementById('resetUserConfig').addEventListener('click', () => runAction(document.getElementById('resetUserConfig'), '重置中', resetUserConfig));
+  document.getElementById('userProfileForm').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(document.getElementById('saveUserProfile'), '保存中', saveUserProfile);
+  });
+  userProfileNameEl.addEventListener('input', () => { state.profileRequestId = ''; });
+  document.getElementById('userNoticeForm').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(document.getElementById('saveUserNotice'), '保存中', saveUserNotice);
+  });
+  document.getElementById('clearUserNotice').addEventListener('click', () => runAction(document.getElementById('clearUserNotice'), '清除中', clearUserNotice));
   userModeEl.addEventListener('change', updateUserModeState);
   mergeTargetEl.addEventListener('change', resetMergePreview);
   mergeResolutionEl.addEventListener('change', updateMergeConfirmState);
@@ -1048,7 +1067,9 @@ export const ADMIN_SCRIPT = String.raw`
     const sequence = ++state.userLoadSequence;
     const responses = await Promise.all([
       api('/api/admin/users/' + encodeURIComponent(userId) + '/config'),
-      loadPagedCollection('/api/admin/users/' + encodeURIComponent(userId) + '/traffic', 'rows')
+      loadPagedCollection('/api/admin/users/' + encodeURIComponent(userId) + '/traffic', 'rows'),
+      api('/api/admin/users/' + encodeURIComponent(userId) + '/profile'),
+      api('/api/admin/users/' + encodeURIComponent(userId) + '/notice')
     ]);
     if (sequence !== state.userLoadSequence) return;
     const user = state.users.find((entry) => entry.id === userId) || { id: userId, name: name };
@@ -1059,6 +1080,7 @@ export const ADMIN_SCRIPT = String.raw`
     renderUserProfile(user);
     renderUserConfig(name, responses[0]);
     renderUserTraffic(name, state.activeUserTrafficRows);
+    renderUserManagement(responses[2].user || user, responses[3].notice || null);
     drawerPlaceholder.hidden = true;
     drawerContent.hidden = false;
     setDrawerTab('config');
@@ -1147,6 +1169,7 @@ export const ADMIN_SCRIPT = String.raw`
     state.activeUserId = '';
     state.activeUserName = '';
     state.activeUserTrafficRows = [];
+    state.profileRequestId = '';
     state.userTrafficPage = 1;
     drawerContent.hidden = true;
     drawerPlaceholder.hidden = false;
@@ -1167,6 +1190,29 @@ export const ADMIN_SCRIPT = String.raw`
     setUserConfigFields(override || effective);
     setUserMode(getUserModeFromConfig(override));
     setUserSubscriptionState(effective, override);
+  }
+
+  function renderUserManagement(profile, notice) {
+    state.profileRequestId = '';
+    userProfileNameEl.value = profile && profile.name ? String(profile.name) : state.activeUserName;
+    clearFieldError(userProfileNameEl, userProfileNameError);
+    renderUserNotice(notice);
+  }
+
+  function renderUserNotice(notice) {
+    const exists = Boolean(notice && Number.isSafeInteger(Number(notice.revision)));
+    userNoticeEnabled.value = !exists || notice.enabled !== false ? 'true' : 'false';
+    userNoticeTone.value = exists && notice.tone === 'warning' ? 'warning' : 'info';
+    userNoticeMessage.value = exists && typeof notice.message === 'string' ? notice.message : '';
+    userNoticeExpiresAt.value = exists && notice.expiresAt
+      ? formatShanghaiDateTimeInput(notice.expiresAt)
+      : formatShanghaiDateTimeInput(new Date(Date.now() + 7 * 86400000).toISOString());
+    clearFieldError(userNoticeMessage, userNoticeError);
+    userNoticeExpiresAt.removeAttribute('aria-invalid');
+    const expired = exists && dateValue(notice.expiresAt) <= Date.now();
+    const stateText = !exists ? '未设置' : notice.enabled === false ? '已停用' : expired ? '已过期' : '已启用';
+    userNoticeState.textContent = stateText;
+    userNoticeState.className = 'chip ' + (stateText === '已启用' ? 'green' : stateText === '已过期' ? 'red' : 'gray');
   }
 
   function renderUserTraffic(name, rows) {
@@ -1349,6 +1395,82 @@ export const ADMIN_SCRIPT = String.raw`
     renderAll();
     setStatus(userName + ' 已重置为跟随全局');
     showToast(userName + ' 已重置');
+  }
+
+  async function saveUserProfile() {
+    if (!state.activeUserId) return;
+    const userId = state.activeUserId;
+    const sequence = state.userLoadSequence;
+    const name = userProfileNameEl.value.trim();
+    clearFieldError(userProfileNameEl, userProfileNameError);
+    if (!name || Array.from(name).length > 80 || hasControlCharacters(name)) {
+      setFieldError(userProfileNameEl, userProfileNameError, '请输入 1 至 80 个有效字符');
+      return;
+    }
+    const requestId = state.profileRequestId || createRequestId();
+    state.profileRequestId = requestId;
+    const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/profile', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: name, requestId: requestId })
+    });
+    if (!isCurrentUserContext(userId, sequence)) return;
+    const profile = data.user || { id: userId, name: name };
+    state.profileRequestId = '';
+    state.activeUserName = profile.name || name;
+    userProfileNameEl.value = state.activeUserName;
+    await loadUsers();
+    if (!isCurrentUserContext(userId, sequence)) return;
+    const refreshed = state.users.find((user) => user.id === userId) || profile;
+    state.activeUserName = refreshed.name || state.activeUserName;
+    renderAll();
+    renderUserProfile(refreshed);
+    revealSelectedUser(userId);
+    setStatus('用户名已保存，客户端会自动同步');
+    showToast('用户名已保存');
+  }
+
+  async function saveUserNotice() {
+    if (!state.activeUserId) return;
+    const userId = state.activeUserId;
+    const sequence = state.userLoadSequence;
+    const message = userNoticeMessage.value.trim();
+    const expiresAt = parseShanghaiDateTimeInput(userNoticeExpiresAt.value);
+    clearFieldError(userNoticeMessage, userNoticeError);
+    userNoticeExpiresAt.removeAttribute('aria-invalid');
+    if (!message || Array.from(message).length > 500 || hasControlCharacters(message)) {
+      setFieldError(userNoticeMessage, userNoticeError, '请输入 1 至 500 个有效字符');
+      return;
+    }
+    if (!expiresAt || (userNoticeEnabled.value === 'true' && dateValue(expiresAt) <= Date.now())) {
+      setFieldError(userNoticeExpiresAt, userNoticeError, '启用时请选择未来的到期时间');
+      return;
+    }
+    const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/notice', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabled: userNoticeEnabled.value === 'true',
+        message: message,
+        tone: userNoticeTone.value === 'warning' ? 'warning' : 'info',
+        expiresAt: expiresAt
+      })
+    });
+    if (!isCurrentUserContext(userId, sequence)) return;
+    renderUserNotice(data.notice || null);
+    setStatus('定向通知已保存');
+    showToast('定向通知已保存');
+  }
+
+  async function clearUserNotice() {
+    if (!state.activeUserId) return;
+    const userId = state.activeUserId;
+    const sequence = state.userLoadSequence;
+    const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/notice/reset', { method: 'POST' });
+    if (!isCurrentUserContext(userId, sequence)) return;
+    renderUserNotice(data.notice || null);
+    setStatus('定向通知已停用');
+    showToast('定向通知已停用');
   }
 
   function renderConfigDistribution() {
@@ -1732,6 +1854,25 @@ export const ADMIN_SCRIPT = String.raw`
     return true;
   }
 
+  function setFieldError(input, errorEl, message) {
+    input.setAttribute('aria-invalid', 'true');
+    errorEl.textContent = message;
+    setStatus(message);
+    input.focus();
+  }
+
+  function clearFieldError(input, errorEl) {
+    input.removeAttribute('aria-invalid');
+    errorEl.textContent = '';
+  }
+
+  function hasControlCharacters(value) {
+    return Array.from(value).some((character) => {
+      const codePoint = character.codePointAt(0) || 0;
+      return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+    });
+  }
+
   function setUserConfigFields(config) {
     document.getElementById('userSubscription').value = config.subscriptionUrl || '';
     document.getElementById('userRuleProfile').value = normalizeRuleProfile(config.ruleProfile);
@@ -2043,13 +2184,23 @@ export const ADMIN_SCRIPT = String.raw`
     const error = data && data.error ? String(data.error) : '';
     if (status === 403) return error === 'admin disabled' ? '后台未启用管理' : '管理令牌不正确';
     if (status === 401) return '认证无效';
-    if (status === 409) return error === 'config conflict' ? '用户配置存在冲突' : '当前数据已变化，请刷新后重试';
+    if (status === 409) {
+      if (error === 'config conflict') return '用户配置存在冲突';
+      if (error === 'name conflict') return '用户名已被其他用户使用';
+      if (error === 'profile request conflict') return '本次用户名修改与已提交内容冲突';
+      if (error === 'notice state changed') return '通知状态已变化，请刷新后重试';
+      return '当前数据已变化，请刷新后重试';
+    }
     if (status === 429) return '请求太频繁';
     if (status === 400) {
       if (error === 'invalid subscription url') return '订阅链接无效';
       if (error === 'invalid traffic limit') return '累计流量上限无效';
       if (error === 'invalid traffic expiry') return '流量到期时间无效';
       if (error === 'invalid traffic trend range') return '趋势范围无效';
+      if (error === 'invalid name') return '用户名无效';
+      if (error === 'invalid notice message') return '通知内容无效';
+      if (error === 'invalid notice expiry') return '通知到期时间无效';
+      if (error === 'invalid notice tone') return '通知级别无效';
       return '请求内容有误';
     }
     if (status === 404) return '接口不存在';

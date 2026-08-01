@@ -54,6 +54,22 @@ export type UpdateCoordinatorInspection = {
   timerUnrefed: boolean;
 };
 
+export type UpdateInstallPreparation =
+  | { ready: true; snapshot: AppUpdateSnapshot }
+  | {
+      ready: false;
+      reason: 'not-downloaded' | 'newer-update' | 'check-failed';
+      snapshot: AppUpdateSnapshot;
+    };
+
+type UpdateCheckFlight = {
+  generation: number;
+  promise: Promise<AppUpdateSnapshot>;
+  userInitiated: boolean;
+};
+
+const updateRefreshFailurePrefix = '检查新版失败: ';
+
 export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
   let snapshot: AppUpdateSnapshot = normalizeUpdateSnapshot(
     {
@@ -69,8 +85,9 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
   let disposed = false;
   let generation = 0;
   let activeCheckGeneration: number | undefined;
+  let activeCheckPublishesEvents = false;
   let activeDownloadGeneration: number | undefined;
-  let checkFlight: { generation: number; promise: Promise<AppUpdateSnapshot> } | undefined;
+  let checkFlight: UpdateCheckFlight | undefined;
   let downloadFlight: { generation: number; promise: Promise<AppUpdateSnapshot> } | undefined;
   let periodicTimer: TimerHandle | undefined;
   let timerUnrefed = false;
@@ -105,24 +122,37 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
       );
       return Promise.resolve(snapshot);
     }
-    if (snapshot.status === 'downloaded' || snapshot.status === 'installing') return Promise.resolve(snapshot);
-    if (checkFlight) return checkFlight.promise;
+    if (snapshot.status === 'installing') return Promise.resolve(snapshot);
+    if (checkFlight) {
+      if (userInitiated) checkFlight.userInitiated = true;
+      return checkFlight.promise;
+    }
     if (downloadFlight) return Promise.resolve(snapshot);
 
     clearPeriodicTimer();
+    const previousSnapshot = snapshot;
+    const preserveDownloaded = previousSnapshot.status === 'downloaded';
     const operationGeneration = ++generation;
     activeCheckGeneration = operationGeneration;
-    commit({ status: 'checking', checkedAt: now() }, operationGeneration);
+    activeCheckPublishesEvents = userInitiated && !preserveDownloaded;
+    if (activeCheckPublishesEvents) {
+      commit({ status: 'checking', checkedAt: now() }, operationGeneration);
+    }
     let resolveFlight!: (value: AppUpdateSnapshot) => void;
     const promise = new Promise<AppUpdateSnapshot>((resolve) => {
       resolveFlight = resolve;
     });
-    checkFlight = { generation: operationGeneration, promise };
-    settleFlight(runCheck(operationGeneration), resolveFlight, 'update check flight failed');
+    const flight: UpdateCheckFlight = { generation: operationGeneration, promise, userInitiated };
+    checkFlight = flight;
+    settleFlight(runCheck(operationGeneration, flight, previousSnapshot), resolveFlight, 'update check flight failed');
     return promise;
   }
 
-  async function runCheck(operationGeneration: number): Promise<AppUpdateSnapshot> {
+  async function runCheck(
+    operationGeneration: number,
+    flight: UpdateCheckFlight,
+    previousSnapshot: AppUpdateSnapshot
+  ): Promise<AppUpdateSnapshot> {
     let shouldDownload = false;
     try {
       const result = await options.executeCheck();
@@ -130,15 +160,25 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
       const available = Boolean(result?.isUpdateAvailable);
       const version = getUpdateInfoVersion(result?.updateInfo);
       if (available) {
-        commit(
-          {
-            status: 'available',
-            availableVersion: version ?? snapshot.availableVersion,
-            checkedAt: now()
-          },
-          operationGeneration
-        );
-        shouldDownload = true;
+        const downloadedVersion =
+          previousSnapshot.status === 'downloaded'
+            ? (previousSnapshot.downloadedVersion ?? previousSnapshot.availableVersion)
+            : undefined;
+        if (downloadedVersion && (!version || compareUpdateVersions(version, downloadedVersion) <= 0)) {
+          restoreSnapshotAfterCheck(previousSnapshot, operationGeneration);
+        } else {
+          commit(
+            {
+              status: 'available',
+              availableVersion: version ?? snapshot.availableVersion,
+              checkedAt: now()
+            },
+            operationGeneration
+          );
+          shouldDownload = true;
+        }
+      } else if (previousSnapshot.status === 'downloaded') {
+        restoreSnapshotAfterCheck(previousSnapshot, operationGeneration);
       } else {
         commit(
           {
@@ -150,9 +190,29 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
         );
       }
     } catch (error) {
-      if (isCurrent(operationGeneration)) setFailure(error, '检查更新', operationGeneration);
+      if (isCurrent(operationGeneration)) {
+        if (previousSnapshot.status === 'downloaded') {
+          const message = formatUpdateError(error);
+          if (flight.userInitiated) logFailure('检查更新', message);
+          restoreSnapshotAfterCheck(
+            previousSnapshot,
+            operationGeneration,
+            flight.userInitiated
+              ? {
+                  message: `${updateRefreshFailurePrefix}${message}`,
+                  failureKind: 'refresh-check-failed'
+                }
+              : undefined
+          );
+        } else if (flight.userInitiated) {
+          setFailure(error, '检查更新', operationGeneration);
+        } else {
+          restoreSnapshotAfterCheck(previousSnapshot, operationGeneration);
+        }
+      }
     } finally {
       if (activeCheckGeneration === operationGeneration) activeCheckGeneration = undefined;
+      activeCheckPublishesEvents = false;
       if (checkFlight?.generation === operationGeneration) checkFlight = undefined;
     }
 
@@ -162,6 +222,26 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
       schedule();
     }
     return snapshot;
+  }
+
+  async function prepareInstall(): Promise<UpdateInstallPreparation> {
+    const beforeRefresh = snapshot;
+    const downloadedVersion =
+      beforeRefresh.status === 'downloaded'
+        ? (beforeRefresh.downloadedVersion ?? beforeRefresh.availableVersion)
+        : undefined;
+    if (!downloadedVersion) {
+      return { ready: false, reason: 'not-downloaded', snapshot };
+    }
+
+    const refreshed = await check(true);
+    if (refreshed.status !== 'downloaded' || refreshed.downloadedVersion !== downloadedVersion) {
+      return { ready: false, reason: 'newer-update', snapshot: refreshed };
+    }
+    if (refreshed.failureKind === 'refresh-check-failed') {
+      return { ready: false, reason: 'check-failed', snapshot: refreshed };
+    }
+    return { ready: true, snapshot: refreshed };
   }
 
   function download(): Promise<AppUpdateSnapshot> {
@@ -217,7 +297,7 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
   function setSnapshot(next: Partial<AppUpdateSnapshot>): AppUpdateSnapshot {
     const nextGeneration = ++generation;
     commit(next, nextGeneration);
-    if (snapshot.status === 'downloaded' || snapshot.status === 'installing') clearPeriodicTimer();
+    if (snapshot.status === 'installing') clearPeriodicTimer();
     return snapshot;
   }
 
@@ -234,13 +314,21 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
 
   function setFailure(error: unknown, context: string, expectedGeneration: number): void {
     if (!isCurrent(expectedGeneration)) return;
-    let message: string;
+    const message = formatUpdateError(error);
+    logFailure(context, message);
+    commit({ status: 'failed', checkedAt: now(), message }, expectedGeneration);
+  }
+
+  function formatUpdateError(error: unknown): string {
     try {
-      message = options.formatError(error);
+      return options.formatError(error);
     } catch (formatError) {
       reportInternalError('update error formatter failed', formatError);
-      message = error instanceof Error ? error.message : String(error);
+      return error instanceof Error ? error.message : String(error);
     }
+  }
+
+  function logFailure(context: string, message: string): void {
     if (snapshot.status !== 'failed' || snapshot.message !== message) {
       try {
         options.onLog?.(`${context}失败: ${message}`);
@@ -248,7 +336,18 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
         reportInternalError('update log observer failed', logError);
       }
     }
-    commit({ status: 'failed', checkedAt: now(), message }, expectedGeneration);
+  }
+
+  function restoreSnapshotAfterCheck(
+    previousSnapshot: AppUpdateSnapshot,
+    expectedGeneration: number,
+    failure?: Pick<AppUpdateSnapshot, 'message' | 'failureKind'>
+  ): void {
+    const restored = { ...previousSnapshot, checkedAt: now() };
+    delete restored.message;
+    delete restored.failureKind;
+    if (failure) Object.assign(restored, failure);
+    commit(restored, expectedGeneration);
   }
 
   function settleFlight(
@@ -278,7 +377,6 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
       !options.isPackaged() ||
       checkFlight ||
       downloadFlight ||
-      snapshot.status === 'downloaded' ||
       snapshot.status === 'installing'
     ) {
       return;
@@ -351,7 +449,7 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
         'checking-for-update',
         () => {
           const eventGeneration = activeCheckGeneration;
-          if (eventGeneration === undefined) return;
+          if (eventGeneration === undefined || !activeCheckPublishesEvents) return;
           commit({ status: 'checking', checkedAt: now() }, eventGeneration);
         }
       ],
@@ -359,7 +457,7 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
         'update-available',
         (info) => {
           const eventGeneration = activeCheckGeneration;
-          if (eventGeneration === undefined) return;
+          if (eventGeneration === undefined || !activeCheckPublishesEvents) return;
           commit(
             {
               status: 'available',
@@ -416,7 +514,7 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
         'update-not-available',
         (info) => {
           const eventGeneration = activeCheckGeneration;
-          if (eventGeneration === undefined) return;
+          if (eventGeneration === undefined || !activeCheckPublishesEvents) return;
           commit(
             {
               status: 'not-available',
@@ -444,6 +542,7 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
   return {
     start,
     check,
+    prepareInstall,
     download,
     schedule,
     pause,
@@ -468,6 +567,7 @@ export function normalizeUpdateSnapshot(
   };
 
   if (next.status && !Object.prototype.hasOwnProperty.call(next, 'message')) delete merged.message;
+  if (next.status && !Object.prototype.hasOwnProperty.call(next, 'failureKind')) delete merged.failureKind;
   if (!['downloading', 'downloaded', 'installing'].includes(merged.status)) delete merged.percent;
   if (merged.status !== 'downloading') {
     delete merged.downloadPhase;
@@ -484,6 +584,7 @@ export function normalizeUpdateSnapshot(
     delete merged.availableVersion;
   }
   if (merged.status !== 'downloaded' && merged.status !== 'installing') delete merged.downloadedVersion;
+  if (merged.status !== 'downloaded' || !merged.message) delete merged.failureKind;
   return merged;
 }
 
@@ -491,6 +592,43 @@ function getUpdateInfoVersion(info: unknown): string | undefined {
   if (!info || typeof info !== 'object') return undefined;
   const version = (info as { version?: unknown }).version;
   return typeof version === 'string' && version.trim() ? version.trim() : undefined;
+}
+
+function compareUpdateVersions(left: string, right: string): number {
+  const leftVersion = parseUpdateVersion(left);
+  const rightVersion = parseUpdateVersion(right);
+  if (!leftVersion || !rightVersion) return left.trim() === right.trim() ? 0 : 1;
+
+  for (let index = 0; index < 3; index += 1) {
+    const difference = leftVersion.core[index] - rightVersion.core[index];
+    if (difference !== 0) return Math.sign(difference);
+  }
+
+  if (leftVersion.prerelease.length === 0) return rightVersion.prerelease.length === 0 ? 0 : 1;
+  if (rightVersion.prerelease.length === 0) return -1;
+  const count = Math.max(leftVersion.prerelease.length, rightVersion.prerelease.length);
+  for (let index = 0; index < count; index += 1) {
+    const leftPart = leftVersion.prerelease[index];
+    const rightPart = rightVersion.prerelease[index];
+    if (leftPart === undefined) return -1;
+    if (rightPart === undefined) return 1;
+    if (leftPart === rightPart) continue;
+    const leftNumber = /^\d+$/.test(leftPart) ? Number(leftPart) : undefined;
+    const rightNumber = /^\d+$/.test(rightPart) ? Number(rightPart) : undefined;
+    if (leftNumber !== undefined && rightNumber !== undefined) return Math.sign(leftNumber - rightNumber);
+    if (leftNumber !== undefined) return -1;
+    if (rightNumber !== undefined) return 1;
+    return leftPart.localeCompare(rightPart);
+  }
+  return 0;
+}
+
+function parseUpdateVersion(value: string): { core: [number, number, number]; prerelease: string[] } | undefined {
+  const match = value.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/);
+  if (!match) return undefined;
+  const core = [Number(match[1]), Number(match[2]), Number(match[3])] as [number, number, number];
+  if (core.some((part) => !Number.isSafeInteger(part))) return undefined;
+  return { core, prerelease: match[4]?.split('.') ?? [] };
 }
 
 function normalizeUpdatePercent(value: unknown): number | undefined {

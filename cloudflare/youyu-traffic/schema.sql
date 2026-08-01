@@ -8,6 +8,30 @@ CREATE TABLE IF NOT EXISTS users (
   FOREIGN KEY (merged_into_user_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS user_name_aliases (
+  normalized_name TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_user_name_aliases_user_id ON user_name_aliases(user_id);
+
+CREATE TABLE IF NOT EXISTS user_profile_audit (
+  id TEXT PRIMARY KEY,
+  request_id TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL,
+  old_name TEXT NOT NULL,
+  new_name TEXT NOT NULL,
+  old_normalized_name TEXT NOT NULL,
+  new_normalized_name TEXT NOT NULL,
+  renamed_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_profile_audit_user_renamed
+  ON user_profile_audit(user_id, renamed_at);
+
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -35,6 +59,30 @@ CREATE TABLE IF NOT EXISTS traffic_daily (
 
 CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_device_key ON devices(device_key) WHERE device_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS user_notices (
+  user_id TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  message TEXT NOT NULL,
+  tone TEXT NOT NULL DEFAULT 'info' CHECK (tone IN ('info', 'warning')),
+  expires_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS user_notice_acknowledgements (
+  user_id TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  device_id TEXT NOT NULL,
+  acknowledged_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, revision, device_id),
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (device_id) REFERENCES devices(id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_user_notice_acknowledgements_device
+  ON user_notice_acknowledgements(device_id, user_id, revision);
 CREATE INDEX IF NOT EXISTS idx_traffic_daily_user_date ON traffic_daily(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_traffic_daily_date_user ON traffic_daily(date, user_id);
 

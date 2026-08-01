@@ -117,56 +117,78 @@ function EasyUpdateNotice({
 }) {
   const update = snapshot.update;
   const visible =
+    update.status === 'checking' ||
     update.status === 'available' ||
     update.status === 'downloading' ||
     update.status === 'downloaded' ||
     update.status === 'installing';
   if (!visible) return null;
 
-  const installing =
-    update.status === 'installing' || (busy && busyLabel === '安装中' && update.status === 'downloaded');
-  const downloaded = update.status === 'downloaded' && !installing;
+  const installing = update.status === 'installing';
+  const confirming = busy && busyLabel === '确认新版中' && update.status === 'downloaded';
+  const downloaded = update.status === 'downloaded' && !installing && !confirming;
   const downloading = update.status === 'downloading';
+  const checking = update.status === 'checking';
+  const active = checking || confirming || downloading || installing;
   const version = update.downloadedVersion || update.availableVersion;
   const verifying = update.downloadPhase === 'verifying';
   const downloadingFullPackage = update.downloadPhase === 'full-download';
   const text = installing
     ? updateInstallingMessage
-    : downloaded
-      ? update.message
-        ? '安装未开始，请重试'
-        : `已下载 ${version ?? '新版本'}`
-      : downloading
-        ? verifying
-          ? '校验更新包'
-          : version
-            ? `${downloadingFullPackage ? '下载完整包' : '下载更新'} ${version}`
-            : downloadingFullPackage
-              ? '下载完整包'
-              : '下载更新'
-        : version
-          ? `发现 ${version}`
-          : '发现更新';
+    : confirming
+      ? '正在确认最新版'
+      : checking
+        ? '正在检查更新'
+        : downloaded
+          ? update.failureKind === 'refresh-check-failed'
+            ? '未能确认最新版，请重试'
+            : update.message
+              ? '安装未开始，请重试'
+              : `已下载 ${version ?? '新版本'}`
+          : downloading
+            ? verifying
+              ? '校验更新包'
+              : version
+                ? `${downloadingFullPackage ? '下载完整包' : '下载更新'} ${version}`
+                : downloadingFullPackage
+                  ? '下载完整包'
+                  : '下载更新'
+            : version
+              ? `发现 ${version}`
+              : '发现更新';
   const progress = getDisplayUpdateProgress(update);
   const noticeClass = installing
     ? 'is-installing'
-    : downloaded
-      ? 'is-ready'
-      : downloading
-        ? 'is-downloading'
-        : 'is-available';
+    : checking || confirming
+      ? 'is-checking'
+      : downloaded
+        ? 'is-ready'
+        : downloading
+          ? 'is-downloading'
+          : 'is-available';
   const stateLabel = installing
     ? '即将重启'
-    : verifying
-      ? '校验中'
-      : downloadingFullPackage
-        ? '完整包'
-        : downloading
-          ? '下载中'
-          : '准备中';
+    : confirming
+      ? '确认中'
+      : checking
+        ? '检查中'
+        : verifying
+          ? '校验中'
+          : downloadingFullPackage
+            ? '完整包'
+            : downloading
+              ? '下载中'
+              : '准备中';
 
   return (
-    <aside className={`easy-update-notice ${noticeClass}`} role="status" aria-live="polite" aria-atomic="true">
+    <aside
+      className={`easy-update-notice ${noticeClass}${active ? ' has-update-activity' : ''}`}
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      aria-busy={active}
+    >
+      {active && <span className="update-activity-spinner" aria-hidden="true" />}
       <div className="easy-update-copy">
         <span>软件更新</span>
         <strong>{text}</strong>
@@ -184,10 +206,7 @@ function EasyUpdateNotice({
           安装
         </button>
       ) : (
-        <span className="easy-update-state">
-          {installing && <span className="update-install-spinner" aria-hidden="true" />}
-          {stateLabel}
-        </span>
+        <span className="easy-update-state">{stateLabel}</span>
       )}
     </aside>
   );

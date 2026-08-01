@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createWindowsStartupTask,
+  StartupTaskWriteError,
   type StartupTaskRunResult,
   type StartupTaskRunner
 } from '../../src/main/platform/startupTask';
@@ -98,6 +99,27 @@ function createTestTask(runner: StartupTaskRunner) {
 }
 
 describe('Windows startup task', () => {
+  it('falls back to the compatible login item only when writing the scheduled task fails', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const startup = source.slice(
+      source.indexOf('function isLaunchAtLoginEnabled'),
+      source.indexOf('function showPetContextMenu')
+    );
+
+    expect(startup).toContain('error instanceof StartupTaskWriteError');
+    expect(startup).toContain('enableLegacyLaunchAtLogin();');
+    expect(startup).toContain('计划任务不可用，已改用兼容开机自启');
+    expect(startup).toMatch(
+      /if \(windowsStartupTask\.hasManagedLegacyTask\(\)\) \{\s*clearLegacyLaunchAtLogin\(\);\s*return;\s*\}\s*if \(legacyEnabled\) return;/
+    );
+  });
+
+  it('exposes scheduled-task create failures as the narrow fallback-safe error type', async () => {
+    const task = createTestTask(runnerSequence(failed()));
+
+    await expect(task.setEnabled(true)).rejects.toBeInstanceOf(StartupTaskWriteError);
+  });
+
   it('reconciles startup state before the tray reads the cached value', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
     const initialization = source.slice(source.indexOf('.whenReady()'));
@@ -106,6 +128,18 @@ describe('Windows startup task', () => {
 
     expect(reconcile).toBeGreaterThan(-1);
     expect(createTray).toBeGreaterThan(reconcile);
+  });
+
+  it('does not reveal the main window when a duplicate hidden startup entry reaches the single instance', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const start = source.indexOf("app.on('second-instance'");
+    const secondInstance = source.slice(start, source.indexOf('.whenReady()', start));
+
+    expect(secondInstance).toContain("commandLine.includes('--hidden')");
+    expect(secondInstance).toContain("commandLine.includes('--startup')");
+    expect(secondInstance.indexOf("commandLine.includes('--hidden')")).toBeLessThan(
+      secondInstance.lastIndexOf('showMainWindow();')
+    );
   });
 
   it('recognizes the current executable and exact hidden argument from task XML', async () => {
@@ -281,6 +315,18 @@ describe('Windows startup task', () => {
     expect(runner).toHaveBeenNthCalledWith(2, ['/Query', '/TN', 'YouYu', '/XML']);
     expect(runner).toHaveBeenNthCalledWith(3, expect.arrayContaining(['/Create', '/TN', sidBoundTaskName]));
     expect(runner).toHaveBeenNthCalledWith(4, ['/Delete', '/TN', 'YouYu', '/F']);
+  });
+
+  it('retains a managed global task when the SID-bound migration cannot be written', async () => {
+    const runner = runnerSequence(missing(), successful(taskXml(executablePath, '--hidden')), failed());
+    const task = createTestTask(runner);
+
+    await expect(task.reconcile(false)).rejects.toBeInstanceOf(StartupTaskWriteError);
+
+    expect(task.hasManagedLegacyTask()).toBe(true);
+    expect(task.isEnabled()).toBe(true);
+    expect(runner).toHaveBeenCalledTimes(3);
+    expect(runner).not.toHaveBeenCalledWith(['/Delete', '/TN', 'YouYu', '/F']);
   });
 
   it('cleans a strictly managed legacy task even when the SID-bound task is already current', async () => {

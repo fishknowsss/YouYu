@@ -6,6 +6,7 @@ describe('IPC argument schemas', () => {
   it('accepts and normalizes supported arguments', () => {
     expect(parseIpcArguments(ipcChannels.selectNode, ['  Node A  '])).toEqual(['Node A']);
     expect(parseIpcArguments(ipcChannels.stopPetDrag, [undefined])).toEqual([undefined]);
+    expect(parseIpcArguments(ipcChannels.acknowledgeUserNotice, [7])).toEqual([7]);
     expect(parseIpcArguments(ipcChannels.start, [{ requestId: 'request-123' }])).toEqual([
       { requestId: 'request-123' }
     ]);
@@ -46,6 +47,8 @@ describe('IPC argument schemas', () => {
     expect(() =>
       parseIpcArguments(ipcChannels.registerTrafficIdentity, [{ name: 'Alice', passphrase: 'secret', elevated: true }])
     ).toThrow(/registration/);
+    expect(() => parseIpcArguments(ipcChannels.acknowledgeUserNotice, [0])).toThrow(/revision/);
+    expect(() => parseIpcArguments(ipcChannels.acknowledgeUserNotice, [1.5])).toThrow(/revision/);
   });
 
   it('bounds text, coordinates, settings intervals, and route enums', () => {

@@ -61,13 +61,18 @@ describe('UpdateCoordinator', () => {
       percent: 100
     });
 
-    harness.coordinator.setSnapshot({ status: 'downloaded', message: '启动安装器失败' });
+    harness.coordinator.setSnapshot({
+      status: 'downloaded',
+      message: '启动安装器失败',
+      failureKind: 'installer-launch-failed'
+    });
     expect(harness.coordinator.getSnapshot()).toMatchObject({
       status: 'downloaded',
       availableVersion: '1.6.9',
       downloadedVersion: '1.6.9',
       percent: 100,
-      message: '启动安装器失败'
+      message: '启动安装器失败',
+      failureKind: 'installer-launch-failed'
     });
   });
 
@@ -140,6 +145,190 @@ describe('UpdateCoordinator', () => {
       percent: 100
     });
     expect(harness.coordinator.inspect()).toMatchObject({ operation: 'idle', downloadInFlight: false });
+  });
+
+  it('refreshes a downloaded update and switches from 1.6.9 to a newly published 1.6.10', async () => {
+    const pendingDownload = deferred<unknown>();
+    const harness = createHarness({
+      executeCheck: vi.fn(async () => ({ isUpdateAvailable: true, updateInfo: { version: '1.6.10' } })),
+      executeDownload: vi.fn(() => pendingDownload.promise)
+    });
+    harness.coordinator.start({ checkImmediately: false });
+    harness.coordinator.setSnapshot({
+      status: 'downloaded',
+      availableVersion: '1.6.9',
+      downloadedVersion: '1.6.9',
+      percent: 100
+    });
+
+    await harness.coordinator.check(false);
+
+    expect(harness.executeCheck).toHaveBeenCalledOnce();
+    expect(harness.executeDownload).toHaveBeenCalledOnce();
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      status: 'downloading',
+      availableVersion: '1.6.10'
+    });
+    expect(harness.coordinator.getSnapshot()).not.toHaveProperty('downloadedVersion');
+
+    harness.updater.emit('update-downloaded', { version: '1.6.10' });
+    pendingDownload.resolve(['YouYu-1.6.10-x64.exe']);
+    await vi.waitFor(() => expect(harness.coordinator.getSnapshot().status).toBe('downloaded'));
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      downloadedVersion: '1.6.10',
+      availableVersion: '1.6.10'
+    });
+  });
+
+  it('keeps the existing downloaded package when refresh finds the same or an older release', async () => {
+    const executeCheck = vi
+      .fn<() => Promise<UpdateCheckResult>>()
+      .mockResolvedValueOnce({ isUpdateAvailable: true, updateInfo: { version: '1.6.10' } })
+      .mockResolvedValueOnce({ isUpdateAvailable: true, updateInfo: { version: '1.6.9' } });
+    const harness = createHarness({ executeCheck });
+    harness.coordinator.start({ checkImmediately: false });
+    harness.coordinator.setSnapshot({
+      status: 'downloaded',
+      availableVersion: '1.6.10',
+      downloadedVersion: '1.6.10',
+      percent: 100,
+      message: 'old transient message',
+      failureKind: 'installer-launch-failed'
+    });
+
+    await harness.coordinator.check(false);
+    await harness.coordinator.check(false);
+
+    expect(harness.executeDownload).not.toHaveBeenCalled();
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      status: 'downloaded',
+      availableVersion: '1.6.10',
+      downloadedVersion: '1.6.10',
+      percent: 100
+    });
+    expect(harness.coordinator.getSnapshot()).not.toHaveProperty('message');
+    expect(harness.coordinator.getSnapshot()).not.toHaveProperty('failureKind');
+  });
+
+  it('silently keeps a downloaded package after an automatic refresh failure but reports one manual failure', async () => {
+    const executeCheck = vi
+      .fn<() => Promise<UpdateCheckResult>>()
+      .mockRejectedValueOnce(new Error('net::ERR_CONNECTION_TIMED_OUT'))
+      .mockRejectedValueOnce(new Error('net::ERR_CONNECTION_TIMED_OUT'));
+    const harness = createHarness({ executeCheck });
+    harness.coordinator.start({ checkImmediately: false });
+    harness.coordinator.setSnapshot({
+      status: 'downloaded',
+      availableVersion: '1.6.9',
+      downloadedVersion: '1.6.9',
+      percent: 100
+    });
+
+    await harness.coordinator.check(false);
+    expect(harness.logs).toEqual([]);
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      status: 'downloaded',
+      downloadedVersion: '1.6.9'
+    });
+    expect(harness.coordinator.getSnapshot()).not.toHaveProperty('message');
+
+    await harness.coordinator.check(true);
+    expect(harness.logs).toEqual(['检查更新失败: net::ERR_CONNECTION_TIMED_OUT']);
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      status: 'downloaded',
+      downloadedVersion: '1.6.9',
+      message: '检查新版失败: net::ERR_CONNECTION_TIMED_OUT',
+      failureKind: 'refresh-check-failed'
+    });
+  });
+
+  it('periodically refreshes even while a downloaded package remains installable', async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    harness.coordinator.start({ checkImmediately: false });
+    harness.coordinator.setSnapshot({
+      status: 'downloaded',
+      availableVersion: '1.6.9',
+      downloadedVersion: '1.6.9',
+      percent: 100
+    });
+
+    harness.coordinator.schedule(100);
+    expect(harness.coordinator.inspect().timerScheduled).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(harness.executeCheck).toHaveBeenCalledOnce();
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      status: 'downloaded',
+      downloadedVersion: '1.6.9'
+    });
+  });
+
+  it('blocks installation of 1.6.9 when a freshness check discovers 1.6.10', async () => {
+    const pendingDownload = deferred<unknown>();
+    const harness = createHarness({
+      executeCheck: vi.fn(async () => ({ isUpdateAvailable: true, updateInfo: { version: '1.6.10' } })),
+      executeDownload: vi.fn(() => pendingDownload.promise)
+    });
+    harness.coordinator.start({ checkImmediately: false });
+    harness.coordinator.setSnapshot({
+      status: 'downloaded',
+      availableVersion: '1.6.9',
+      downloadedVersion: '1.6.9',
+      percent: 100
+    });
+
+    await expect(harness.coordinator.prepareInstall()).resolves.toMatchObject({
+      ready: false,
+      reason: 'newer-update',
+      snapshot: { status: 'downloading', availableVersion: '1.6.10' }
+    });
+    expect(harness.executeDownload).toHaveBeenCalledOnce();
+
+    pendingDownload.resolve(['YouYu-1.6.10-x64.exe']);
+  });
+
+  it('allows installation after a same-version freshness check and upgrades an automatic flight to report failure', async () => {
+    const sameVersion = createHarness({
+      executeCheck: vi.fn(async () => ({ isUpdateAvailable: true, updateInfo: { version: '1.6.9' } }))
+    });
+    sameVersion.coordinator.start({ checkImmediately: false });
+    sameVersion.coordinator.setSnapshot({
+      status: 'downloaded',
+      availableVersion: '1.6.9',
+      downloadedVersion: '1.6.9',
+      percent: 100
+    });
+
+    await expect(sameVersion.coordinator.prepareInstall()).resolves.toMatchObject({
+      ready: true,
+      snapshot: { status: 'downloaded', downloadedVersion: '1.6.9' }
+    });
+
+    const pendingCheck = deferred<UpdateCheckResult>();
+    const failed = createHarness({ executeCheck: vi.fn(() => pendingCheck.promise) });
+    failed.coordinator.start({ checkImmediately: false });
+    failed.coordinator.setSnapshot({
+      status: 'downloaded',
+      availableVersion: '1.6.9',
+      downloadedVersion: '1.6.9',
+      percent: 100
+    });
+    const automatic = failed.coordinator.check(false);
+    const preparation = failed.coordinator.prepareInstall();
+    pendingCheck.reject(new Error('net::ERR_CONNECTION_RESET'));
+
+    await automatic;
+    await expect(preparation).resolves.toMatchObject({
+      ready: false,
+      reason: 'check-failed',
+      snapshot: {
+        status: 'downloaded',
+        downloadedVersion: '1.6.9',
+        failureKind: 'refresh-check-failed'
+      }
+    });
+    expect(failed.logs).toEqual(['检查更新失败: net::ERR_CONNECTION_RESET']);
   });
 
   it('prevents stale check results and events from replacing a newer terminal state', async () => {

@@ -16,7 +16,8 @@ const migrationFiles = [
   '2026-07-19-device-identity-and-user-merge.sql',
   '2026-07-19-add-admin-traffic-limit.sql',
   '2026-07-20-add-traffic-expiry-and-trend-index.sql',
-  '2026-08-01-persist-traffic-report-dedup.sql'
+  '2026-08-01-persist-traffic-report-dedup.sql',
+  '2026-08-02-add-user-profiles-and-notices.sql'
 ].map((name) => resolve(migrationDirectory, name));
 const repairableColumns = new Map([
   ['remote_config.subscription_url', 'TEXT'],
@@ -86,7 +87,20 @@ const requiredTableColumns = {
     'target_name',
     'config_resolution',
     'merged_at'
-  ]
+  ],
+  user_name_aliases: ['normalized_name', 'user_id', 'created_at'],
+  user_profile_audit: [
+    'id',
+    'request_id',
+    'user_id',
+    'old_name',
+    'new_name',
+    'old_normalized_name',
+    'new_normalized_name',
+    'renamed_at'
+  ],
+  user_notices: ['user_id', 'revision', 'enabled', 'message', 'tone', 'expires_at', 'updated_at'],
+  user_notice_acknowledgements: ['user_id', 'revision', 'device_id', 'acknowledged_at']
 };
 const requiredIndexes = {
   idx_devices_user_id: { table: 'devices', columns: ['user_id'] },
@@ -97,7 +111,13 @@ const requiredIndexes = {
   idx_traffic_reports_user_created: { table: 'traffic_reports', columns: ['user_id', 'created_at'] },
   idx_traffic_reports_created_at: { table: 'traffic_reports', columns: ['created_at'] },
   idx_rate_limits_reset_at: { table: 'rate_limits', columns: ['reset_at'] },
-  idx_traffic_anomalies_user_created: { table: 'traffic_anomalies', columns: ['user_id', 'created_at'] }
+  idx_traffic_anomalies_user_created: { table: 'traffic_anomalies', columns: ['user_id', 'created_at'] },
+  idx_user_name_aliases_user_id: { table: 'user_name_aliases', columns: ['user_id'] },
+  idx_user_profile_audit_user_renamed: { table: 'user_profile_audit', columns: ['user_id', 'renamed_at'] },
+  idx_user_notice_acknowledgements_device: {
+    table: 'user_notice_acknowledgements',
+    columns: ['device_id', 'user_id', 'revision']
+  }
 };
 const requiredPrimaryKeyColumns = {
   users: ['id'],
@@ -110,12 +130,17 @@ const requiredPrimaryKeyColumns = {
   admin_settings: ['id'],
   user_remote_config: ['user_id'],
   traffic_anomalies: ['id'],
-  user_merge_audit: ['id']
+  user_merge_audit: ['id'],
+  user_name_aliases: ['normalized_name'],
+  user_profile_audit: ['id'],
+  user_notices: ['user_id'],
+  user_notice_acknowledgements: ['user_id', 'revision', 'device_id']
 };
 const requiredUniqueConstraintColumns = {
   users: [['normalized_name']],
   devices: [['device_seed']],
-  user_merge_audit: [['request_id'], ['source_user_id']]
+  user_merge_audit: [['request_id'], ['source_user_id']],
+  user_profile_audit: [['request_id']]
 };
 const baseTableNames = new Set(['users', 'devices', 'traffic_daily']);
 const baseIndexNames = new Set(['idx_devices_user_id', 'idx_traffic_daily_user_date']);
@@ -206,17 +231,19 @@ export function createWranglerRunner(mode, spawn = spawnSync) {
       '--json',
       ...operationArgs
     ];
-    const result = spawn(process.execPath, args, {
-      cwd: workerDirectory,
-      encoding: 'utf8',
-      windowsHide: true
-    });
-    if (result.error) throw result.error;
-    if (result.status !== 0) {
-      const detail = [result.stderr, result.stdout].filter(Boolean).join('\n').trim();
-      throw new Error(`wrangler d1 execute failed${detail ? `: ${detail}` : ''}`);
+    let lastDetail = '';
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const result = spawn(process.execPath, args, {
+        cwd: workerDirectory,
+        encoding: 'utf8',
+        windowsHide: true
+      });
+      if (result.error) throw result.error;
+      if (result.status === 0) return result.stdout;
+      lastDetail = [result.stderr, result.stdout].filter(Boolean).join('\n').trim();
+      if (!isRetryableWranglerFailure(lastDetail) || attempt === 3) break;
     }
-    return result.stdout;
+    throw new Error(`wrangler d1 execute failed${lastDetail ? `: ${lastDetail}` : ''}`);
   };
 
   return {
@@ -283,6 +310,10 @@ export function createWranglerRunner(mode, spawn = spawnSync) {
       };
     }
   };
+}
+
+function isRetryableWranglerFailure(detail) {
+  return /Authentication error \[code: 10000\]|fetch failed|UV_HANDLE_CLOSING|ECONNRESET|ETIMEDOUT/i.test(detail);
 }
 
 export async function main(args = process.argv.slice(2)) {

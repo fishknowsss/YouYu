@@ -34,7 +34,7 @@ describe('Windows upgrade installer safety', () => {
     expect(processScript).toContain('belongs to a different user SID');
     expect(processScript).toContain('belongs to a different Windows session');
     expect(processScript).toContain("$Action -ne 'Verify'");
-    expect(processScript).toContain("$legacyBridgeTargetVersion = '1.6.10'");
+    expect(processScript).toContain("$legacyBridgeTargetVersion = '1.7.0'");
     expect(processScript).toContain('$legacyBridgeMaximumSourceVersion = [Version]::new(1, 6, 8, 0)');
     expect(processScript).toContain("$productName -cne 'YouYu'");
     expect(processScript).toContain("$companyName -cne '118 Studio'");

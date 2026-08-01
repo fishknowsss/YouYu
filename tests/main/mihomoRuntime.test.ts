@@ -1071,6 +1071,40 @@ proxies:
     await expect(runtime.start()).rejects.toThrow('recent mihomo output: listen tcp 127.0.0.1:1053: bind failed');
   });
 
+  it('buffers split mihomo stream chunks until a complete diagnostic line is available', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+      stderr: EventEmitter;
+    };
+    child.killed = false;
+    child.kill = vi.fn();
+    child.stderr = new EventEmitter();
+    const logs: string[] = [];
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      logLine: (line) => logs.push(line),
+      spawnProcess: () => child as never,
+      waitForReady: vi.fn(
+        () =>
+          new Promise<void>(() => {
+            child.stderr.emit('data', '#< CLI');
+            child.stderr.emit('data', 'XML\n');
+            child.emit('exit', 1, null);
+          })
+      )
+    });
+
+    await expect(runtime.start()).rejects.toThrow('recent mihomo output: #< CLIXML');
+    expect(logs).toContain('[mihomo] #< CLIXML');
+    expect(logs).not.toContain('[mihomo] #< CLI');
+    expect(logs).not.toContain('[mihomo] XML');
+  });
+
   it('removes stale geo data files before spawning mihomo', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);

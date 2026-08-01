@@ -2,7 +2,7 @@ import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import { join } from 'node:path';
-import type { RemoteControlConfig, RuleProfile, StrategyKey } from '../shared/ipc';
+import type { RemoteControlConfig, RuleProfile, StrategyKey, UserNotice } from '../shared/ipc';
 import { createDeviceAuthHeaders } from './deviceAuth';
 import {
   EXTERNAL_RESPONSE_BODY_LIMITS,
@@ -45,10 +45,24 @@ type RemoteConfigIdentity = {
   deviceId: string;
 };
 
+type RemoteUserProfile = {
+  userId: string;
+  name: string;
+  updatedAt?: string;
+};
+
 type RemoteConfigCache = {
   schemaVersion: 1;
   identity: RemoteConfigIdentity;
   config: RemoteControlConfig;
+  notice?: UserNotice;
+};
+
+type RemoteConfigSyncResult = {
+  config?: RemoteControlConfig;
+  changed: boolean;
+  profileChanged?: true;
+  noticeChanged?: true;
 };
 
 export type ActiveRemoteConfigSnapshot = {
@@ -93,7 +107,7 @@ export class RemoteConfigClient {
     return current.binding === snapshot.binding && current.revision === snapshot.revision;
   }
 
-  async sync(options: SyncOptions = {}): Promise<{ config?: RemoteControlConfig; changed: boolean }> {
+  async sync(options: SyncOptions = {}): Promise<RemoteConfigSyncResult> {
     const run = this.queue.then(
       () => this.performSync(options),
       () => this.performSync(options)
@@ -102,7 +116,55 @@ export class RemoteConfigClient {
     return run;
   }
 
-  private async performSync(options: SyncOptions): Promise<{ config?: RemoteControlConfig; changed: boolean }> {
+  async getActiveNotice(now = new Date()): Promise<UserNotice | undefined> {
+    const cached = await this.readCached();
+    const identity = await this.getCurrentIdentity();
+    return noticeForIdentity(cached, identity, now);
+  }
+
+  async acknowledgeNotice(revision: number, options: SyncOptions = {}): Promise<boolean> {
+    if (!Number.isSafeInteger(revision) || revision <= 0) throw new Error('invalid user notice revision');
+    const run = this.queue.then(
+      () => this.performNoticeAcknowledgement(revision, options),
+      () => this.performNoticeAcknowledgement(revision, options)
+    );
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async performNoticeAcknowledgement(revision: number, options: SyncOptions): Promise<boolean> {
+    const endpoint = normalizeEndpoint(this.options.endpoint);
+    const cached = await this.readCached();
+    const identity = await this.getCurrentIdentity();
+    const notice = noticeForIdentity(cached, identity);
+    if (!identity || !notice || notice.revision !== revision) return false;
+    if (!endpoint) throw new Error('remote config endpoint not configured');
+    const secret = await this.options.store.getDeviceSecret();
+    if (!secret) throw new Error('remote config device secret missing');
+    const url = `${endpoint}/api/notices/acknowledge`;
+    const bodyText = JSON.stringify({ userId: identity.userId, deviceId: identity.deviceId, revision });
+    const response = await requestJson(
+      url,
+      'POST',
+      bodyText,
+      createDeviceAuthHeaders('POST', url, bodyText, secret),
+      options.proxyUrl,
+      this.options.requestTimeoutMs,
+      options.signal,
+      this.options.fetch
+    );
+    if (!response.ok) {
+      throw new Error(`user notice acknowledgement failed: ${response.status} (${responseRouteDetails(response)})`);
+    }
+    const latestIdentity = await this.getCurrentIdentity();
+    if (!sameIdentity(latestIdentity, identity)) return false;
+    const latest = await this.readCached();
+    if (!latest || !sameIdentity(latest.identity, identity) || latest.notice?.revision !== revision) return false;
+    await this.writeCached(latest.config, identity, undefined);
+    return true;
+  }
+
+  private async performSync(options: SyncOptions): Promise<RemoteConfigSyncResult> {
     const endpoint = normalizeEndpoint(this.options.endpoint);
     const cached = await this.readCached();
     const identity = await this.getCurrentIdentity();
@@ -127,8 +189,10 @@ export class RemoteConfigClient {
       throw new Error('remote config device secret missing');
     }
 
-    const response = await getJson(
+    const response = await requestJson(
       url.toString(),
+      'GET',
+      '',
       createDeviceAuthHeaders('GET', url.toString(), '', secret),
       options.proxyUrl,
       this.options.requestTimeoutMs,
@@ -139,7 +203,8 @@ export class RemoteConfigClient {
       throw new Error(`remote config failed: ${response.status} (${responseRouteDetails(response)})`);
     }
 
-    const body = isRecord(response.body) && isRecord(response.body.config) ? response.body.config : response.body;
+    const envelope = isRecord(response.body) ? response.body : undefined;
+    const body = envelope && isRecord(envelope.config) ? envelope.config : response.body;
     const next = normalizeRemoteConfig(body);
     if (!next) {
       throw new Error(`remote config response invalid (${responseRouteDetails(response)})`);
@@ -150,7 +215,17 @@ export class RemoteConfigClient {
       return { config: latestConfig?.enabled ? latestConfig : undefined, changed: false };
     }
 
-    await this.writeCached(next, identity);
+    const profile = envelope ? normalizeRemoteUserProfile(envelope.profile) : undefined;
+    if (envelope?.profile !== undefined && (!profile || profile.userId !== identity.userId)) {
+      throw new Error(`remote config profile invalid (${responseRouteDetails(response)})`);
+    }
+    const nextNotice = envelope ? normalizeUserNotice(envelope.notice) : undefined;
+    const profileChanged = profile
+      ? await this.options.store.syncIdentityProfile(identity, { name: profile.name })
+      : false;
+    const noticeChanged =
+      JSON.stringify(noticeForIdentity(cached, identity) ?? null) !== JSON.stringify(nextNotice ?? null);
+    await this.writeCached(next, identity, nextNotice);
     const committedIdentity = await this.getCurrentIdentity();
     if (!sameIdentity(committedIdentity, identity)) {
       const committedConfig = configForIdentity(this.cached, committedIdentity);
@@ -158,7 +233,9 @@ export class RemoteConfigClient {
     }
     return {
       config: next.enabled ? next : undefined,
-      changed: JSON.stringify(current ?? null) !== JSON.stringify(next)
+      changed: JSON.stringify(current ?? null) !== JSON.stringify(next),
+      ...(profileChanged ? { profileChanged: true as const } : {}),
+      ...(noticeChanged ? { noticeChanged: true as const } : {})
     };
   }
 
@@ -186,11 +263,16 @@ export class RemoteConfigClient {
     return this.loadPromise;
   }
 
-  private async writeCached(config: RemoteControlConfig, identity: RemoteConfigIdentity): Promise<void> {
+  private async writeCached(
+    config: RemoteControlConfig,
+    identity: RemoteConfigIdentity,
+    notice: UserNotice | undefined
+  ): Promise<void> {
     const cached: RemoteConfigCache = {
       schemaVersion: 1,
       identity,
-      config
+      config,
+      ...(notice ? { notice } : {})
     };
     await writeJsonFileAtomic(this.filePath, cached);
     this.loaded = true;
@@ -207,12 +289,24 @@ function normalizeRemoteConfigCache(value: unknown): RemoteConfigCache | undefin
   const userId = normalizeText(value.identity.userId, 160);
   const deviceId = normalizeText(value.identity.deviceId, 160);
   const config = normalizeRemoteConfig(value.config);
+  const notice = normalizeUserNotice(value.notice);
   if (!userId || !deviceId || !config) return undefined;
   return {
     schemaVersion: 1,
     identity: { userId, deviceId },
-    config
+    config,
+    ...(notice ? { notice } : {})
   };
+}
+
+function noticeForIdentity(
+  cached: RemoteConfigCache | undefined,
+  identity: RemoteConfigIdentity | undefined,
+  now = new Date()
+): UserNotice | undefined {
+  const notice = cached && sameIdentity(cached.identity, identity) ? cached.notice : undefined;
+  if (!notice || Date.parse(notice.expiresAt) <= now.getTime()) return undefined;
+  return notice;
 }
 
 function configForIdentity(
@@ -247,6 +341,55 @@ function normalizeRemoteConfig(value: unknown): RemoteControlConfig | undefined 
     proxyRules: [],
     ...(updatedAt ? { updatedAt } : {})
   };
+}
+
+function normalizeRemoteUserProfile(value: unknown): RemoteUserProfile | undefined {
+  if (!isRecord(value)) return undefined;
+  const userId = normalizeBoundedText(value.userId, 160);
+  const name = normalizeBoundedText(value.name, 80);
+  const updatedAt = normalizeIsoTimestamp(value.updatedAt);
+  if (!userId || !name || hasControlCharacters(name)) return undefined;
+  return { userId, name, ...(updatedAt ? { updatedAt } : {}) };
+}
+
+function normalizeUserNotice(value: unknown): UserNotice | undefined {
+  if (!isRecord(value)) return undefined;
+  const revision = value.revision;
+  const message = normalizeBoundedText(value.message, 500);
+  const tone = value.tone === 'warning' ? 'warning' : value.tone === 'info' ? 'info' : undefined;
+  const expiresAt = normalizeIsoTimestamp(value.expiresAt);
+  const updatedAt = normalizeIsoTimestamp(value.updatedAt);
+  if (
+    !Number.isSafeInteger(revision) ||
+    (revision as number) <= 0 ||
+    !message ||
+    hasControlCharacters(message) ||
+    !tone ||
+    !expiresAt ||
+    !updatedAt
+  ) {
+    return undefined;
+  }
+  return { revision: revision as number, message, tone, expiresAt, updatedAt };
+}
+
+function normalizeIsoTimestamp(value: unknown): string | undefined {
+  const text = normalizeBoundedText(value, 40);
+  if (!text) return undefined;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
+function hasControlCharacters(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+  });
+}
+
+function normalizeBoundedText(value: unknown, maxLength: number): string | undefined {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text && Array.from(text).length <= maxLength ? text : undefined;
 }
 
 function isRemoteConfigPayload(value: unknown): value is RemoteConfigPayload {
@@ -307,8 +450,10 @@ function normalizeRuleProfile(value: unknown): RuleProfile | undefined {
   return validRuleProfiles.includes(value as RuleProfile) ? (value as RuleProfile) : undefined;
 }
 
-async function getJson(
+async function requestJson(
   url: string,
+  method: 'GET' | 'POST',
+  bodyText: string,
   headers: Record<string, string>,
   proxyUrl?: string,
   timeoutMs = 12000,
@@ -324,7 +469,13 @@ async function getJson(
     getStatus: (response) => response.status,
     direct: async ({ fetch: directFetch, signal }) => {
       const response = await directFetch(url, {
-        headers: { accept: 'application/json', ...headers },
+        method,
+        headers: {
+          accept: 'application/json',
+          ...(bodyText ? { 'content-type': 'application/json' } : {}),
+          ...headers
+        },
+        ...(bodyText ? { body: bodyText } : {}),
         signal
       });
       return {
@@ -340,7 +491,7 @@ async function getJson(
       };
     },
     proxy: ({ proxyUrl: fallbackProxyUrl, timeoutMs: remainingMs, signal }) =>
-      getJsonViaProxy(url, headers, fallbackProxyUrl, remainingMs, signal)
+      requestJsonViaProxy(url, method, bodyText, headers, fallbackProxyUrl, remainingMs, signal)
   });
   return { ...result.response, route: result.route, directOutcome: result.directOutcome };
 }
@@ -350,8 +501,10 @@ function responseRouteDetails(response: JsonResponse): string {
   return response.directOutcome ? `${current} direct=${response.directOutcome} proxy=HTTP_${response.status}` : current;
 }
 
-async function getJsonViaProxy(
+async function requestJsonViaProxy(
   url: string,
+  method: 'GET' | 'POST',
+  bodyText: string,
   headers: Record<string, string>,
   proxyUrl: string,
   timeoutMs: number,
@@ -360,7 +513,7 @@ async function getJsonViaProxy(
   const target = new URL(url);
   const proxy = new URL(proxyUrl);
   if (target.protocol !== 'https:') {
-    return getJsonViaHttpProxy(target, proxy, headers, timeoutMs, signal);
+    return requestJsonViaHttpProxy(target, proxy, method, bodyText, headers, timeoutMs, signal);
   }
 
   return new Promise((resolve, reject) => {
@@ -408,11 +561,14 @@ async function getJsonViaProxy(
         {
           hostname: target.hostname,
           port: Number(target.port || 443),
-          method: 'GET',
+          method,
           path: `${target.pathname}${target.search}`,
           headers: {
             accept: 'application/json',
             'accept-encoding': 'identity',
+            ...(bodyText
+              ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(bodyText).toString() }
+              : {}),
             ...headers
           },
           createConnection: () => tlsConnect({ socket, servername: target.hostname })
@@ -440,7 +596,7 @@ async function getJsonViaProxy(
       tunneledRequest.once('error', (error) => {
         if (!responseStarted) rejectOnce(error);
       });
-      tunneledRequest.end();
+      tunneledRequest.end(bodyText || undefined);
     });
     connectReq.on('timeout', () => connectReq.destroy(new Error('remote config proxy connect timed out')));
     connectReq.once('error', rejectOnce);
@@ -448,9 +604,11 @@ async function getJsonViaProxy(
   });
 }
 
-async function getJsonViaHttpProxy(
+async function requestJsonViaHttpProxy(
   target: URL,
   proxy: URL,
+  method: 'GET' | 'POST',
+  bodyText: string,
   authHeaders: Record<string, string>,
   timeoutMs: number,
   signal?: AbortSignal
@@ -482,11 +640,14 @@ async function getJsonViaHttpProxy(
       {
         host: proxy.hostname,
         port: Number(proxy.port || 80),
-        method: 'GET',
+        method,
         path: target.toString(),
         timeout: timeoutMs,
         headers: {
           accept: 'application/json',
+          ...(bodyText
+            ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(bodyText).toString() }
+            : {}),
           ...authHeaders
         }
       },
@@ -505,7 +666,7 @@ async function getJsonViaHttpProxy(
       cleanupAbort();
       currentRequest.removeListener('error', onRequestError);
     });
-    currentRequest.end();
+    currentRequest.end(bodyText || undefined);
   });
 }
 

@@ -14,6 +14,7 @@ type UpdateNetworkOperationOptions<T> = {
   session: UpdateNetworkSession;
   operation: () => Promise<T>;
   proxyUrl?: string;
+  getProxyUrl?: () => string | undefined;
   onRetry?: (route: 'direct' | 'local-proxy', detail: string) => void;
 };
 
@@ -81,16 +82,26 @@ export function runUpdateDownloadWithNetworkFallback<T>(options: UpdateDownloadN
 }
 
 async function runUpdateNetworkOperationWithFallback<T>(options: UpdateNetworkOperationOptions<T>): Promise<T> {
-  await prepareUpdateNetworkSession(options.session);
+  const initialProxyUrl = resolveUpdateProxyUrl(options);
+  const initialRoute = await prepareUpdateNetworkSession(options.session, initialProxyUrl);
   try {
     return await options.operation();
   } catch (error) {
     if (!isRecoverableUpdateNetworkError(error)) throw error;
-    const route = await prepareUpdateNetworkSession(options.session, options.proxyUrl);
+    const retryProxyUrl = initialRoute === 'local-proxy' ? undefined : resolveUpdateProxyUrl(options);
+    const route = await prepareUpdateNetworkSession(options.session, retryProxyUrl);
     options.onRetry?.(route, describeNetworkError(error));
   }
 
   return options.operation();
+}
+
+function resolveUpdateProxyUrl(options: Pick<UpdateNetworkOperationOptions<unknown>, 'getProxyUrl' | 'proxyUrl'>) {
+  try {
+    return options.getProxyUrl?.() ?? options.proxyUrl;
+  } catch {
+    return options.proxyUrl;
+  }
 }
 
 export function isRecoverableUpdateNetworkError(error: unknown): boolean {

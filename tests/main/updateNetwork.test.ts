@@ -31,7 +31,7 @@ describe('update network fallback', () => {
     });
   });
 
-  it('checks GitHub directly first, then retries through a running local proxy after a transport failure', async () => {
+  it('prefers a running local proxy, then retries GitHub directly after a transport failure', async () => {
     const calls: string[] = [];
     const session = createSession(calls);
     let attempt = 0;
@@ -50,15 +50,49 @@ describe('update network fallback', () => {
 
     expect(check).toHaveBeenCalledTimes(2);
     expect(calls).toEqual([
-      'proxy:direct',
-      'connections:close',
-      'dns:clear',
-      'check',
       'proxy:fixed_servers:http=127.0.0.1:7890;https=127.0.0.1:7890',
       'connections:close',
       'dns:clear',
-      'retry:local-proxy:ENOTFOUND',
+      'check',
+      'proxy:direct',
+      'connections:close',
+      'dns:clear',
+      'retry:direct:ENOTFOUND',
       'check'
+    ]);
+  });
+
+  it('re-reads the runtime proxy after a startup direct failure and uses it as soon as Mihomo is ready', async () => {
+    const calls: string[] = [];
+    const session = createSession(calls);
+    let proxyRead = 0;
+    const getProxyUrl = vi.fn(() => {
+      proxyRead += 1;
+      return proxyRead === 1 ? undefined : 'http://127.0.0.1:7890';
+    });
+    const check = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error('net::ERR_CONNECTION_TIMED_OUT'))
+      .mockResolvedValueOnce('ok');
+
+    await expect(
+      runUpdateCheckWithNetworkFallback({
+        session,
+        check,
+        getProxyUrl,
+        onRetry: (route, detail) => calls.push(`retry:${route}:${detail}`)
+      })
+    ).resolves.toBe('ok');
+
+    expect(getProxyUrl).toHaveBeenCalledTimes(2);
+    expect(calls).toEqual([
+      'proxy:direct',
+      'connections:close',
+      'dns:clear',
+      'proxy:fixed_servers:http=127.0.0.1:7890;https=127.0.0.1:7890',
+      'connections:close',
+      'dns:clear',
+      'retry:local-proxy:ERR_CONNECTION_TIMED_OUT'
     ]);
   });
 
@@ -95,7 +129,7 @@ describe('update network fallback', () => {
     await vi.waitFor(() => expect(download).toHaveBeenCalledTimes(2));
     expect(downloadSettled).toBe(false);
     expect(calls).toContain('proxy:fixed_servers:http=127.0.0.1:7890;https=127.0.0.1:7890');
-    expect(calls).toContain('download-retry:local-proxy:ENOTFOUND');
+    expect(calls).toContain('download-retry:direct:ENOTFOUND');
 
     finishDownload?.(['YouYu-1.6.0-x64.exe']);
     await expect(downloading).resolves.toEqual(['YouYu-1.6.0-x64.exe']);
@@ -114,9 +148,13 @@ describe('update network fallback', () => {
     expect(source).toContain('executeDownload: () =>');
     expect(source).toContain('runUpdateCheckWithNetworkFallback');
     expect(source).toContain('runUpdateDownloadWithNetworkFallback');
+    expect(source).toContain('getProxyUrl: getRuntimeTrafficProxyUrl');
+    expect(source).not.toContain('检查更新直连失败');
+    expect(source).not.toContain('更新下载直连失败');
     expect(checkHandler).toContain('void download();');
     expect(checkHandler).not.toContain('await download()');
-    expect(coordinator).toContain('if (checkFlight) return checkFlight.promise;');
+    expect(coordinator).toContain('if (checkFlight) {');
+    expect(coordinator).toContain('return checkFlight.promise;');
     expect(coordinator).toContain('if (downloadFlight) return downloadFlight.promise;');
   });
 
@@ -146,7 +184,8 @@ describe('update network fallback', () => {
     ).rejects.toThrow('HTTP 403');
 
     expect(check).toHaveBeenCalledOnce();
-    expect(calls.some((value) => value.startsWith('proxy:fixed_servers'))).toBe(false);
+    expect(calls.some((value) => value.startsWith('proxy:fixed_servers'))).toBe(true);
+    expect(calls.filter((value) => value === 'proxy:direct')).toHaveLength(0);
   });
 
   it('does not retry a wrapped certificate failure even when the outer message says fetch failed', async () => {
@@ -166,7 +205,8 @@ describe('update network fallback', () => {
     ).rejects.toBe(error);
 
     expect(download).toHaveBeenCalledOnce();
-    expect(calls.some((value) => value.startsWith('proxy:fixed_servers'))).toBe(false);
+    expect(calls.some((value) => value.startsWith('proxy:fixed_servers'))).toBe(true);
+    expect(calls.filter((value) => value === 'proxy:direct')).toHaveLength(0);
     expect(isRecoverableUpdateNetworkError(error)).toBe(false);
   });
 

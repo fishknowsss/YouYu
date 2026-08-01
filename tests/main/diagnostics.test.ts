@@ -56,6 +56,34 @@ describe('diagnostic log buffer', () => {
     ]);
   });
 
+  it('uses the actual Mihomo destination instead of a matched rule-set label', () => {
+    const logs = new DiagnosticLogBuffer();
+    const warning =
+      '[mihomo] time="2026-08-02T01:40:24+08:00" level=warning msg="[TCP] dial DIRECT (match RuleSet/China) 127.0.0.1:52100 --> api.example.cn:443 error: i/o timeout"';
+
+    logs.append(warning, new Date(2026, 7, 2, 1, 40, 24));
+
+    expect(logs.getLogs()).toEqual(['2026-08-02 01:40:24 连接警告：api.example.cn 访问失败（TCP）']);
+  });
+
+  it('preserves a bracketed IPv6 destination without treating its last segment as a port', () => {
+    const logs = new DiagnosticLogBuffer();
+    const warning =
+      '[mihomo] time="2026-08-02T01:40:24+08:00" level=warning msg="[TCP] dial DIRECT 127.0.0.1:52100 --> [2001:db8::1]:443 error: i/o timeout"';
+
+    logs.append(warning, new Date(2026, 7, 2, 1, 40, 24));
+
+    expect(logs.getLogs()).toEqual(['2026-08-02 01:40:24 连接警告：2001:db8::1 访问失败（TCP）']);
+  });
+
+  it('drops the PowerShell CLIXML stream marker because it is not a Mihomo diagnostic event', () => {
+    const logs = new DiagnosticLogBuffer();
+
+    logs.append('[mihomo] #< CLIXML', new Date(2026, 7, 2, 1, 14, 34));
+
+    expect(logs.getLogs()).toEqual([]);
+  });
+
   it('starts a new logical entry after the repeat coalescing window', () => {
     const logs = new DiagnosticLogBuffer({ coalesceWindowMs: 1000 });
     logs.append('same event', new Date(2026, 6, 19, 5, 2, 0));

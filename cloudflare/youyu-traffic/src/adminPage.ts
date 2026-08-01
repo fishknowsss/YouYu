@@ -258,6 +258,7 @@ export function adminPage(): string {
                 </div>
                 <div class="drawer-tabs" role="tablist" aria-label="用户详情分类">
                   <button class="drawer-tab is-active" id="drawerTabConfig" type="button" role="tab" aria-controls="drawerConfigSection" aria-selected="true" data-drawer-tab="config">订阅配置</button>
+                  <button class="drawer-tab" id="drawerTabProfile" type="button" role="tab" aria-controls="drawerProfileSection" aria-selected="false" data-drawer-tab="profile">资料通知</button>
                   <button class="drawer-tab" id="drawerTabTraffic" type="button" role="tab" aria-controls="drawerTrafficSection" aria-selected="false" data-drawer-tab="traffic">每日流量</button>
                   <button class="drawer-tab" id="drawerTabMerge" type="button" role="tab" aria-controls="drawerMergeSection" aria-selected="false" data-drawer-tab="merge">合并用户</button>
                 </div>
@@ -271,6 +272,27 @@ export function adminPage(): string {
                       <div class="field-error wide" id="userSubscriptionError" role="alert"></div>
                     </div>
                     <div class="drawer-actions"><button class="button" id="saveUserConfig" type="submit">${icon('save', 'icon-sm')}保存</button><button class="button secondary" id="resetUserConfig" type="button">${icon('reset', 'icon-sm')}重置</button></div>
+                  </form>
+                </section>
+                <section class="drawer-section" id="drawerProfileSection" role="tabpanel" aria-labelledby="drawerTabProfile" data-drawer-section="profile" hidden>
+                  <form id="userProfileForm">
+                    <div class="section-title"><h3>用户资料</h3></div>
+                    <div class="form-grid">
+                      <label class="field wide" for="userProfileName">用户名<input id="userProfileName" maxlength="80" autocomplete="off" aria-describedby="userProfileNameError" /></label>
+                      <div class="field-error wide" id="userProfileNameError" role="alert"></div>
+                    </div>
+                    <div class="drawer-actions single"><button class="button" id="saveUserProfile" type="submit">${icon('save', 'icon-sm')}保存</button></div>
+                  </form>
+                  <form class="notice-editor" id="userNoticeForm">
+                    <div class="section-title"><h3>定向通知</h3><span class="chip gray" id="userNoticeState">未设置</span></div>
+                    <div class="form-grid">
+                      <label class="field" for="userNoticeEnabled">状态<select id="userNoticeEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+                      <label class="field" for="userNoticeTone">级别<select id="userNoticeTone"><option value="info">提示</option><option value="warning">警告</option></select></label>
+                      <label class="field wide" for="userNoticeMessage">内容<textarea id="userNoticeMessage" maxlength="500" rows="4" aria-describedby="userNoticeError"></textarea></label>
+                      <label class="field wide" for="userNoticeExpiresAt">到期时间<input id="userNoticeExpiresAt" type="datetime-local" aria-describedby="userNoticeError" /></label>
+                      <div class="field-error wide" id="userNoticeError" role="alert"></div>
+                    </div>
+                    <div class="drawer-actions"><button class="button" id="saveUserNotice" type="submit">${icon('save', 'icon-sm')}保存</button><button class="button secondary" id="clearUserNotice" type="button">${icon('reset', 'icon-sm')}清除</button></div>
                   </form>
                 </section>
                 <section class="drawer-section" id="drawerTrafficSection" role="tabpanel" aria-labelledby="drawerTabTraffic" data-drawer-section="traffic" hidden>

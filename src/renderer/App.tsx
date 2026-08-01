@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { TrafficRegistrationInput } from '../shared/ipc';
 import { isActionErrorMessage } from './actionMessages';
 import { AppShell } from './components/AppShell';
+import { UserNoticeBanner } from './components/UserNoticeBanner';
 import { useAppController } from './hooks/useAppController';
 import { Home } from './pages/Home';
 import { NodeSelect } from './pages/NodeSelect';
@@ -101,6 +102,7 @@ export function App() {
           />
         )}
       </AppShell>
+      <UserNoticeBanner notice={controller.snapshot.userNotice} onAcknowledge={controller.acknowledgeUserNotice} />
       {controller.busyLabel === '修复中' && (
         <div className="busy-overlay" aria-live="polite" aria-label="修复中">
           <div className="busy-spinner" />

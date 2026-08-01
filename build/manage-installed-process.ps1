@@ -26,7 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $handoffLifetimeLimitMs = 900000L
-$legacyBridgeTargetVersion = '1.6.10'
+$legacyBridgeTargetVersion = '1.7.0'
 $legacyBridgeMaximumSourceVersion = [Version]::new(1, 6, 8, 0)
 $legacyBridgeActive = $false
 

@@ -438,6 +438,7 @@ textarea:focus-visible {
   min-height: var(--header-action-height);
   flex: none;
   justify-content: center;
+  border: 1px solid var(--line-strong);
   border-radius: 8px;
   white-space: nowrap;
   color: var(--ink-soft);
@@ -452,20 +453,27 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.status-badge.stopped {
+  border-color: var(--line-strong);
+}
+
 .status-badge.running {
+  border-color: var(--success);
   color: var(--success);
   background: #e3f4ee;
 }
 
 .status-badge.failed {
+  border-color: var(--danger);
   color: var(--danger);
   background: #ffe7f0;
 }
 
-.update-install-spinner {
+.update-activity-spinner {
   width: 14px;
   height: 14px;
   flex: none;
+  color: var(--accent);
   border-radius: 999px;
   background: conic-gradient(from var(--ring-angle), currentColor, rgb(143 88 215 / 16%), currentColor);
   mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));

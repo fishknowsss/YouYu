@@ -317,40 +317,48 @@ function UpdatePanel({
   onInstallUpdate: () => void;
 }) {
   const update = snapshot.update;
-  const installing =
-    update.status === 'installing' || (busy && busyLabel === '安装中' && update.status === 'downloaded');
-  const ready = update.status === 'downloaded' && !installing;
+  const installing = update.status === 'installing';
+  const confirming = busy && busyLabel === '确认新版中' && update.status === 'downloaded';
+  const ready = update.status === 'downloaded' && !installing && !confirming;
   const downloading = update.status === 'downloading';
+  const active = update.status === 'checking' || confirming || downloading || installing;
   const verifying = update.downloadPhase === 'verifying';
   const fullPackage = update.downloadPhase === 'full-download';
   const waiting =
-    update.status === 'checking' || update.status === 'downloading' || update.status === 'available' || installing;
+    update.status === 'checking' ||
+    update.status === 'downloading' ||
+    update.status === 'available' ||
+    confirming ||
+    installing;
   const buttonLabel = installing
     ? '安装中'
-    : ready
-      ? '安装'
-      : downloading
-        ? verifying
-          ? '校验中'
-          : fullPackage
-            ? '完整包'
-            : '下载中'
-        : update.status === 'checking'
-          ? '检查中'
-          : update.status === 'available'
-            ? '准备中'
-            : '检查';
+    : confirming
+      ? '确认中'
+      : ready
+        ? '安装'
+        : downloading
+          ? verifying
+            ? '校验中'
+            : fullPackage
+              ? '完整包'
+              : '下载中'
+          : update.status === 'checking'
+            ? '检查中'
+            : update.status === 'available'
+              ? '准备中'
+              : '检查';
   const progress = getDisplayUpdateProgress(update);
 
-  const statusText = installing ? updateInstallingMessage : formatUpdateStatus(update);
+  const statusText = installing ? updateInstallingMessage : confirming ? '正在确认最新版' : formatUpdateStatus(update);
 
   return (
     <div
-      className={`update-row ${waiting ? 'is-busy' : ''} ${downloading ? 'is-downloading' : ''} ${
-        update.status === 'failed' ? 'is-failed' : ''
-      }`}
+      className={`update-row ${waiting ? 'is-busy' : ''} ${active ? 'has-update-activity' : ''} ${
+        downloading ? 'is-downloading' : ''
+      } ${update.status === 'failed' ? 'is-failed' : ''}`}
       aria-busy={waiting}
     >
+      {active && <span className="update-activity-spinner" aria-hidden="true" />}
       <div className="update-copy" role="status" aria-live="polite" aria-atomic="true">
         <span>软件更新</span>
         <strong title={statusText}>{statusText}</strong>
@@ -362,11 +370,10 @@ function UpdatePanel({
         </div>
       )}
       <button
-        className={`${ready ? 'wide-button settings-action-install' : 'secondary-button settings-action-check'} settings-footer-action`}
+        className={`wide-button ${ready || installing ? 'settings-action-install' : 'settings-action-check'} settings-footer-action`}
         disabled={busy || waiting}
         onClick={ready ? onInstallUpdate : onCheckUpdate}
       >
-        {installing && <span className="update-install-spinner" aria-hidden="true" />}
         {buttonLabel}
       </button>
     </div>
@@ -385,6 +392,7 @@ function formatUpdateStatus(update: AppSnapshot['update']): string {
       : `${label}${version}`;
   }
   if (update.status === 'downloaded') {
+    if (update.failureKind === 'refresh-check-failed') return '未能确认最新版，请重试';
     if (update.message) return '安装未开始，请重试';
     return update.downloadedVersion ? `已下载 ${update.downloadedVersion}` : '已下载';
   }

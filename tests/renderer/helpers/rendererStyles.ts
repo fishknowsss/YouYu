@@ -9,6 +9,7 @@ export const rendererStyleSourcePaths = [
   'src/renderer/styles/pet.css',
   'src/renderer/styles/dashboard.css',
   'src/renderer/styles/settings.css',
+  'src/renderer/styles/user-notice.css',
   'src/renderer/styles/test.css',
   'src/renderer/styles/responsive.css'
 ] as const;

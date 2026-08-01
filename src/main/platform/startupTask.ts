@@ -19,6 +19,10 @@ export type StartupTaskRunResult =
 
 export type StartupTaskRunner = (args: readonly string[]) => Promise<StartupTaskRunResult>;
 
+export class StartupTaskWriteError extends Error {
+  override readonly name = 'StartupTaskWriteError';
+}
+
 export function createWindowsStartupTask(options: {
   executablePath: string;
   runner?: StartupTaskRunner;
@@ -76,7 +80,7 @@ export function createWindowsStartupTask(options: {
       'LIMITED',
       '/F'
     ]);
-    if (result.status !== 'success') throw new Error('无法写入 Windows 计划任务');
+    if (result.status !== 'success') throw new StartupTaskWriteError('无法写入 Windows 计划任务');
     state = 'current';
   }
 
@@ -109,6 +113,10 @@ export function createWindowsStartupTask(options: {
   return {
     isEnabled(): boolean {
       return disableFailed || state === 'current' || state === 'stale' || legacyState === 'managed';
+    },
+
+    hasManagedLegacyTask(): boolean {
+      return legacyState === 'managed';
     },
 
     async reconcile(legacyEnabled: boolean): Promise<StartupTaskState> {

@@ -133,6 +133,44 @@ POST /api/admin/users/<userId>/config/reset
 Authorization: Bearer <ADMIN_TOKEN>
 ```
 
+Administrators can correct a displayed user name without changing the stable user or device IDs:
+
+```http
+GET /api/admin/users/<userId>/profile
+POST /api/admin/users/<userId>/profile
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+
+{ "name": "corrected name", "requestId": "<uuid>" }
+```
+
+The rename is audited and idempotent by `requestId`. Both the old and new normalized names remain aliases of the same
+canonical user, so an older client cannot recreate a duplicate account under the old spelling. A name already owned
+by another canonical user is rejected. The signed client config response includes the canonical profile; the client
+updates its local display name only when `profile.userId` still matches its current verified identity. For a device
+whose server-side user was merged, the response keeps the request's verified alias ID in `profile.userId` while using
+the canonical target name, so existing installations can accept the corrected display name without changing IDs.
+
+The same admin view can manage one revisioned, plain-text notice per user:
+
+```http
+GET /api/admin/users/<userId>/notice
+POST /api/admin/users/<userId>/notice
+POST /api/admin/users/<userId>/notice/reset
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+
+{ "enabled": true, "message": "今晚维护", "tone": "warning", "expiresAt": "2026-08-03T12:00:00.000Z" }
+```
+
+Messages are limited to 500 characters and are data only: no HTML, link, command, or rich-content field is accepted.
+Only `info` and `warning` tones are supported. Each save advances the revision and clears stale acknowledgements.
+Active, unexpired notices are returned only to the selected user's devices. A device acknowledges its current revision
+through signed `POST /api/notices/acknowledge`; the Worker verifies the existing per-device HMAC before storing the
+acknowledgement. Retrying an identical admin payload is a no-op that preserves the current revision, timestamp, and
+acknowledgements; changing any notice field advances the revision so the new content appears again. The reset route
+stops delivery without relying on client state.
+
 User records can be previewed and merged through the authenticated admin page or these APIs:
 
 ```http
@@ -141,8 +179,11 @@ POST /api/admin/users/<sourceUserId>/merge
 Authorization: Bearer <ADMIN_TOKEN>
 ```
 
-The merge keeps the source name as an alias, moves its devices and traffic to the canonical target, and keeps already
-registered source devices working. When both users have different overrides, the POST body must explicitly choose
+The merge keeps every source name alias, moves its devices and traffic to the canonical target, and keeps already
+registered source devices working. If the target has no notice, the source notice and matching device acknowledgements
+move with its devices; otherwise the target notice wins and source acknowledgements cannot suppress it. Notice and
+configuration fingerprints are checked inside the merge batch so a concurrent admin edit aborts safely. When both users
+have different overrides, the POST body must explicitly choose
 `keep_target`, `use_source`, or `reset_to_global`; the operation is audited and idempotent. The user list reports a
 logical device count while retaining the raw registration-row count for audit purposes.
 

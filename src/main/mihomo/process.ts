@@ -77,6 +77,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function createLineStreamBuffer(onLine: (line: string) => void) {
+  let pending = '';
+  const emit = (value: string) => {
+    const line = value.trim();
+    if (line) onLine(line);
+  };
+  return {
+    push(chunk: unknown) {
+      pending += String(chunk);
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      lines.forEach(emit);
+    },
+    flush() {
+      emit(pending);
+      pending = '';
+    }
+  };
+}
+
 function isUsableSubscriptionCandidate(text: string): boolean {
   const value = text.trim();
   const hasForbiddenControlCharacter = [...value].some((character) => {
@@ -799,12 +819,35 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
           }
           resolveExit(outcome);
         };
+        const recentOutput: string[] = [];
+        const rememberOutput = (line: string) => {
+          recentOutput.push(line);
+          if (recentOutput.length > 8) {
+            recentOutput.splice(0, recentOutput.length - 8);
+          }
+        };
+        const recordOutput = (line: string) => {
+          rememberOutput(line);
+          options.logLine?.(`[mihomo] ${line}`);
+        };
+        const stdoutBuffer = createLineStreamBuffer(recordOutput);
+        const stderrBuffer = createLineStreamBuffer(recordOutput);
+        const flushOutput = () => {
+          stdoutBuffer.flush();
+          stderrBuffer.flush();
+        };
+        const formatStartupFailure = (reason: string) => {
+          const detail = recentOutput.length > 0 ? `; recent mihomo output: ${recentOutput.join(' | ')}` : '';
+          return new Error(`mihomo exited before controller was ready: ${reason}${detail}`);
+        };
         child = current;
         spawned.once('error', (error) => {
+          flushOutput();
           options.logLine?.(`mihomo process error: ${error.message}`);
           settleExit({ kind: 'error', error });
         });
         spawned.once('exit', (code, exitSignal) => {
+          flushOutput();
           const reason = code == null ? `signal ${exitSignal ?? 'unknown'}` : `exit code ${code.toString()}`;
           const expectedStop = stoppingChildren.has(current);
           if (ready) {
@@ -819,37 +862,10 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         });
         const abortCurrent = () => spawned.kill();
         signal?.addEventListener('abort', abortCurrent, { once: true });
-        const recentOutput: string[] = [];
-        const rememberOutput = (line: string) => {
-          recentOutput.push(line);
-          if (recentOutput.length > 8) {
-            recentOutput.splice(0, recentOutput.length - 8);
-          }
-        };
-        const formatStartupFailure = (reason: string) => {
-          const detail = recentOutput.length > 0 ? `; recent mihomo output: ${recentOutput.join(' | ')}` : '';
-          return new Error(`mihomo exited before controller was ready: ${reason}${detail}`);
-        };
-        spawned.stdout?.on('data', (chunk) => {
-          String(chunk)
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .forEach((line) => {
-              rememberOutput(line);
-              options.logLine?.(`[mihomo] ${line}`);
-            });
-        });
-        spawned.stderr?.on('data', (chunk) => {
-          String(chunk)
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .forEach((line) => {
-              rememberOutput(line);
-              options.logLine?.(`[mihomo] ${line}`);
-            });
-        });
+        spawned.stdout?.on('data', (chunk) => stdoutBuffer.push(chunk));
+        spawned.stdout?.on('end', () => stdoutBuffer.flush());
+        spawned.stderr?.on('data', (chunk) => stderrBuffer.push(chunk));
+        spawned.stderr?.on('end', () => stderrBuffer.flush());
 
         const earlyFailure: Promise<never> = current.exitPromise.then((outcome) => {
           if (outcome.kind === 'error') {

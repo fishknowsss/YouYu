@@ -418,6 +418,172 @@ describe('RemoteConfigClient cache', () => {
     });
   });
 
+  it('synchronizes a corrected profile name and persists the current device notice without restarting config', async () => {
+    const syncIdentityProfile = vi.fn(async () => true);
+    const store = {
+      getSnapshot: async () => ({ identity: registeredIdentity }),
+      getDeviceSecret: async () => 'device-secret',
+      syncIdentityProfile
+    } as unknown as TrafficStore;
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          config: activeCachedConfig,
+          profile: { userId: 'user-1', name: 'Alice', updatedAt: '2026-08-02T00:00:00.000Z' },
+          notice: {
+            revision: 2,
+            message: '<b>纯文本</b>',
+            tone: 'warning',
+            expiresAt,
+            updatedAt: '2026-08-02T00:01:00.000Z'
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.7.0',
+      store
+    });
+
+    await expect(client.sync()).resolves.toEqual({
+      config: activeCachedConfig,
+      changed: true,
+      profileChanged: true,
+      noticeChanged: true
+    });
+    expect(syncIdentityProfile).toHaveBeenCalledWith({ userId: 'user-1', deviceId: 'device-1' }, { name: 'Alice' });
+    await expect(client.getActiveNotice()).resolves.toEqual({
+      revision: 2,
+      message: '<b>纯文本</b>',
+      tone: 'warning',
+      expiresAt,
+      updatedAt: '2026-08-02T00:01:00.000Z'
+    });
+  });
+
+  it('rejects a remote profile bound to a different user before changing local identity', async () => {
+    const syncIdentityProfile = vi.fn(async () => true);
+    const store = {
+      getSnapshot: async () => ({ identity: registeredIdentity }),
+      getDeviceSecret: async () => 'device-secret',
+      syncIdentityProfile
+    } as unknown as TrafficStore;
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          config: activeCachedConfig,
+          profile: { userId: 'user-2', name: 'Mallory', updatedAt: '2026-08-02T00:00:00.000Z' }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.7.0',
+      store
+    });
+
+    await expect(client.sync()).rejects.toThrow('remote config profile invalid');
+    expect(syncIdentityProfile).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges the current notice with a signed request and hides it only after success', async () => {
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init });
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ ok: true, revision: 1 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          config: activeCachedConfig,
+          notice: {
+            revision: 1,
+            message: '请确认',
+            tone: 'info',
+            expiresAt,
+            updatedAt: '2026-08-02T00:01:00.000Z'
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    });
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.7.0',
+      store: createRegisteredStore(),
+      fetch
+    });
+    await client.sync();
+
+    await expect(client.acknowledgeNotice(1)).resolves.toBe(true);
+    await expect(client.getActiveNotice()).resolves.toBeUndefined();
+    const acknowledgement = requests.at(-1);
+    expect(acknowledgement?.url).toBe('https://config.example.com/api/notices/acknowledge');
+    expect(acknowledgement?.init?.method).toBe('POST');
+    expect(acknowledgement?.init?.body).toBe(JSON.stringify({ userId: 'user-1', deviceId: 'device-1', revision: 1 }));
+    expect(new Headers(acknowledgement?.init?.headers).get('x-youyu-signature')).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('serializes notice acknowledgement behind an in-flight sync so stale config cannot restore it', async () => {
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    let releaseSecondSync: (() => void) | undefined;
+    const secondSyncGate = new Promise<void>((resolve) => {
+      releaseSecondSync = resolve;
+    });
+    let getCount = 0;
+    const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ ok: true, revision: 1 }), { status: 200 });
+      }
+      getCount += 1;
+      if (getCount === 2) await secondSyncGate;
+      return new Response(
+        JSON.stringify({
+          config: activeCachedConfig,
+          notice: {
+            revision: 1,
+            message: '请确认',
+            tone: 'info',
+            expiresAt,
+            updatedAt: '2026-08-02T00:01:00.000Z'
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    });
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.7.0',
+      store: createRegisteredStore(),
+      fetch
+    });
+    await client.sync();
+
+    const syncRun = client.sync();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    const acknowledgementRun = client.acknowledgeNotice(1);
+    await Promise.resolve();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    releaseSecondSync?.();
+
+    await expect(syncRun).resolves.toMatchObject({ changed: false });
+    await expect(acknowledgementRun).resolves.toBe(true);
+    await expect(client.getActiveNotice()).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
   it('ignores changes to deprecated remote routing and startup fields', async () => {
     await writeFile(join(dir, 'remote-config.json'), JSON.stringify(cacheEnvelope()), 'utf8');
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(

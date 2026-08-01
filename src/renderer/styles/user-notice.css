@@ -1,0 +1,112 @@
+.user-notice-layer {
+  position: fixed;
+  z-index: 80;
+  top: 72px;
+  right: 24px;
+  width: min(390px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.user-notice-banner {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 30px;
+  align-items: start;
+  gap: 10px;
+  max-height: calc(100vh - 88px);
+  padding: 14px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  color: var(--ink);
+  background: var(--panel);
+  box-shadow: 0 12px 32px rgb(45 28 67 / 18%);
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.user-notice-banner.warning {
+  border-color: var(--warning);
+  background: #fffaf0;
+}
+
+.user-notice-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--accent);
+  font-size: 15px;
+  font-weight: var(--font-weight-bold);
+}
+
+.user-notice-banner.warning .user-notice-mark {
+  background: var(--warning);
+}
+
+.user-notice-copy {
+  min-width: 0;
+  max-height: calc(100vh - 180px);
+  overflow: auto;
+}
+
+.user-notice-copy strong {
+  display: block;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.user-notice-copy p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 19px;
+  white-space: pre-wrap;
+}
+
+.user-notice-close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 20px;
+  line-height: 20px;
+}
+
+.user-notice-close:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.user-notice-confirm {
+  grid-column: 2 / 4;
+  justify-self: end;
+  min-width: 74px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-notice-banner.warning .user-notice-confirm {
+  background: var(--warning);
+}
+
+.user-notice-close:disabled,
+.user-notice-confirm:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+@media (max-width: 640px) {
+  .user-notice-layer {
+    top: 60px;
+    right: 16px;
+  }
+}

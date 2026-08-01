@@ -2,6 +2,22 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 describe('update and exit lifecycle safety', () => {
+  it('finishes a freshness check before committing to the downloaded installer handoff', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const install = source.slice(
+      source.indexOf('async function installDownloadedUpdate'),
+      source.indexOf('function recoverFromUpdateInstallerLaunchFailure')
+    );
+
+    expect(install).toContain('await updateCoordinator.prepareInstall()');
+    expect(install.indexOf('await updateCoordinator.prepareInstall()')).toBeLessThan(
+      install.indexOf('updateInstallerLaunchPending = true')
+    );
+    expect(install.indexOf('await updateCoordinator.prepareInstall()')).toBeLessThan(
+      install.indexOf('autoUpdater.quitAndInstall(true, true)')
+    );
+  });
+
   it('suspends restart work before update preparation begins', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
     const install = source.slice(
@@ -30,7 +46,9 @@ describe('update and exit lifecycle safety', () => {
 
     expect(recovery).toContain('lifecycle.resumeStarts()');
     expect(recovery).toContain('updateInstallerLaunchFailed = beforeQuitWasObserved');
-    expect(recovery).toContain("setUpdateSnapshot({ status: 'downloaded', message })");
+    expect(recovery).toContain(
+      "setUpdateSnapshot({ status: 'downloaded', message, failureKind: 'installer-launch-failed' })"
+    );
   });
 
   it('does not launch a deferred installer after recovery cancels that install attempt', async () => {

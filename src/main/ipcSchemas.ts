@@ -118,6 +118,9 @@ export function parseIpcArguments(channel: string, args: unknown[]): unknown[] {
     case ipcChannels.registerTrafficIdentity:
       requireArgumentCount(channel, args, 1);
       return [parseTrafficRegistration(channel, args[0])];
+    case ipcChannels.acknowledgeUserNotice:
+      requireArgumentCount(channel, args, 1);
+      return [parsePositiveSafeInteger(channel, 'revision', args[0])];
     case ipcChannels.cancelOperation:
       requireArgumentCount(channel, args, 1);
       return [parseOperationRequestId(channel, args[0])];
@@ -218,6 +221,13 @@ function parseCoordinate(channel: string, field: string, value: unknown): number
     throw new IpcArgumentError(channel, field);
   }
   return Math.round(value);
+}
+
+function parsePositiveSafeInteger(channel: string, field: string, value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new IpcArgumentError(channel, field);
+  }
+  return value;
 }
 
 function parseText(channel: string, field: string, value: unknown, maxLength: number, required: boolean): string {

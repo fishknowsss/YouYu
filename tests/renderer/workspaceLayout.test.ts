@@ -54,7 +54,7 @@ describe('professional workspace layout contract', () => {
   it('keeps header buttons and status badges on one typography contract', async () => {
     const styles = await readRendererStyles();
     const sharedHeaderAction = getCssRule(styles, '.header-actions > button,\n.header-actions > .status-badge');
-    const statusBadge = getCssRule(styles, '.status-badge');
+    const statusBadge = getLastCssRule(styles, '.status-badge');
 
     expect(styles).toContain('--font-size-action: 15px;');
     expect(styles).toContain('--line-height-action: 20px;');
@@ -71,6 +71,19 @@ describe('professional workspace layout contract', () => {
     expect(home).toContain('role="status"');
     expect(home).toContain('aria-live="polite"');
     expect(home).toContain('aria-atomic="true"');
+  });
+
+  it('gives every runtime state a stable semantic border without changing badge geometry', async () => {
+    const styles = await readRendererStyles();
+    const statusBadge = getLastCssRule(styles, '.status-badge');
+    const stopped = getCssRule(styles, '.status-badge.stopped');
+    const running = getCssRule(styles, '.status-badge.running');
+    const failed = getCssRule(styles, '.status-badge.failed');
+
+    expect(statusBadge).toContain('border: 1px solid var(--line-strong);');
+    expect(stopped).toContain('border-color: var(--line-strong);');
+    expect(running).toContain('border-color: var(--success);');
+    expect(failed).toContain('border-color: var(--danger);');
   });
 
   it('stacks easy-mode notices away from the bottom-left advanced-mode hotspot', async () => {
@@ -130,6 +143,16 @@ describe('professional workspace layout contract', () => {
 function getCssRule(source: string, selector: string): string {
   const normalized = `\n${source.replace(/\r\n/g, '\n')}`;
   const markerStart = normalized.indexOf(`\n${selector} {`);
+  expect(markerStart).toBeGreaterThanOrEqual(0);
+  const start = markerStart + 1;
+  const end = normalized.indexOf('\n}', start);
+  expect(end).toBeGreaterThan(start);
+  return normalized.slice(start, end + 2);
+}
+
+function getLastCssRule(source: string, selector: string): string {
+  const normalized = `\n${source.replace(/\r\n/g, '\n')}`;
+  const markerStart = normalized.lastIndexOf(`\n${selector} {`);
   expect(markerStart).toBeGreaterThanOrEqual(0);
   const start = markerStart + 1;
   const end = normalized.indexOf('\n}', start);

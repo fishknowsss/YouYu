@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 describe('silent update installation notice', () => {
-  it('shows installation feedback immediately after the easy-mode install click', async () => {
+  it('shows the install freshness check before easy mode reports a real installation', async () => {
     const container = document.createElement('div');
     document.body.append(container);
     root = createRoot(container);
@@ -28,17 +28,20 @@ describe('silent update installation notice', () => {
 
     const installButton = findButton(container, '安装');
     expect(installButton?.disabled).toBe(false);
-    expect(container.querySelector('.update-install-spinner')).toBeNull();
+    expect(container.querySelector('.update-activity-spinner')).toBeNull();
 
     await act(async () => installButton?.click());
 
-    expect(container.textContent).toContain('已开始自动安装');
-    expect(container.textContent).toContain('无需操作');
-    expect(container.querySelector('.update-install-spinner')?.getAttribute('aria-hidden')).toBe('true');
+    expect(container.textContent).toContain('正在确认最新版');
+    expect(container.textContent).toContain('确认中');
+    expect(container.textContent).not.toContain('已开始自动安装');
+    const spinner = container.querySelector('.update-activity-spinner');
+    expect(spinner?.getAttribute('aria-hidden')).toBe('true');
+    expect(spinner?.parentElement?.classList.contains('easy-update-notice')).toBe(true);
     expect(findButton(container, '安装')).toBeUndefined();
   });
 
-  it('shows installation feedback immediately after the settings install click', async () => {
+  it('shows the install freshness check before settings reports a real installation', async () => {
     const container = document.createElement('div');
     document.body.append(container);
     root = createRoot(container);
@@ -50,10 +53,14 @@ describe('silent update installation notice', () => {
 
     await act(async () => installButton?.click());
 
-    expect(container.textContent).toContain('已开始自动安装，无需操作');
-    const installingButton = findButton(container, '安装中');
-    expect(installingButton?.disabled).toBe(true);
-    expect(installingButton?.querySelector('.update-install-spinner')?.getAttribute('aria-hidden')).toBe('true');
+    expect(container.textContent).toContain('正在确认最新版');
+    expect(container.textContent).not.toContain('已开始自动安装');
+    const confirmingButton = findButton(container, '确认中');
+    expect(confirmingButton?.disabled).toBe(true);
+    const spinner = container.querySelector('.update-activity-spinner');
+    expect(spinner?.getAttribute('aria-hidden')).toBe('true');
+    expect(spinner?.parentElement?.classList.contains('update-row')).toBe(true);
+    expect(confirmingButton?.querySelector('.update-activity-spinner')).toBeNull();
   });
 
   it('does not mistake another busy operation for update installation', async () => {
@@ -65,7 +72,7 @@ describe('silent update installation notice', () => {
     await act(async () => root?.render(<Home {...createHomeProps(snapshot)} busy busyLabel="修复中" />));
 
     expect(findButton(container, '安装')?.disabled).toBe(true);
-    expect(container.querySelector('.update-install-spinner')).toBeNull();
+    expect(container.querySelector('.update-activity-spinner')).toBeNull();
     expect(container.textContent).not.toContain('已开始自动安装');
 
     await act(async () =>
@@ -86,7 +93,7 @@ describe('silent update installation notice', () => {
     );
 
     expect(findButton(container, '安装')?.disabled).toBe(true);
-    expect(container.querySelector('.update-install-spinner')).toBeNull();
+    expect(container.querySelector('.update-activity-spinner')).toBeNull();
     expect(container.textContent).not.toContain('已开始自动安装');
   });
 
@@ -100,7 +107,9 @@ describe('silent update installation notice', () => {
     expect(container.textContent).toContain('已开始自动安装');
     expect(container.textContent).toContain('无需操作');
     expect(container.textContent).toContain('即将重启');
-    expect(container.querySelector('.update-install-spinner')?.getAttribute('aria-hidden')).toBe('true');
+    const spinner = container.querySelector('.update-activity-spinner');
+    expect(spinner?.getAttribute('aria-hidden')).toBe('true');
+    expect(spinner?.parentElement?.classList.contains('easy-update-notice')).toBe(true);
     expect(findButton(container, '安装')).toBeUndefined();
   });
 
@@ -129,7 +138,55 @@ describe('silent update installation notice', () => {
     expect(container.textContent).toContain('已开始自动安装，无需操作');
     const installingButton = findButton(container, '安装中');
     expect(installingButton?.disabled).toBe(true);
-    expect(installingButton?.querySelector('.update-install-spinner')?.getAttribute('aria-hidden')).toBe('true');
+    const spinner = container.querySelector('.update-activity-spinner');
+    expect(spinner?.getAttribute('aria-hidden')).toBe('true');
+    expect(spinner?.parentElement?.classList.contains('update-row')).toBe(true);
+    expect(installingButton?.querySelector('.update-activity-spinner')).toBeNull();
+  });
+
+  it.each([
+    ['checking', undefined],
+    ['downloading', 'verifying']
+  ] as const)('keeps %s activity at the left edge on both update surfaces', async (status, downloadPhase) => {
+    const snapshot = await createDownloadedSnapshot();
+    snapshot.update = {
+      ...snapshot.update,
+      status,
+      availableVersion: '1.6.10',
+      downloadedVersion: undefined,
+      downloadPhase,
+      percent: status === 'downloading' ? 100 : undefined
+    };
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<Home {...createHomeProps(snapshot)} busy={false} busyLabel="" />));
+
+    const easySpinner = container.querySelector('.update-activity-spinner');
+    expect(easySpinner?.parentElement?.classList.contains('easy-update-notice')).toBe(true);
+    expect(container.querySelector('button .update-activity-spinner')).toBeNull();
+
+    await act(async () =>
+      root?.render(
+        <Settings
+          snapshot={snapshot}
+          busy={false}
+          busyLabel=""
+          message=""
+          onRepair={() => undefined}
+          onSave={() => undefined}
+          onSyncRemoteConfig={() => undefined}
+          onExportDiagnostics={() => undefined}
+          onCheckUpdate={() => undefined}
+          onInstallUpdate={() => undefined}
+        />
+      )
+    );
+
+    const settingsSpinner = container.querySelector('.update-activity-spinner');
+    expect(settingsSpinner?.parentElement?.classList.contains('update-row')).toBe(true);
+    expect(container.querySelector('button .update-activity-spinner')).toBeNull();
   });
 
   it('restores an actionable install button when the silent handoff fails', async () => {
@@ -138,7 +195,8 @@ describe('silent update installation notice', () => {
       ...snapshot.update,
       status: 'downloaded',
       downloadedVersion: '1.6.5',
-      message: '启动安装器失败: spawn failed'
+      message: '启动安装器失败: spawn failed',
+      failureKind: 'installer-launch-failed'
     };
     const container = document.createElement('div');
     document.body.append(container);
@@ -148,6 +206,41 @@ describe('silent update installation notice', () => {
 
     expect(container.textContent).toContain('安装未开始，请重试');
     expect(findButton(container, '安装')?.disabled).toBe(false);
+  });
+
+  it('distinguishes a freshness-check failure from an installer launch failure', async () => {
+    const snapshot = await createDownloadedSnapshot();
+    snapshot.update = {
+      ...snapshot.update,
+      message: '检查新版失败: net::ERR_CONNECTION_TIMED_OUT',
+      failureKind: 'refresh-check-failed'
+    };
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<Home {...createHomeProps(snapshot)} busy={false} busyLabel="" />));
+    expect(container.textContent).toContain('未能确认最新版，请重试');
+    expect(container.textContent).not.toContain('安装未开始');
+
+    await act(async () =>
+      root?.render(
+        <Settings
+          snapshot={snapshot}
+          busy={false}
+          busyLabel=""
+          message=""
+          onRepair={() => undefined}
+          onSave={() => undefined}
+          onSyncRemoteConfig={() => undefined}
+          onExportDiagnostics={() => undefined}
+          onCheckUpdate={() => undefined}
+          onInstallUpdate={() => undefined}
+        />
+      )
+    );
+    expect(container.textContent).toContain('未能确认最新版，请重试');
+    expect(container.textContent).not.toContain('安装未开始');
   });
 });
 
@@ -182,7 +275,7 @@ function EasyInstallGapHarness({ snapshot }: { snapshot: AppSnapshot }) {
     <Home
       {...createHomeProps(snapshot)}
       busy={installRequested}
-      busyLabel={installRequested ? '安装中' : ''}
+      busyLabel={installRequested ? '确认新版中' : ''}
       onInstallUpdate={() => setInstallRequested(true)}
     />
   );
@@ -194,7 +287,7 @@ function SettingsInstallGapHarness({ snapshot }: { snapshot: AppSnapshot }) {
     <Settings
       snapshot={snapshot}
       busy={installRequested}
-      busyLabel={installRequested ? '安装中' : ''}
+      busyLabel={installRequested ? '确认新版中' : ''}
       message=""
       onRepair={() => undefined}
       onSave={() => undefined}

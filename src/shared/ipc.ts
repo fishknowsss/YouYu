@@ -114,6 +114,14 @@ export type TrafficIdentity = {
   verificationStatus?: 'verified' | 'pending';
 };
 
+export type UserNotice = {
+  revision: number;
+  message: string;
+  tone: 'info' | 'warning';
+  expiresAt: string;
+  updatedAt: string;
+};
+
 export type TrafficNodeUsageSummary = {
   name: string;
   upload: number;
@@ -222,6 +230,8 @@ export type AppUpdateStatus =
 
 export type AppUpdateDownloadPhase = 'downloading' | 'full-download' | 'verifying';
 
+export type AppUpdateFailureKind = 'refresh-check-failed' | 'installer-launch-failed';
+
 export type AppUpdateSnapshot = {
   currentVersion: string;
   buildChannel: AppBuildChannel;
@@ -236,6 +246,7 @@ export type AppUpdateSnapshot = {
   bytesPerSecond?: number;
   checkedAt?: string;
   message?: string;
+  failureKind?: AppUpdateFailureKind;
 };
 
 export type FeatureSettings = {
@@ -280,6 +291,7 @@ export type AppSnapshot = {
   runtime: RuntimeStats;
   traffic: PersistentTrafficStats;
   trafficIdentity?: TrafficIdentity;
+  userNotice?: UserNotice;
   subscriptionUrl: string;
   remoteSubscriptionUrl?: string;
   subscriptionRevision?: number;
@@ -312,6 +324,7 @@ export type YouYuApi = {
   updateSubscription: (request?: OperationRequest) => Promise<AppSnapshot>;
   saveSettings: (settings: AppSettingsInput, request?: OperationRequest) => Promise<AppSnapshot>;
   registerTrafficIdentity: (input: TrafficRegistrationInput) => Promise<AppSnapshot>;
+  acknowledgeUserNotice: (revision: number) => Promise<AppSnapshot>;
   syncRemoteConfig: (request?: OperationRequest) => Promise<AppSnapshot>;
   exportDiagnostics: () => Promise<DiagnosticExportResult>;
   cancelOperation: (requestId: string) => Promise<boolean>;
@@ -344,6 +357,7 @@ export const ipcChannels = {
   updateSubscription: 'youyu:update-subscription',
   saveSettings: 'youyu:save-settings',
   registerTrafficIdentity: 'youyu:register-traffic-identity',
+  acknowledgeUserNotice: 'youyu:acknowledge-user-notice',
   syncRemoteConfig: 'youyu:sync-remote-config',
   exportDiagnostics: 'youyu:export-diagnostics',
   cancelOperation: 'youyu:cancel-operation',

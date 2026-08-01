@@ -506,6 +506,11 @@ export function createDevYouYuApi(options: { preset?: 'readme'; updateStatus?: '
         }
       });
     },
+    async acknowledgeUserNotice(revision) {
+      if (!Number.isSafeInteger(revision) || revision <= 0) throw new Error('invalid user notice revision');
+      if (snapshot.userNotice?.revision !== revision) return snapshot;
+      return publish({ userNotice: undefined });
+    },
     async syncRemoteConfig() {
       requireTrafficIdentity();
       return publish({

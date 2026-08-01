@@ -110,6 +110,165 @@ test('an existing name attaches another device to the same user data', async (co
   assert.equal(database.queryAll('SELECT id FROM devices WHERE user_id = ?', firstIdentity.userId).length, 2);
 });
 
+test('admin rename keeps the canonical identity and synchronizes the corrected name to every device', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const firstSeed = '11111111-1111-4111-8111-111111111111';
+  const secondSeed = '22222222-2222-4222-8222-222222222222';
+  const thirdSeed = '33333333-3333-4333-8333-333333333333';
+  const requestId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const original = await (await activate(database, { name: 'Ailce', deviceSeed: firstSeed })).json();
+
+  const renamed = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(original.userId)}/profile`,
+    JSON.stringify({ name: 'Alice', requestId })
+  );
+  assert.equal(renamed.status, 200);
+  const renamedBody = await renamed.json();
+  assert.match(renamedBody.user.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual(
+    { ...renamedBody, user: { ...renamedBody.user, updatedAt: undefined } },
+    {
+      ok: true,
+      alreadyApplied: false,
+      requestId,
+      user: {
+        id: original.userId,
+        name: 'Alice',
+        updatedAt: undefined
+      }
+    }
+  );
+
+  const correctedConfig = await (await getClientConfig(database, original, firstSeed)).json();
+  assert.equal(correctedConfig.profile.name, 'Alice');
+  assert.equal(correctedConfig.profile.userId, original.userId);
+
+  const oldAlias = await (await activate(database, { name: 'Ailce', deviceSeed: secondSeed })).json();
+  const correctedName = await (await activate(database, { name: 'Alice', deviceSeed: thirdSeed })).json();
+  assert.equal(oldAlias.userId, original.userId);
+  assert.equal(correctedName.userId, original.userId);
+  assert.equal(oldAlias.name, 'Alice');
+  assert.equal(correctedName.name, 'Alice');
+
+  const replay = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(original.userId)}/profile`,
+    JSON.stringify({ name: 'Alice', requestId })
+  );
+  assert.equal(replay.status, 200);
+  assert.equal((await replay.json()).alreadyApplied, true);
+
+  const conflictingReplay = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(original.userId)}/profile`,
+    JSON.stringify({ name: 'AL ICE', requestId })
+  );
+  await assertWorkerError(conflictingReplay, 409, 'profile request conflict');
+
+  const sameName = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(original.userId)}/profile`,
+    JSON.stringify({ name: 'Alice', requestId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' })
+  );
+  assert.equal(sameName.status, 200);
+  assert.equal((await sameName.json()).alreadyApplied, true);
+  assert.equal(
+    database.queryAll('SELECT COUNT(*) AS count FROM user_profile_audit WHERE user_id = ?', original.userId)[0].count,
+    1
+  );
+
+  const other = await (
+    await activate(database, {
+      name: 'Bob',
+      deviceSeed: '44444444-4444-4444-8444-444444444444'
+    })
+  ).json();
+  const conflict = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(other.userId)}/profile`,
+    JSON.stringify({ name: 'Ailce', requestId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })
+  );
+  await assertWorkerError(conflict, 409, 'name conflict');
+});
+
+test('targeted notices are delivered as plain device-scoped state and reappear only after a new revision', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const identity = await (await activate(database, { name: 'Alice', deviceSeed })).json();
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+  const created = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
+    JSON.stringify({ message: '<b>今晚维护</b>', tone: 'warning', expiresAt, enabled: true })
+  );
+  assert.equal(created.status, 200);
+  const createdNotice = (await created.json()).notice;
+  assert.match(createdNotice.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual(
+    { ...createdNotice, updatedAt: undefined },
+    {
+      revision: 1,
+      enabled: true,
+      message: '<b>今晚维护</b>',
+      tone: 'warning',
+      expiresAt,
+      updatedAt: undefined
+    }
+  );
+
+  const firstConfig = await (await getClientConfig(database, identity, deviceSeed)).json();
+  assert.match(firstConfig.notice.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual(
+    { ...firstConfig.notice, updatedAt: undefined },
+    {
+      revision: 1,
+      message: '<b>今晚维护</b>',
+      tone: 'warning',
+      expiresAt,
+      updatedAt: undefined
+    }
+  );
+
+  const acknowledged = await acknowledgeNotice(database, identity, deviceSeed, 1);
+  assert.equal(acknowledged.status, 200);
+  assert.deepEqual(await acknowledged.json(), { ok: true, revision: 1 });
+  assert.equal((await (await getClientConfig(database, identity, deviceSeed)).json()).notice, undefined);
+  assert.equal((await acknowledgeNotice(database, identity, deviceSeed, 1)).status, 200);
+
+  const retried = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
+    JSON.stringify({ message: '<b>今晚维护</b>', tone: 'warning', expiresAt, enabled: true })
+  );
+  assert.deepEqual(await retried.json(), { notice: createdNotice });
+  assert.equal((await (await getClientConfig(database, identity, deviceSeed)).json()).notice, undefined);
+  assert.equal(
+    database.queryAll(
+      'SELECT COUNT(*) AS count FROM user_notice_acknowledgements WHERE user_id = ? AND revision = 1',
+      identity.userId
+    )[0].count,
+    1
+  );
+
+  const updated = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
+    JSON.stringify({ message: '维护已改期', tone: 'info', expiresAt, enabled: true })
+  );
+  assert.equal((await updated.json()).notice.revision, 2);
+  assert.equal((await (await getClientConfig(database, identity, deviceSeed)).json()).notice.message, '维护已改期');
+
+  await database
+    .prepare('UPDATE user_notices SET expires_at = ? WHERE user_id = ?')
+    .bind(new Date(Date.now() - 1000).toISOString(), identity.userId)
+    .run();
+  assert.equal((await (await getClientConfig(database, identity, deviceSeed)).json()).notice, undefined);
+});
+
 test('a stable device key reuses one physical device when the signing seed is recreated', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
@@ -313,6 +472,91 @@ test('admin can merge user aliases without breaking an already registered source
   assert.equal(repeatedBody.requestId, mergeRequestId);
 });
 
+test('user merge transfers source notice only when the target has none and preserves device acknowledgements', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const sourceSeed = '11111111-1111-4111-8111-111111111111';
+  const targetSeed = '22222222-2222-4222-8222-222222222222';
+  const source = await (await activate(database, { name: 'Source', deviceSeed: sourceSeed })).json();
+  const target = await (await activate(database, { name: 'Target', deviceSeed: targetSeed })).json();
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+  await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(source.userId)}/notice`,
+    JSON.stringify({ message: '源用户通知', tone: 'info', expiresAt, enabled: true })
+  );
+  assert.equal((await acknowledgeNotice(database, source, sourceSeed, 1)).status, 200);
+
+  const merged = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({
+      targetUserId: target.userId,
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    })
+  });
+  assert.equal(merged.status, 200);
+  const sourceDeviceConfig = await (await getClientConfig(database, source, sourceSeed)).json();
+  const targetDeviceConfig = await (await getClientConfig(database, target, targetSeed)).json();
+  assert.equal(sourceDeviceConfig.profile.name, 'Target');
+  assert.equal(sourceDeviceConfig.notice, undefined);
+  assert.equal(targetDeviceConfig.notice.message, '源用户通知');
+
+  const sourceNoticeRows = database.queryAll('SELECT user_id FROM user_notices WHERE user_id = ?', source.userId);
+  const targetNoticeRows = database.queryAll('SELECT user_id FROM user_notices WHERE user_id = ?', target.userId);
+  const movedAcknowledgements = database.queryAll(
+    'SELECT user_id, device_id FROM user_notice_acknowledgements WHERE user_id = ?',
+    target.userId
+  );
+  assert.equal(sourceNoticeRows.length, 0);
+  assert.equal(targetNoticeRows.length, 1);
+  assert.deepEqual(
+    movedAcknowledgements.map((row) => ({ ...row })),
+    [{ user_id: target.userId, device_id: source.deviceId }]
+  );
+});
+
+test('user merge keeps the target notice and never carries acknowledgements from a different source notice', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const sourceSeed = '11111111-1111-4111-8111-111111111111';
+  const targetSeed = '22222222-2222-4222-8222-222222222222';
+  const source = await (await activate(database, { name: 'Source', deviceSeed: sourceSeed })).json();
+  const target = await (await activate(database, { name: 'Target', deviceSeed: targetSeed })).json();
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+  await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(source.userId)}/notice`,
+    JSON.stringify({ message: '源通知', tone: 'warning', expiresAt, enabled: true })
+  );
+  await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(target.userId)}/notice`,
+    JSON.stringify({ message: '目标通知', tone: 'info', expiresAt, enabled: true })
+  );
+  assert.equal((await acknowledgeNotice(database, source, sourceSeed, 1)).status, 200);
+
+  const merged = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({
+      targetUserId: target.userId,
+      requestId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    })
+  });
+  assert.equal(merged.status, 200);
+  const sourceDeviceConfig = await (await getClientConfig(database, source, sourceSeed)).json();
+  assert.equal(sourceDeviceConfig.notice.message, '目标通知');
+  assert.equal(
+    database.queryAll(
+      'SELECT device_id FROM user_notice_acknowledgements WHERE user_id = ? AND device_id = ?',
+      target.userId,
+      source.deviceId
+    ).length,
+    0
+  );
+});
+
 test('multi-hop user merges flatten old aliases so registration and signatures stay canonical', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
@@ -496,6 +740,56 @@ test('merge batch rejects a target config created after conflict evaluation', as
     target.userId
   )[0];
   assert.equal(targetConfig.subscription_url, 'https://example.com/concurrent');
+});
+
+test('merge batch rejects a notice revision changed after conflict evaluation', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const source = await (
+    await activate(database, { name: 'Source', deviceSeed: '11111111-1111-4111-8111-111111111111' })
+  ).json();
+  const target = await (
+    await activate(database, { name: 'Target', deviceSeed: '22222222-2222-4222-8222-222222222222' })
+  ).json();
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  assert.equal(
+    (
+      await requestAdminConfig(
+        database,
+        `/api/admin/users/${encodeURIComponent(source.userId)}/notice`,
+        JSON.stringify({ enabled: true, message: '原通知', tone: 'info', expiresAt })
+      )
+    ).status,
+    200
+  );
+  let interceptBatch = true;
+  const racedDatabase = {
+    ...database,
+    async batch(statements) {
+      if (interceptBatch) {
+        interceptBatch = false;
+        await database
+          .prepare('UPDATE user_notices SET revision = revision + 1, message = ? WHERE user_id = ?')
+          .bind('并发通知', source.userId)
+          .run();
+      }
+      return database.batch(statements);
+    }
+  };
+
+  const racedMerge = await requestAdmin(racedDatabase, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ targetUserId: target.userId })
+  });
+  await assertWorkerError(racedMerge, 409, 'merge state changed');
+  const sourceUser = database.queryAll('SELECT status, merged_into_user_id FROM users WHERE id = ?', source.userId)[0];
+  assert.equal(sourceUser.status, 'active');
+  assert.equal(sourceUser.merged_into_user_id, null);
+  assert.equal(
+    database.queryAll('SELECT message FROM user_notices WHERE user_id = ?', source.userId)[0].message,
+    '并发通知'
+  );
+  assert.equal(database.queryAll('SELECT message FROM user_notices WHERE user_id = ?', target.userId).length, 0);
 });
 
 test('traffic reports use the device owner committed by a concurrent user merge', async (context) => {
@@ -877,7 +1171,10 @@ test('client config reads the device current owner after a concurrent merge', as
 
   const response = await getClientConfig(racedDatabase, source, sourceSeed);
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).config.subscriptionUrl, 'https://example.com/target');
+  const body = await response.json();
+  assert.equal(body.config.subscriptionUrl, 'https://example.com/target');
+  assert.equal(body.profile.userId, source.userId);
+  assert.equal(body.profile.name, 'Target');
 });
 
 test('an orphaned existing user atomically accepts concurrent fresh devices', async (context) => {
@@ -1225,6 +1522,10 @@ test('admin page exposes the fixed-viewport management workspace without removed
   assert.match(page, /value="ruleset">智能规则/);
   assert.match(page, /value="subscription">机场规则/);
   assert.match(page, /data-drawer-tab="merge">合并用户/);
+  assert.match(page, /data-drawer-tab="profile">资料通知/);
+  assert.match(page, /id="userProfileName"[^>]*maxlength="80"/);
+  assert.match(page, /id="userNoticeMessage"[^>]*maxlength="500"/);
+  assert.match(page, /id="userNoticeExpiresAt" type="datetime-local"/);
   assert.match(page, /id="previewMerge"[^>]*>预览合并/);
   assert.doesNotMatch(page, /查看、筛选和配置(?:登记)?用户/);
   for (const removed of [
@@ -1320,6 +1621,75 @@ test('admin page never uses an unsubmitted token draft for API requests', async 
   assert.equal(tokenInput.value, '');
   assert.equal(document.getElementById('changeToken').getAttribute('aria-expanded'), 'false');
   assert.ok(requests.slice(requestCount).every((request) => request.authorization === 'Bearer committed-token'));
+});
+
+test('admin page edits a user profile and plain-text targeted notice end to end', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const identity = await (
+    await activate(database, {
+      name: 'Alice',
+      deviceSeed: '11111111-1111-4111-8111-111111111111'
+    })
+  ).json();
+  const env = { DB: database, REGISTRATION_PASSPHRASE: registrationPassphrase, ADMIN_TOKEN: adminToken };
+  const page = await (await worker.fetch(new Request('https://worker.example/admin'), env)).text();
+  const script = await (await worker.fetch(new Request('https://worker.example/admin/assets/app.js'), env)).text();
+  const dom = new JSDOM(page, { runScripts: 'outside-only', url: 'https://worker.example/admin' });
+  context.after(() => dom.window.close());
+  const document = dom.window.document;
+  dom.window.fetch = async (input, init = {}) => {
+    const url = new URL(String(input), 'https://worker.example');
+    return worker.fetch(
+      new Request(url, {
+        method: init.method,
+        headers: init.headers,
+        body: typeof init.body === 'string' ? init.body : undefined
+      }),
+      env
+    );
+  };
+  dom.window.eval(script);
+  document.getElementById('token').value = adminToken;
+  document
+    .getElementById('authPanel')
+    .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(() => document.getElementById('adminWorkspace').hidden === false);
+
+  const detailButton = [...document.querySelectorAll('button')].find((button) => button.textContent === '详情');
+  assert.ok(detailButton);
+  detailButton.click();
+  await waitFor(() => document.getElementById('drawerContent').hidden === false);
+  assert.equal(document.getElementById('userProfileName').value, 'Alice');
+
+  const profileInput = document.getElementById('userProfileName');
+  profileInput.value = 'Alice 修正';
+  profileInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  document
+    .getElementById('userProfileForm')
+    .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(
+    () => database.queryAll('SELECT name FROM users WHERE id = ?', identity.userId)[0]?.name === 'Alice 修正'
+  );
+  assert.equal(document.getElementById('activeUserName').textContent, 'Alice 修正');
+
+  const message = '<img src=x onerror=alert(1)>今晚维护';
+  document.getElementById('userNoticeMessage').value = message;
+  document.getElementById('userNoticeTone').value = 'warning';
+  document.getElementById('userNoticeEnabled').value = 'true';
+  document.getElementById('userNoticeExpiresAt').value = new Date(Date.now() + 8 * 60 * 60 * 1000 + 3600000)
+    .toISOString()
+    .slice(0, 16);
+  document
+    .getElementById('userNoticeForm')
+    .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(
+    () =>
+      database.queryAll('SELECT message FROM user_notices WHERE user_id = ?', identity.userId)[0]?.message === message
+  );
+  assert.equal(document.getElementById('userNoticeMessage').value, message);
+  assert.equal(document.querySelector('img[src="x"]'), null);
+  assert.equal(document.getElementById('userNoticeState').textContent, '已启用');
 });
 
 test('admin writes reject non-object JSON and bodies larger than 64 KiB', async (context) => {
@@ -2052,6 +2422,34 @@ async function getClientConfig(database, identity, deviceSeed) {
         'x-youyu-timestamp': timestamp,
         'x-youyu-signature': signature
       }
+    }),
+    {
+      DB: database,
+      REGISTRATION_PASSPHRASE: registrationPassphrase
+    }
+  );
+}
+
+async function acknowledgeNotice(database, identity, deviceSeed, revision) {
+  const url = new URL('https://worker.example/api/notices/acknowledge');
+  const body = JSON.stringify({
+    userId: identity.userId,
+    deviceId: identity.deviceId,
+    revision
+  });
+  const timestamp = String(Date.now());
+  const bodyHash = createHash('sha256').update(body).digest('hex');
+  const canonical = ['POST', url.pathname, timestamp, bodyHash].join('\n');
+  const signature = createHmac('sha256', deviceSeed).update(canonical).digest('hex');
+  return worker.fetch(
+    new Request(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-youyu-timestamp': timestamp,
+        'x-youyu-signature': signature
+      },
+      body
     }),
     {
       DB: database,

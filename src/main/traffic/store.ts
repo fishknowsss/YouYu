@@ -470,6 +470,30 @@ export class TrafficStore {
     });
   }
 
+  async syncIdentityProfile(identity: TrafficIdentityKey, profile: { name: string }): Promise<boolean> {
+    const name = typeof profile.name === 'string' ? profile.name.trim() : '';
+    if (!name || Array.from(name).length > 80 || hasControlCharacters(name)) {
+      throw new Error('invalid remote traffic profile');
+    }
+    return this.enqueue(async () => {
+      const current = await this.readCurrent();
+      const currentIdentity = current.identity;
+      if (
+        !currentIdentity ||
+        currentIdentity.verificationStatus === 'pending' ||
+        !isSameTrafficIdentity(currentIdentity, identity) ||
+        currentIdentity.name === name
+      ) {
+        return false;
+      }
+      await this.write({
+        ...current,
+        identity: { ...currentIdentity, name }
+      });
+      return true;
+    });
+  }
+
   async createDeviceSeed(): Promise<string> {
     return this.enqueue(async () => {
       const current = await this.readCurrent();
@@ -1081,6 +1105,13 @@ function normalizeOptionalText(value: unknown, maxLength: number): string | unde
   if (typeof value !== 'string') return undefined;
   const text = value.trim();
   return text ? text.slice(0, maxLength) : undefined;
+}
+
+function hasControlCharacters(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
+  });
 }
 
 function parseTimestamp(value: string | undefined): number {

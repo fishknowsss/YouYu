@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { applyWorkerMigrations, parseMigrationArgs, planWorkerMigrations } from '../migrations/apply.mjs';
+import {
+  applyWorkerMigrations,
+  createWranglerRunner,
+  parseMigrationArgs,
+  planWorkerMigrations
+} from '../migrations/apply.mjs';
 
 const currentSchema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 
@@ -88,6 +93,26 @@ test('migration CLI requires an explicit target and operation', () => {
   assert.throws(() => parseMigrationArgs(['--remote']), /operation/);
   assert.deepEqual(parseMigrationArgs(['--local', '--dry-run']), { mode: 'local', operation: 'dry-run' });
   assert.deepEqual(parseMigrationArgs(['--remote', '--apply']), { mode: 'remote', operation: 'apply' });
+});
+
+test('Wrangler runner retries transient API failures but not SQL failures', async () => {
+  let transientAttempts = 0;
+  const transientRunner = createWranglerRunner('remote', () => {
+    transientAttempts += 1;
+    return transientAttempts === 1
+      ? { status: 1, stdout: '', stderr: 'Authentication error [code: 10000]' }
+      : { status: 0, stdout: '[]', stderr: '' };
+  });
+  await transientRunner.executeSql('SELECT 1');
+  assert.equal(transientAttempts, 2);
+
+  let sqlAttempts = 0;
+  const sqlRunner = createWranglerRunner('remote', () => {
+    sqlAttempts += 1;
+    return { status: 1, stdout: '', stderr: 'SQLITE_ERROR: no such table' };
+  });
+  await assert.rejects(() => sqlRunner.executeSql('SELECT 1'), /SQLITE_ERROR/);
+  assert.equal(sqlAttempts, 1);
 });
 
 test('migration runner repairs the quota expiry column and preserves later settings', async (context) => {

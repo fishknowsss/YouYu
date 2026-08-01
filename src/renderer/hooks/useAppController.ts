@@ -590,6 +590,14 @@ export function useAppController() {
       }),
     [runAction]
   );
+  const acknowledgeUserNotice = useCallback(
+    (revision: number) =>
+      runAction((api) => api.acknowledgeUserNotice(revision), '', {
+        timeoutLabel: '确认信息',
+        clearMessage: false
+      }),
+    [runAction]
+  );
   const checkForUpdates = useCallback(
     () =>
       void runAction((api) => api.checkForUpdates(), '', {
@@ -602,7 +610,7 @@ export function useAppController() {
   const handleInstallUpdate = useCallback(
     (messageSink?: Dispatch<SetStateAction<string>>) =>
       void runAction((api) => api.installUpdate(), '', {
-        workingMessage: '安装中',
+        workingMessage: '确认新版中',
         timeoutLabel: '安装更新',
         messageSink
       }),
@@ -630,6 +638,7 @@ export function useAppController() {
     openRegistrationSwitch,
     closeRegistrationSwitch,
     registerTrafficIdentity,
+    acknowledgeUserNotice,
     quickStart,
     start,
     stop,

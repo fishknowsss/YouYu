@@ -71,7 +71,9 @@ export class DiagnosticLogBuffer {
   }
 
   append(input: string, at = new Date()): void {
-    const message = toBoundedSafeDiagnosticMessage(normalizeDiagnosticLog(input), this.maxMessageLength);
+    const normalized = normalizeDiagnosticLog(input);
+    if (!normalized) return;
+    const message = toBoundedSafeDiagnosticMessage(normalized, this.maxMessageLength);
     if (!message) return;
 
     for (let index = this.entries.length - 1; index >= 0; index -= 1) {
@@ -129,7 +131,8 @@ export function redactDiagnosticText(input: string): string {
     .replace(/(?<![A-Za-z0-9+/_=-])(?:[A-Fa-f0-9]{32,}|[A-Za-z0-9+/_=-]{40,})(?![A-Za-z0-9+/_=-])/g, '[已隐藏标识]');
 }
 
-function normalizeDiagnosticLog(message: string): string {
+function normalizeDiagnosticLog(message: string): string | undefined {
+  if (/^\[mihomo\]\s*#<\s*CLIXML\s*$/i.test(message.trim())) return undefined;
   const warning = parseMihomoDialWarning(message);
   if (!warning) return message;
   return `连接警告：${warning.target} 访问失败（${warning.network}）`;
@@ -141,9 +144,24 @@ function parseMihomoDialWarning(message: string): { target: string; network: str
   }
 
   const network = message.match(/\[(TCP|UDP)\]\s+dial/i)?.[1]?.toUpperCase() ?? '连接';
+  const destination = message.match(/-->\s+(\[[^\]]+\]|[^:\s]+)(?::\d+)?(?=\s|$)/)?.[1];
   const rulePayload = message.match(/match\s+([A-Za-z-]+\/[^")\s]+)/i)?.[1];
-  const target = rulePayload?.split('/').pop()?.trim() || message.match(/dial\s+([^ ]+)/i)?.[1] || '外部站点';
+  const dialTarget = message.match(/dial\s+([^ ]+)/i)?.[1];
+  const target =
+    normalizeDiagnosticTarget(destination) ||
+    normalizeDiagnosticTarget(rulePayload?.split('/').pop()) ||
+    normalizeDiagnosticTarget(dialTarget) ||
+    '外部站点';
   return { target, network };
+}
+
+function normalizeDiagnosticTarget(value: string | undefined): string | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+  const bracketed = raw.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracketed) return bracketed[1] || undefined;
+  const target = (raw.match(/:/g)?.length ?? 0) <= 1 ? raw.replace(/:\d+$/, '') : raw;
+  return target || undefined;
 }
 
 export function classifyDiagnosticIssue(message: string | undefined): DiagnosticIssueKind | undefined {

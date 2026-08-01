@@ -30,7 +30,7 @@ describe('settings diagnostic export', () => {
       'class="secondary-button settings-footer-action settings-diagnostics-export settings-action-export"'
     );
     expect(html).toContain('>导出</button>');
-    expect(html).toContain('class="secondary-button settings-action-check settings-footer-action"');
+    expect(html).toContain('class="wide-button settings-action-check settings-footer-action"');
     expect(html).toContain('>检查</button>');
     expect(html).toContain('class="settings-action-status is-error"');
     expect(html).toContain('DNS 异常 · 点击修复');
@@ -190,19 +190,21 @@ describe('settings diagnostic export', () => {
     expect(styles).not.toContain('.version-chip:active:not(:disabled)');
   });
 
-  it('gives every settings utility action an explicit hover state and semantic tone', async () => {
+  it('keeps repair semantic while the update check reuses the primary save-button vocabulary', async () => {
     const styles = await readRendererStyles();
     const repair = getRule(styles, '.settings-action-repair');
     const repairHover = getRule(styles, '.settings-action-repair:hover:not(:disabled)');
-    const check = getRule(styles, '.settings-action-check');
-    const checkHover = getRule(styles, '.settings-action-check:hover:not(:disabled)');
+    const primary = getRule(styles, '.power-button,\n.wide-button');
+    const primaryHover = getRule(styles, '.power-button:hover:not(:disabled),\n.wide-button:hover:not(:disabled)');
 
     expect(styles).toContain('.settings-action-sync:hover:not(:disabled)');
     expect(styles).toContain('.settings-action-export:hover:not(:disabled)');
     expect(repair).toContain('background: var(--danger-soft);');
     expect(repairHover).toContain('background: var(--danger-soft-hover);');
-    expect(check).toContain('background: var(--accent-secondary);');
-    expect(checkHover).toContain('background: var(--accent-secondary-hover);');
+    expect(primary).toContain('background: var(--accent);');
+    expect(primaryHover).toContain('background: var(--accent-strong);');
+    expect(styles).not.toContain('.settings-action-check {');
+    expect(styles).not.toContain('.settings-action-check:hover:not(:disabled) {');
   });
 });
 
