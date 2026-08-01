@@ -4,6 +4,11 @@ import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import type { TrafficRegistrationInput } from '../../shared/ipc';
 import { createDeviceAuthHeaders } from '../deviceAuth';
+import {
+  EXTERNAL_RESPONSE_BODY_LIMITS,
+  readFetchTextBounded,
+  readIncomingMessageTextBounded
+} from '../http/boundedBody';
 import { runNetworkFallback, type FetchLike, type NetworkRoute } from '../networkFallback';
 import type { TrafficStore } from './store';
 
@@ -38,9 +43,10 @@ type ActivateResponse = {
 };
 
 type TrafficReportResponse = {
-  traffic?: {
-    totalUpload?: number;
-    totalDownload?: number;
+  ok: true;
+  traffic: {
+    totalUpload: number;
+    totalDownload: number;
     todayUpload?: number;
     todayDownload?: number;
     date?: string;
@@ -50,6 +56,8 @@ type TrafficReportResponse = {
 export class TrafficReporter {
   private timer: ReturnType<typeof setInterval> | undefined;
   private reporting: Promise<void> | undefined;
+  private latestRegistrationAttempt = 0;
+  private registrationCommitQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: TrafficReporterOptions) {}
 
@@ -82,9 +90,11 @@ export class TrafficReporter {
     const passphrase = input.passphrase.trim();
     if (!name) throw new Error('missing traffic user name');
     if (!passphrase) throw new Error('missing traffic passphrase');
+    const registrationAttempt = ++this.latestRegistrationAttempt;
 
     const deviceSeed = await this.options.store.createDeviceSeed();
     const deviceKey = await getOptionalDeviceKey(this.options.getDeviceKey);
+    this.assertCurrentRegistration(registrationAttempt);
     const response = await postJson(
       `${endpoint}/api/activate`,
       {
@@ -101,6 +111,7 @@ export class TrafficReporter {
       undefined,
       this.options.fetch
     );
+    this.assertCurrentRegistration(registrationAttempt);
 
     if (!response.ok) {
       const detail = getResponseError(response.body);
@@ -125,26 +136,52 @@ export class TrafficReporter {
       throw new Error(`traffic activation response invalid (${responseRouteDetails(response)})`);
     }
 
-    const activated = await this.options.store.activateIdentity(
-      {
-        userId: data.userId,
-        deviceId: data.deviceId,
-        name: data.name ?? name,
-        deviceName: hostname()
-      },
-      {
-        totalUpload: traffic.totalUpload,
-        totalDownload: traffic.totalDownload,
-        todayUpload: traffic.todayUpload,
-        todayDownload: traffic.todayDownload,
-        date: traffic.date
-      },
-      new Date()
+    const activated = await this.commitRegistration(registrationAttempt, () =>
+      this.options.store.activateIdentity(
+        {
+          userId: data.userId!,
+          deviceId: data.deviceId!,
+          name: data.name ?? name,
+          deviceName: hostname()
+        },
+        {
+          totalUpload: traffic.totalUpload!,
+          totalDownload: traffic.totalDownload!,
+          todayUpload: traffic.todayUpload!,
+          todayDownload: traffic.todayDownload!,
+          date: traffic.date!
+        },
+        new Date(),
+        deviceSeed
+      )
     );
     if (activated.pendingUpload > 0 || activated.pendingDownload > 0) {
+      this.assertCurrentRegistration(registrationAttempt);
       await this.reportPending().catch(() => undefined);
+      this.assertCurrentRegistration(registrationAttempt);
     }
     return activated.identity;
+  }
+
+  private assertCurrentRegistration(registrationAttempt: number): void {
+    if (registrationAttempt === this.latestRegistrationAttempt) return;
+    throw Object.assign(new Error('本次流量登记已被较新的操作取代'), {
+      code: 'REGISTRATION_SUPERSEDED'
+    });
+  }
+
+  private commitRegistration<T>(registrationAttempt: number, commit: () => Promise<T>): Promise<T> {
+    const result = this.registrationCommitQueue.then(async () => {
+      this.assertCurrentRegistration(registrationAttempt);
+      const committed = await commit();
+      this.assertCurrentRegistration(registrationAttempt);
+      return committed;
+    });
+    this.registrationCommitQueue = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
   }
 
   async reportPending() {
@@ -225,23 +262,25 @@ export class TrafficReporter {
       throw new Error(message);
     }
 
+    const data = parseTrafficReportResponse(response.body);
+    if (!data) {
+      const message = `traffic report response invalid (${responseRouteDetails(response)})`;
+      await this.options.store.markReportFailedIfCurrent(identityKey, report.id, message);
+      throw new Error(message);
+    }
+
     const accepted = await this.options.store.markReported(upload, download, new Date(), report.id, identityKey);
     if (accepted) {
-      await this.options.store.markServerTotals(
-        (response.body as TrafficReportResponse).traffic ?? {},
-        new Date(),
-        identityKey,
-        {
-          localDayBaseline:
-            report.localDate && typeof report.localDayUpload === 'number' && typeof report.localDayDownload === 'number'
-              ? {
-                  date: report.localDate,
-                  upload: report.localDayUpload,
-                  download: report.localDayDownload
-                }
-              : 'current'
-        }
-      );
+      await this.options.store.markServerTotals(data.traffic, new Date(), identityKey, {
+        localDayBaseline:
+          report.localDate && typeof report.localDayUpload === 'number' && typeof report.localDayDownload === 'number'
+            ? {
+                date: report.localDate,
+                upload: report.localDayUpload,
+                download: report.localDayDownload
+              }
+            : 'current'
+      });
     }
   }
 }
@@ -268,6 +307,46 @@ function normalizeEndpoint(value: string): string {
 
 function isNonNegativeNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function parseTrafficReportResponse(value: unknown): TrafficReportResponse | undefined {
+  if (!isRecord(value) || value.ok !== true || !isRecord(value.traffic)) return undefined;
+  const traffic = value.traffic;
+  if (!isNonNegativeNumber(traffic.totalUpload) || !isNonNegativeNumber(traffic.totalDownload)) return undefined;
+
+  const hasDailyTotals = 'todayUpload' in traffic || 'todayDownload' in traffic || 'date' in traffic;
+  if (hasDailyTotals) {
+    if (
+      !isNonNegativeNumber(traffic.todayUpload) ||
+      !isNonNegativeNumber(traffic.todayDownload) ||
+      typeof traffic.date !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(traffic.date)
+    ) {
+      return undefined;
+    }
+    return {
+      ok: true,
+      traffic: {
+        totalUpload: traffic.totalUpload,
+        totalDownload: traffic.totalDownload,
+        todayUpload: traffic.todayUpload,
+        todayDownload: traffic.todayDownload,
+        date: traffic.date
+      }
+    };
+  }
+
+  return {
+    ok: true,
+    traffic: {
+      totalUpload: traffic.totalUpload,
+      totalDownload: traffic.totalDownload
+    }
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 type JsonResponse = {
@@ -306,7 +385,13 @@ async function postJson(
       return {
         ok: response.ok,
         status: response.status,
-        body: parseJson(await response.text())
+        body: parseJson(
+          await readFetchTextBounded(response, {
+            maxBytes: EXTERNAL_RESPONSE_BODY_LIMITS.trafficJson,
+            scope: 'traffic',
+            signal
+          })
+        )
       };
     },
     proxy: ({ proxyUrl: fallbackProxyUrl, timeoutMs: remainingMs, signal }) =>
@@ -374,7 +459,7 @@ async function postJsonViaProxy(
       },
       (res) => {
         response = res;
-        consumeJsonResponse(res, resolveOnce, rejectOnce);
+        consumeJsonResponse(res, resolveOnce, rejectOnce, signal);
       }
     );
 
@@ -490,7 +575,7 @@ async function postHttpsJsonViaProxy(
           },
           (res) => {
             response = res;
-            consumeJsonResponse(res, resolveOnce, rejectOnce);
+            consumeJsonResponse(res, resolveOnce, rejectOnce, signal);
           }
         );
 
@@ -510,46 +595,22 @@ async function postHttpsJsonViaProxy(
 function consumeJsonResponse(
   response: IncomingMessage,
   resolveOnce: (response: RawJsonResponse) => void,
-  rejectOnce: (error: unknown) => void
+  rejectOnce: (error: unknown) => void,
+  signal?: AbortSignal
 ) {
-  const chunks: Buffer[] = [];
-
-  const cleanupReadableListeners = () => {
-    response.removeListener('data', onData);
-    response.removeListener('end', onEnd);
-    response.removeListener('aborted', onAborted);
-  };
-  const cleanupAllListeners = () => {
-    cleanupReadableListeners();
-    response.removeListener('error', onError);
-    response.removeListener('close', onClose);
-  };
-  const fail = (cause?: unknown) => {
-    cleanupReadableListeners();
-    rejectOnce(new Error('traffic response aborted', cause === undefined ? undefined : { cause }));
-  };
-  const onData = (chunk: Buffer | string) => chunks.push(Buffer.from(chunk));
-  const onEnd = () => {
-    cleanupReadableListeners();
-    const raw = Buffer.concat(chunks).toString('utf8');
-    resolveOnce({
-      ok: Boolean(response.statusCode && response.statusCode >= 200 && response.statusCode < 300),
-      status: response.statusCode ?? 0,
-      body: parseJson(raw)
-    });
-  };
-  const onAborted = () => fail();
-  const onError = (error: Error) => fail(error);
-  const onClose = () => {
-    if (!response.complete) fail();
-    cleanupAllListeners();
-  };
-
-  response.on('data', onData);
-  response.on('end', onEnd);
-  response.on('aborted', onAborted);
-  response.on('error', onError);
-  response.on('close', onClose);
+  void readIncomingMessageTextBounded(response, {
+    maxBytes: EXTERNAL_RESPONSE_BODY_LIMITS.trafficJson,
+    scope: 'traffic',
+    signal
+  }).then(
+    (raw) =>
+      resolveOnce({
+        ok: Boolean(response.statusCode && response.statusCode >= 200 && response.statusCode < 300),
+        status: response.statusCode ?? 0,
+        body: parseJson(raw)
+      }),
+    (cause: unknown) => rejectOnce(new Error('traffic response aborted', { cause }))
+  );
 }
 
 function parseJson(raw: string): unknown {

@@ -4,6 +4,11 @@ import { connect as tlsConnect } from 'node:tls';
 import { join } from 'node:path';
 import type { RemoteControlConfig, RuleProfile, StrategyKey } from '../shared/ipc';
 import { createDeviceAuthHeaders } from './deviceAuth';
+import {
+  EXTERNAL_RESPONSE_BODY_LIMITS,
+  readFetchTextBounded,
+  readIncomingMessageTextBounded
+} from './http/boundedBody';
 import { runNetworkFallback, type FetchLike, type NetworkRoute } from './networkFallback';
 import type { TrafficStore } from './traffic/store';
 import { readJsonFile, writeJsonFileAtomic } from './storage/jsonFile';
@@ -325,7 +330,13 @@ async function getJson(
       return {
         ok: response.ok,
         status: response.status,
-        body: parseJson(await response.text())
+        body: parseJson(
+          await readFetchTextBounded(response, {
+            maxBytes: EXTERNAL_RESPONSE_BODY_LIMITS.remoteConfigJson,
+            scope: 'remote config',
+            signal
+          })
+        )
       };
     },
     proxy: ({ proxyUrl: fallbackProxyUrl, timeoutMs: remainingMs, signal }) =>
@@ -356,6 +367,7 @@ async function getJsonViaProxy(
     signal?.throwIfAborted();
     let settled = false;
     let tunneledRequest: ReturnType<typeof httpsRequest> | undefined;
+    let responseStarted = false;
     const cleanup = () => signal?.removeEventListener('abort', abort);
     const resolveOnce = (response: RawJsonResponse) => {
       if (settled) return;
@@ -406,22 +418,28 @@ async function getJsonViaProxy(
           createConnection: () => tlsConnect({ socket, servername: target.hostname })
         },
         (response) => {
-          const chunks: Buffer[] = [];
-          response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-          response.once('error', rejectOnce);
-          response.once('end', () => {
-            resolveOnce({
-              ok: (response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300,
-              status: response.statusCode ?? 0,
-              body: parseJson(Buffer.concat(chunks).toString('utf8'))
-            });
-          });
+          responseStarted = true;
+          void readIncomingMessageTextBounded(response, {
+            maxBytes: EXTERNAL_RESPONSE_BODY_LIMITS.remoteConfigJson,
+            scope: 'remote config',
+            signal
+          }).then(
+            (raw) =>
+              resolveOnce({
+                ok: (response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300,
+                status: response.statusCode ?? 0,
+                body: parseJson(raw)
+              }),
+            (cause: unknown) => rejectOnce(new Error('remote config response aborted', { cause }))
+          );
         }
       );
       tunneledRequest.setTimeout(timeoutMs, () =>
         tunneledRequest?.destroy(new Error('remote config request timed out'))
       );
-      tunneledRequest.once('error', rejectOnce);
+      tunneledRequest.once('error', (error) => {
+        if (!responseStarted) rejectOnce(error);
+      });
       tunneledRequest.end();
     });
     connectReq.on('timeout', () => connectReq.destroy(new Error('remote config proxy connect timed out')));
@@ -474,7 +492,7 @@ async function getJsonViaHttpProxy(
       },
       (res) => {
         response = res;
-        consumeProxyJsonResponse(res, resolveOnce, rejectOnce);
+        consumeProxyJsonResponse(res, resolveOnce, rejectOnce, signal);
       }
     );
 
@@ -494,45 +512,22 @@ async function getJsonViaHttpProxy(
 function consumeProxyJsonResponse(
   response: IncomingMessage,
   resolveOnce: (response: RawJsonResponse) => void,
-  rejectOnce: (error: unknown) => void
+  rejectOnce: (error: unknown) => void,
+  signal?: AbortSignal
 ): void {
-  const chunks: Buffer[] = [];
-
-  const cleanupReadableListeners = () => {
-    response.removeListener('data', onData);
-    response.removeListener('end', onEnd);
-    response.removeListener('aborted', onAborted);
-  };
-  const cleanupAllListeners = () => {
-    cleanupReadableListeners();
-    response.removeListener('error', onError);
-    response.removeListener('close', onClose);
-  };
-  const fail = (cause?: unknown) => {
-    cleanupReadableListeners();
-    rejectOnce(new Error('remote config response aborted', cause === undefined ? undefined : { cause }));
-  };
-  const onData = (chunk: Buffer | string) => chunks.push(Buffer.from(chunk));
-  const onEnd = () => {
-    cleanupReadableListeners();
-    resolveOnce({
-      ok: (response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300,
-      status: response.statusCode ?? 0,
-      body: parseJson(Buffer.concat(chunks).toString('utf8'))
-    });
-  };
-  const onAborted = () => fail();
-  const onError = (error: Error) => fail(error);
-  const onClose = () => {
-    if (!response.complete) fail();
-    cleanupAllListeners();
-  };
-
-  response.on('data', onData);
-  response.on('end', onEnd);
-  response.on('aborted', onAborted);
-  response.on('error', onError);
-  response.on('close', onClose);
+  void readIncomingMessageTextBounded(response, {
+    maxBytes: EXTERNAL_RESPONSE_BODY_LIMITS.remoteConfigJson,
+    scope: 'remote config',
+    signal
+  }).then(
+    (raw) =>
+      resolveOnce({
+        ok: (response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300,
+        status: response.statusCode ?? 0,
+        body: parseJson(raw)
+      }),
+    (cause: unknown) => rejectOnce(new Error('remote config response aborted', { cause }))
+  );
 }
 
 function parseJson(text: string): unknown {

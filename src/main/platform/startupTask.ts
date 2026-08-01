@@ -1,8 +1,14 @@
 import { execFile } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { win32 } from 'node:path';
+import {
+  buildSidBoundStartupTaskName,
+  resolveCurrentWindowsUserIdentity,
+  type WindowsUserIdentity
+} from './windowsUserIdentity';
 
 const hiddenArgument = '--hidden';
+const legacyTaskName = 'YouYu';
 
 export type StartupTaskState = 'missing' | 'current' | 'stale';
 
@@ -15,14 +21,27 @@ export type StartupTaskRunner = (args: readonly string[]) => Promise<StartupTask
 
 export function createWindowsStartupTask(options: {
   executablePath: string;
-  taskName?: string;
   runner?: StartupTaskRunner;
+  resolveUserIdentity?: () => Promise<WindowsUserIdentity>;
 }) {
-  const taskName = options.taskName ?? 'YouYu';
   const runner = options.runner ?? runSchtasks;
+  const resolveUserIdentity = options.resolveUserIdentity ?? resolveCurrentWindowsUserIdentity;
+  let contextPromise: Promise<{ taskName: string; userSid: string }> | undefined;
   let state: StartupTaskState | 'unknown' = 'unknown';
+  let legacyState: 'unknown' | 'missing' | 'managed' | 'foreign' = 'unknown';
+  let disableFailed = false;
+
+  function getContext(): Promise<{ taskName: string; userSid: string }> {
+    contextPromise ??= resolveUserIdentity().then((identity) => ({
+      taskName: buildSidBoundStartupTaskName(identity.userSid),
+      userSid: identity.userSid
+    }));
+    return contextPromise;
+  }
 
   async function inspect(): Promise<StartupTaskState> {
+    const context = await getContext();
+    const { taskName } = context;
     const result = await runner(['/Query', '/TN', taskName, '/XML']);
     if (result.status === 'missing') {
       state = 'missing';
@@ -33,11 +52,18 @@ export function createWindowsStartupTask(options: {
       throw new Error('无法读取 Windows 计划任务');
     }
 
-    state = isCurrentTask(decodeSchtasksOutput(result.stdout), options.executablePath) ? 'current' : 'stale';
+    const xml = decodeSchtasksOutput(result.stdout);
+    if (!isTaskBoundToUser(xml, context.userSid)) {
+      state = 'unknown';
+      throw new Error('Windows 计划任务不属于当前用户，已停止修改');
+    }
+
+    state = isCurrentTask(xml, options.executablePath, context.userSid) ? 'current' : 'stale';
     return state;
   }
 
   async function create(): Promise<void> {
+    const { taskName } = await getContext();
     const result = await runner([
       '/Create',
       '/TN',
@@ -54,36 +80,78 @@ export function createWindowsStartupTask(options: {
     state = 'current';
   }
 
+  async function inspectLegacy(): Promise<typeof legacyState> {
+    if (legacyState !== 'unknown') return legacyState;
+    const context = await getContext();
+    const result = await runner(['/Query', '/TN', legacyTaskName, '/XML']);
+    if (result.status === 'missing') {
+      legacyState = 'missing';
+      return legacyState;
+    }
+    if (result.status === 'failed') throw new Error('无法读取旧版 Windows 计划任务');
+
+    legacyState = isStrictlyManagedLegacyTask(
+      decodeSchtasksOutput(result.stdout),
+      options.executablePath,
+      context.userSid
+    )
+      ? 'managed'
+      : 'foreign';
+    return legacyState;
+  }
+
+  async function deleteLegacy(): Promise<void> {
+    const result = await runner(['/Delete', '/TN', legacyTaskName, '/F']);
+    if (result.status === 'failed') throw new Error('无法删除旧版 Windows 计划任务');
+    legacyState = 'missing';
+  }
+
   return {
     isEnabled(): boolean {
-      return state === 'current' || state === 'stale';
+      return disableFailed || state === 'current' || state === 'stale' || legacyState === 'managed';
     },
 
     async reconcile(legacyEnabled: boolean): Promise<StartupTaskState> {
       const detected = await inspect();
-      if (detected === 'stale' || (detected === 'missing' && legacyEnabled)) {
+      if (detected === 'stale') {
         await create();
       }
+
+      const legacy = await inspectLegacy();
+      if (detected === 'missing' && (legacy === 'managed' || legacyEnabled)) {
+        await create();
+      }
+      if (legacy === 'managed') await deleteLegacy();
+      disableFailed = false;
       return detected;
     },
 
     async setEnabled(enabled: boolean): Promise<void> {
       if (enabled) {
         await create();
+        disableFailed = false;
         return;
       }
 
-      if (state === 'unknown') await inspect();
-      if (state === 'missing') return;
-
-      const result = await runner(['/Delete', '/TN', taskName, '/F']);
-      if (result.status === 'failed') throw new Error('无法删除 Windows 计划任务');
-      state = 'missing';
+      try {
+        if (state === 'unknown') await inspect();
+        if ((await inspectLegacy()) === 'managed') await deleteLegacy();
+        if (state !== 'missing') {
+          const { taskName } = await getContext();
+          const result = await runner(['/Delete', '/TN', taskName, '/F']);
+          if (result.status === 'failed') throw new Error('无法删除 Windows 计划任务');
+          state = 'missing';
+        }
+        disableFailed = false;
+      } catch (error) {
+        disableFailed = true;
+        throw error;
+      }
     }
   };
 }
 
-function isCurrentTask(xml: string, executablePath: string): boolean {
+function isCurrentTask(xml: string, executablePath: string, expectedUserSid: string): boolean {
   const actions = readXmlRawElement(xml, 'Actions');
   const execAction = actions === undefined ? undefined : readXmlRawElement(actions, 'Exec');
   const principals = readXmlRawElement(xml, 'Principals');
@@ -117,7 +185,7 @@ function isCurrentTask(xml: string, executablePath: string): boolean {
   return (
     normalizeWindowsCommand(command) === normalizeWindowsCommand(executablePath) &&
     argumentsValue.trim() === hiddenArgument &&
-    isInteractiveUserPrincipal(userId, logonType) &&
+    isInteractiveUserPrincipal(userId, logonType, expectedUserSid) &&
     groupId === undefined &&
     requiredPrivileges === undefined &&
     (runLevel === undefined || runLevel.trim().toLowerCase() === 'leastprivilege') &&
@@ -128,11 +196,67 @@ function isCurrentTask(xml: string, executablePath: string): boolean {
   );
 }
 
-function isInteractiveUserPrincipal(userId: string, logonType: string): boolean {
+function isTaskBoundToUser(xml: string, expectedUserSid: string): boolean {
+  const principals = readXmlRawElement(xml, 'Principals');
+  if (principals === undefined || countXmlElements(principals, 'Principal') !== 1) return false;
+  const principal = readXmlRawElement(principals, 'Principal');
+  if (
+    principal === undefined ||
+    countXmlElements(principal, 'UserId') !== 1 ||
+    countXmlElements(principal, 'GroupId') !== 0
+  ) {
+    return false;
+  }
+  const userId = readXmlElement(principal, 'UserId');
+  return userId?.trim().toUpperCase() === expectedUserSid.trim().toUpperCase();
+}
+
+function isStrictlyManagedLegacyTask(xml: string, executablePath: string, expectedUserSid: string): boolean {
+  if (!isTaskBoundToUser(xml, expectedUserSid)) return false;
+  const actions = readXmlRawElement(xml, 'Actions');
+  const execAction = actions === undefined ? undefined : readXmlRawElement(actions, 'Exec');
+  const principals = readXmlRawElement(xml, 'Principals');
+  const principal = principals === undefined ? undefined : readXmlRawElement(principals, 'Principal');
+  const settings = readXmlRawElement(xml, 'Settings');
+  const triggers = readXmlRawElement(xml, 'Triggers');
+  const logonTrigger = triggers === undefined ? undefined : readXmlRawElement(triggers, 'LogonTrigger');
+  const command = execAction === undefined ? undefined : readXmlElement(execAction, 'Command');
+  const argumentsValue = execAction === undefined ? undefined : readXmlElement(execAction, 'Arguments');
+  const logonType = principal === undefined ? undefined : readXmlElement(principal, 'LogonType');
+  const requiredPrivileges = principal === undefined ? undefined : readXmlRawElement(principal, 'RequiredPrivileges');
+  const runLevel = principal === undefined ? undefined : readXmlElement(principal, 'RunLevel');
+  const taskEnabled = settings === undefined ? undefined : readXmlElement(settings, 'Enabled');
+  const triggerEnabled = logonTrigger === undefined ? undefined : readXmlElement(logonTrigger, 'Enabled');
+  if (
+    actions === undefined ||
+    command === undefined ||
+    argumentsValue === undefined ||
+    logonType === undefined ||
+    triggers === undefined ||
+    logonTrigger === undefined
+  ) {
+    return false;
+  }
+
+  return (
+    normalizeWindowsCommand(command) === normalizeWindowsCommand(executablePath) &&
+    argumentsValue.trim() === hiddenArgument &&
+    logonType.trim().toLowerCase() === 'interactivetoken' &&
+    requiredPrivileges === undefined &&
+    (runLevel === undefined || runLevel.trim().toLowerCase() === 'leastprivilege') &&
+    (taskEnabled === undefined || taskEnabled.trim().toLowerCase() === 'true') &&
+    (triggerEnabled === undefined || triggerEnabled.trim().toLowerCase() === 'true') &&
+    hasOnlyExpectedExecAction(actions) &&
+    hasOnlyExpectedTrigger(triggers)
+  );
+}
+
+function isInteractiveUserPrincipal(userId: string, logonType: string, expectedUserSid: string): boolean {
   const normalizedUserId = userId.trim().toLowerCase();
   if (!normalizedUserId || logonType.trim().toLowerCase() !== 'interactivetoken') return false;
 
   return (
+    normalizedUserId === expectedUserSid.trim().toLowerCase() &&
     !['s-1-5-18', 's-1-5-19', 's-1-5-20'].includes(normalizedUserId) &&
     !normalizedUserId.startsWith('s-1-5-80-') &&
     !(normalizedUserId.startsWith('s-') && normalizedUserId.endsWith('-500')) &&
@@ -151,6 +275,10 @@ function readXmlRawElement(xml: string, name: string): string | undefined {
   if (match) return match[1].trim();
   const selfClosing = new RegExp(`<(?:[\\w.-]+:)?${name}\\b[^>]*/>`, 'i').test(xml);
   return selfClosing ? '' : undefined;
+}
+
+function countXmlElements(xml: string, name: string): number {
+  return [...xml.matchAll(new RegExp(`<(?:[\\w.-]+:)?${name}\\b[^>]*>`, 'gi'))].length;
 }
 
 function hasOnlyExpectedTrigger(triggers: string): boolean {

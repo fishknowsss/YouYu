@@ -332,6 +332,7 @@ const domesticDirectProcessNames = [
 ];
 const builtInProxyNames = new Set(['COMPATIBLE', 'DIRECT', 'PASS', 'REJECT', 'REJECT-DROP']);
 const routableProxyGroupTypes = new Set(['select', 'url-test', 'fallback', 'load-balance', 'relay']);
+const healthCheckProxyGroupTypes = new Set(['url-test', 'fallback', 'load-balance']);
 const nodeHealthCheckIntervalSeconds = 1800;
 const autoSelectToleranceMs = 150;
 const secureHealthCheckUrl = 'https://www.gstatic.com/generate_204';
@@ -339,6 +340,19 @@ const insecureGoogleHealthCheckUrl = 'http://www.gstatic.com/generate_204';
 const secureCloudflareHealthCheckUrl = 'https://cp.cloudflare.com/generate_204';
 const insecureCloudflareHealthCheckUrl = 'http://1.1.1.1/generate_204';
 const healthCheckExpectedStatus = 204;
+const proxyProviderSizeLimitBytes = 8 * 1024 * 1024;
+const ruleProviderSizeLimitBytes = 32 * 1024 * 1024;
+const providerRefreshIntervalMinSeconds = 60 * 60;
+const providerRefreshIntervalMaxSeconds = 7 * 24 * 60 * 60;
+const proxyProviderRefreshIntervalSeconds = 12 * 60 * 60;
+const ruleProviderRefreshIntervalSeconds = 24 * 60 * 60;
+const providerHealthCheckIntervalMinSeconds = 5 * 60;
+const providerHealthCheckIntervalMaxSeconds = 24 * 60 * 60;
+const providerHealthCheckTimeoutMinMs = 1000;
+const providerHealthCheckTimeoutMaxMs = 10_000;
+const providerHealthCheckTimeoutMs = 5000;
+const subscriptionClientArrayKeys = ['proxies', 'proxy-groups', 'rules'] as const;
+const subscriptionClientRecordKeys = ['proxy-providers', 'rule-providers', 'sub-rules'] as const;
 
 export type MihomoConfigInput = {
   subscriptionUrl: string;
@@ -383,14 +397,15 @@ export function buildMihomoConfig(input: MihomoConfigInput): string {
         type: 'http',
         url: input.subscriptionUrl,
         path: './providers/airport.yaml',
-        interval: 43200,
+        interval: proxyProviderRefreshIntervalSeconds,
+        'size-limit': proxyProviderSizeLimitBytes,
         'exclude-filter': noticeNodeExcludeFilter,
         'health-check': {
           enable: true,
           url: secureHealthCheckUrl,
           'expected-status': healthCheckExpectedStatus,
           interval: nodeHealthCheckIntervalSeconds,
-          timeout: 5000,
+          timeout: providerHealthCheckTimeoutMs,
           lazy: true
         }
       }
@@ -425,7 +440,7 @@ function buildInlineSubscriptionConfig(input: MihomoConfigInput): string | null 
 
     const validProxies = proxies.filter((proxy) => {
       const name = isRecord(proxy) && typeof proxy.name === 'string' ? proxy.name : '';
-      return Boolean(name) && !isBlockedSelectableNodeName(name);
+      return isDirectlyRoutableInlineProxyName(name);
     });
     const proxyNames = validProxies
       .map((proxy) => (isRecord(proxy) && typeof proxy.name === 'string' ? proxy.name : undefined))
@@ -713,15 +728,18 @@ function buildSubscriptionConfig(input: MihomoConfigInput): string | null {
     }
 
     const runtimeOptions = buildRuntimeOptions(input);
-    const merged = { ...config };
-    removeSubscriptionListenerPorts(merged);
+    const merged = pickSubscriptionClientConfig(config);
     Object.assign(merged, runtimeOptions);
     sanitizeDnsConfig(merged);
     sanitizeHealthCheckUrls(merged);
+    sanitizeProviderResourceBounds(merged);
     sanitizeSubscriptionNoticeNodes(merged);
 
     const ruleProfile = input.ruleProfile ?? 'ruleset';
-    const proxyTarget = findPrimaryProxyTarget(merged) ?? selectorName;
+    const proxyTarget = findPrimaryProxyTarget(merged) ?? findFirstUsableInlineProxyName(merged);
+    if (!proxyTarget) {
+      return null;
+    }
     if (ruleProfile === 'ruleset') {
       const existingRuleProviders = isRecord(merged['rule-providers']) ? merged['rule-providers'] : {};
       merged['rule-providers'] = {
@@ -777,12 +795,126 @@ function normalizeKnownHealthCheck(healthCheck: Record<string, unknown>) {
   }
 }
 
-function removeSubscriptionListenerPorts(config: Record<string, unknown>) {
-  delete config.port;
-  delete config['socks-port'];
-  delete config['redir-port'];
-  delete config['tproxy-port'];
-  delete config['mixed-port'];
+function sanitizeProviderResourceBounds(config: Record<string, unknown>) {
+  sanitizeProxyGroupResourceBounds(config['proxy-groups']);
+  sanitizeHttpProviders(config['proxy-providers'], {
+    sizeLimitBytes: proxyProviderSizeLimitBytes,
+    refreshIntervalSeconds: proxyProviderRefreshIntervalSeconds,
+    sanitizeHealthCheck: true
+  });
+  sanitizeHttpProviders(config['rule-providers'], {
+    sizeLimitBytes: ruleProviderSizeLimitBytes,
+    refreshIntervalSeconds: ruleProviderRefreshIntervalSeconds,
+    sanitizeHealthCheck: false
+  });
+}
+
+function sanitizeProxyGroupResourceBounds(groups: unknown) {
+  if (!Array.isArray(groups)) {
+    return;
+  }
+
+  for (const group of groups) {
+    if (!isRecord(group) || typeof group.type !== 'string') {
+      continue;
+    }
+    const type = group.type.trim().toLowerCase();
+    const hasHealthCheckUrl = typeof group.url === 'string' && Boolean(group.url.trim());
+    if (!healthCheckProxyGroupTypes.has(type) || !hasHealthCheckUrl) {
+      continue;
+    }
+
+    group.interval = clampInteger(
+      group.interval,
+      providerHealthCheckIntervalMinSeconds,
+      providerHealthCheckIntervalMaxSeconds,
+      nodeHealthCheckIntervalSeconds
+    );
+    group.timeout = clampInteger(
+      group.timeout,
+      providerHealthCheckTimeoutMinMs,
+      providerHealthCheckTimeoutMaxMs,
+      providerHealthCheckTimeoutMs
+    );
+    group.lazy = true;
+  }
+}
+
+function sanitizeHttpProviders(
+  providers: unknown,
+  options: {
+    sizeLimitBytes: number;
+    refreshIntervalSeconds: number;
+    sanitizeHealthCheck: boolean;
+  }
+) {
+  if (!isRecord(providers)) {
+    return;
+  }
+
+  for (const provider of Object.values(providers)) {
+    if (!isRecord(provider) || typeof provider.type !== 'string' || provider.type.trim().toLowerCase() !== 'http') {
+      continue;
+    }
+
+    provider['size-limit'] = clampPositiveInteger(
+      provider['size-limit'],
+      options.sizeLimitBytes,
+      options.sizeLimitBytes
+    );
+    provider.interval = clampInteger(
+      provider.interval,
+      providerRefreshIntervalMinSeconds,
+      providerRefreshIntervalMaxSeconds,
+      options.refreshIntervalSeconds
+    );
+
+    if (options.sanitizeHealthCheck && isRecord(provider['health-check'])) {
+      const healthCheck = provider['health-check'];
+      healthCheck.interval = clampInteger(
+        healthCheck.interval,
+        providerHealthCheckIntervalMinSeconds,
+        providerHealthCheckIntervalMaxSeconds,
+        nodeHealthCheckIntervalSeconds
+      );
+      healthCheck.timeout = clampInteger(
+        healthCheck.timeout,
+        providerHealthCheckTimeoutMinMs,
+        providerHealthCheckTimeoutMaxMs,
+        providerHealthCheckTimeoutMs
+      );
+      healthCheck.lazy = true;
+    }
+  }
+}
+
+function clampPositiveInteger(value: unknown, maximum: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.min(Math.max(Math.trunc(value), 1), maximum);
+}
+
+function clampInteger(value: unknown, minimum: number, maximum: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(Math.max(Math.trunc(value), minimum), maximum);
+}
+
+function pickSubscriptionClientConfig(config: Record<string, unknown>) {
+  const picked: Record<string, unknown> = {};
+  for (const key of subscriptionClientArrayKeys) {
+    if (Object.hasOwn(config, key) && Array.isArray(config[key])) {
+      picked[key] = config[key];
+    }
+  }
+  for (const key of subscriptionClientRecordKeys) {
+    if (Object.hasOwn(config, key) && isRecord(config[key])) {
+      picked[key] = config[key];
+    }
+  }
+  return picked;
 }
 
 function sanitizeSubscriptionNoticeNodes(config: Record<string, unknown>) {
@@ -1029,16 +1161,41 @@ function findPrimaryProxyTarget(config: Record<string, unknown>): string | null 
   }
 
   for (const group of groups) {
-    if (!isRecord(group) || typeof group.name !== 'string') {
+    if (!isRecord(group) || typeof group.name !== 'string' || !group.name.trim()) {
       continue;
     }
 
-    const type = typeof group.type === 'string' ? group.type : '';
-    const hasProxySource = Array.isArray(group.proxies) || Array.isArray(group.use);
+    const type = typeof group.type === 'string' ? group.type.trim().toLowerCase() : '';
+    const hasProxySource =
+      (Array.isArray(group.proxies) && group.proxies.length > 0) || (Array.isArray(group.use) && group.use.length > 0);
     if (hasProxySource && routableProxyGroupTypes.has(type)) {
       return group.name;
     }
   }
 
   return null;
+}
+
+function findFirstUsableInlineProxyName(config: Record<string, unknown>): string | null {
+  const proxies = config.proxies;
+  if (!Array.isArray(proxies)) {
+    return null;
+  }
+
+  for (const proxy of proxies) {
+    if (!isRecord(proxy) || typeof proxy.name !== 'string') {
+      continue;
+    }
+
+    if (isDirectlyRoutableInlineProxyName(proxy.name)) {
+      return proxy.name;
+    }
+  }
+
+  return null;
+}
+
+function isDirectlyRoutableInlineProxyName(name: string): boolean {
+  const normalizedName = name.trim();
+  return Boolean(normalizedName) && normalizedName === name && !isBlockedSelectableNodeName(normalizedName);
 }

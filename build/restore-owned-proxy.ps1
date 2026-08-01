@@ -1,8 +1,10 @@
+param(
+  [string] $RegistryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+  [string] $StatePath = (Join-Path $env:APPDATA 'YouYu\system-proxy-ownership.json')
+)
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
-
-$registryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-$statePath = Join-Path $env:APPDATA 'YouYu\system-proxy-ownership.json'
 
 function Get-RequiredProperty {
   param(
@@ -18,7 +20,7 @@ function Get-RequiredProperty {
 }
 
 function Get-CurrentProxySettings {
-  $settings = Get-ItemProperty -Path $registryPath
+  $settings = Get-ItemProperty -Path $registryPath -ErrorAction Stop
   $enabledProperty = $settings.PSObject.Properties['ProxyEnable']
   $serverProperty = $settings.PSObject.Properties['ProxyServer']
   $overrideProperty = $settings.PSObject.Properties['ProxyOverride']
@@ -77,39 +79,41 @@ $current = Get-CurrentProxySettings
 $serverWasReplaced = $fields.server -and
   $current.server -ne $applied.server -and
   $current.server -ne $previous.server
-if ($serverWasReplaced) {
-  Remove-Item -LiteralPath $statePath -Force
-  exit 0
+
+$restoreTargets = @{}
+foreach ($field in @('server', 'override', 'enabled')) {
+  if (-not $fields.$field) { continue }
+  if ($field -eq 'enabled' -and $serverWasReplaced) { continue }
+  if ($current.$field -eq $applied.$field) {
+    $restoreTargets[$field] = $true
+  }
 }
 
 foreach ($field in @('server', 'override', 'enabled')) {
-  if (-not $fields.$field) { continue }
-  $currentValue = $current.$field
-  $appliedValue = $applied.$field
-  if ($currentValue -ne $appliedValue) { continue }
+  if (-not $restoreTargets.ContainsKey($field)) { continue }
 
   $previousValue = $previous.$field
   switch ($field) {
     'server' {
       if ([string]::IsNullOrEmpty($previousValue)) {
         if ($null -ne $current.Raw.PSObject.Properties['ProxyServer']) {
-          Remove-ItemProperty -Path $registryPath -Name ProxyServer
+          Remove-ItemProperty -Path $registryPath -Name ProxyServer -ErrorAction Stop
         }
       } else {
-        Set-ItemProperty -Path $registryPath -Name ProxyServer -Value ([string] $previousValue)
+        Set-ItemProperty -Path $registryPath -Name ProxyServer -Value ([string] $previousValue) -ErrorAction Stop
       }
     }
     'override' {
       if ([string]::IsNullOrEmpty($previousValue)) {
         if ($null -ne $current.Raw.PSObject.Properties['ProxyOverride']) {
-          Remove-ItemProperty -Path $registryPath -Name ProxyOverride
+          Remove-ItemProperty -Path $registryPath -Name ProxyOverride -ErrorAction Stop
         }
       } else {
-        Set-ItemProperty -Path $registryPath -Name ProxyOverride -Value ([string] $previousValue)
+        Set-ItemProperty -Path $registryPath -Name ProxyOverride -Value ([string] $previousValue) -ErrorAction Stop
       }
     }
     'enabled' {
-      Set-ItemProperty -Path $registryPath -Name ProxyEnable -Type DWord -Value ([int] [bool] $previousValue)
+      Set-ItemProperty -Path $registryPath -Name ProxyEnable -Type DWord -Value ([int] [bool] $previousValue) -ErrorAction Stop
     }
   }
 }
@@ -130,6 +134,14 @@ $settingsRefreshed = [YouYu.WinInet]::InternetSetOption([IntPtr]::Zero, 37, [Int
 if (-not $settingsChanged -or -not $settingsRefreshed) {
   $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
   throw "Failed to refresh WinINet proxy settings: $errorCode"
+}
+
+$postRestore = Get-CurrentProxySettings
+foreach ($field in @('server', 'override', 'enabled')) {
+  if (-not $restoreTargets.ContainsKey($field)) { continue }
+  if ($postRestore.$field -ne $previous.$field) {
+    throw "Failed to verify current-user proxy after restore: $field"
+  }
 }
 
 Remove-Item -LiteralPath $statePath -Force

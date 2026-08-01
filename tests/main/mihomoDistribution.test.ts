@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  assertPackagedMihomoMatchesSource,
   hashFileSha256,
   mihomoResourceRelativePath,
   readMihomoManifest,
@@ -113,6 +114,30 @@ describe('bundled Mihomo distribution', () => {
     const workflow = await readFile('.github/workflows/build-windows.yml', 'utf8');
     expect(workflow).toContain('npm run validate:mihomo');
     expect(workflow).toContain('Mihomo-*-source.tar.gz');
+  });
+
+  it('allows only a verified Authenticode envelope to change the packaged binary hash and size', async () => {
+    const source = await readMihomoManifest(join(process.cwd(), mihomoResourceRelativePath));
+    expect(assertPackagedMihomoMatchesSource(source, structuredClone(source))).toEqual({ signed: false });
+
+    const packaged = structuredClone(source);
+    packaged.binary = {
+      ...packaged.binary,
+      size: packaged.binary.size + 8192,
+      sha256: 'a'.repeat(64),
+      unsignedSize: source.binary.size,
+      unsignedSha256: source.binary.sha256,
+      authenticodeSubject: 'CN=118 Studio',
+      authenticodeThumbprint: 'B'.repeat(40)
+    };
+    expect(assertPackagedMihomoMatchesSource(source, packaged)).toEqual({
+      signed: true,
+      signerSubject: 'CN=118 Studio',
+      signerThumbprint: 'B'.repeat(40)
+    });
+
+    packaged.tagCommit = '0'.repeat(40);
+    expect(() => assertPackagedMihomoMatchesSource(source, packaged)).toThrow(/differs outside/);
   });
 });
 

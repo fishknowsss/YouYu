@@ -13,13 +13,17 @@ const migrationFiles = [
   '2026-07-03-add-remote-subscription-url.sql',
   '2026-07-08-security-and-idempotency.sql',
   '2026-07-11-retention-cleanup.sql',
-  '2026-07-19-device-identity-and-user-merge.sql'
+  '2026-07-19-device-identity-and-user-merge.sql',
+  '2026-07-19-add-admin-traffic-limit.sql',
+  '2026-07-20-add-traffic-expiry-and-trend-index.sql',
+  '2026-08-01-persist-traffic-report-dedup.sql'
 ].map((name) => resolve(migrationDirectory, name));
 const repairableColumns = new Map([
   ['remote_config.subscription_url', 'TEXT'],
   ['user_remote_config.subscription_url', 'TEXT'],
   ['users.merged_into_user_id', 'TEXT REFERENCES users(id)'],
-  ['devices.device_key', 'TEXT']
+  ['devices.device_key', 'TEXT'],
+  ['admin_settings.traffic_expires_at', "TEXT NOT NULL DEFAULT '2026-08-11T20:00:00.000Z'"]
 ]);
 const requiredTableColumns = {
   users: ['id', 'name', 'normalized_name', 'status', 'created_at', 'merged_into_user_id'],
@@ -36,6 +40,16 @@ const requiredTableColumns = {
   ],
   traffic_daily: ['user_id', 'device_id', 'date', 'upload_bytes', 'download_bytes', 'updated_at'],
   traffic_reports: ['id', 'user_id', 'device_id', 'upload_delta', 'download_delta', 'reported_at', 'created_at'],
+  traffic_report_dedup: [
+    'id',
+    'payload_hash',
+    'traffic_date',
+    'anomaly',
+    'legacy_device_id',
+    'legacy_upload_delta',
+    'legacy_download_delta',
+    'legacy_reported_at'
+  ],
   rate_limits: ['key', 'attempts', 'reset_at', 'updated_at'],
   remote_config: [
     'id',
@@ -50,6 +64,7 @@ const requiredTableColumns = {
     'anomaly_threshold_bytes',
     'updated_at'
   ],
+  admin_settings: ['id', 'traffic_limit_bytes', 'traffic_expires_at', 'updated_at'],
   user_remote_config: [
     'user_id',
     'enabled',
@@ -78,6 +93,7 @@ const requiredIndexes = {
   idx_devices_device_key: { table: 'devices', columns: ['device_key'], unique: true, partial: true },
   idx_users_merged_into: { table: 'users', columns: ['merged_into_user_id'] },
   idx_traffic_daily_user_date: { table: 'traffic_daily', columns: ['user_id', 'date'] },
+  idx_traffic_daily_date_user: { table: 'traffic_daily', columns: ['date', 'user_id'] },
   idx_traffic_reports_user_created: { table: 'traffic_reports', columns: ['user_id', 'created_at'] },
   idx_traffic_reports_created_at: { table: 'traffic_reports', columns: ['created_at'] },
   idx_rate_limits_reset_at: { table: 'rate_limits', columns: ['reset_at'] },
@@ -88,8 +104,10 @@ const requiredPrimaryKeyColumns = {
   devices: ['id'],
   traffic_daily: ['user_id', 'device_id', 'date'],
   traffic_reports: ['id'],
+  traffic_report_dedup: ['id'],
   rate_limits: ['key'],
   remote_config: ['id'],
+  admin_settings: ['id'],
   user_remote_config: ['user_id'],
   traffic_anomalies: ['id'],
   user_merge_audit: ['id']
@@ -146,16 +164,22 @@ export async function applyWorkerMigrations(runner, options = {}) {
   onStep(`execute ${basename(migrationFiles[0])}`);
   await runner.executeFile(migrationFiles[0]);
 
+  for (const path of migrationFiles.slice(1)) {
+    for (const qualifiedColumn of await getMissingRepairableColumns(runner)) {
+      const [table, column] = qualifiedColumn.split('.');
+      const statement = `ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteSqlIdentifier(column)} ${repairableColumns.get(qualifiedColumn)}`;
+      onStep(`add ${qualifiedColumn}`);
+      await runner.executeSql(statement);
+    }
+    onStep(`execute ${basename(path)}`);
+    await runner.executeFile(path);
+  }
+
   for (const qualifiedColumn of await getMissingRepairableColumns(runner)) {
     const [table, column] = qualifiedColumn.split('.');
     const statement = `ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteSqlIdentifier(column)} ${repairableColumns.get(qualifiedColumn)}`;
     onStep(`add ${qualifiedColumn}`);
     await runner.executeSql(statement);
-  }
-
-  for (const path of migrationFiles.slice(1)) {
-    onStep(`execute ${basename(path)}`);
-    await runner.executeFile(path);
   }
 
   const validation = await planWorkerMigrations(runner);

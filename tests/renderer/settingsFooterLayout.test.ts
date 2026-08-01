@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import { readRendererStyles } from './helpers/rendererStyles';
 
 function getCssRule(source: string, selector: string): string {
   const start = source.indexOf(`${selector} {`);
@@ -11,7 +12,7 @@ function getCssRule(source: string, selector: string): string {
 
 describe('settings footer layout', () => {
   it('uses one six-row rhythm without a flexible spacer between controls and footer', async () => {
-    const source = await readFile('src/renderer/styles.css', 'utf8');
+    const source = await readRendererStyles();
     const markup = await readFile('src/renderer/pages/Settings.tsx', 'utf8');
     const settingsPanel = getCssRule(source, '.settings-panel');
     const formGrid = getCssRule(source, '.settings-form-grid');
@@ -35,7 +36,7 @@ describe('settings footer layout', () => {
   });
 
   it('uses one shared row height for diagnostics and software updates', async () => {
-    const source = await readFile('src/renderer/styles.css', 'utf8');
+    const source = await readRendererStyles();
     const settingsPanel = getCssRule(source, '.settings-panel');
     const diagnostics = getCssRule(source, '.settings-diagnostics-bar');
     const update = getCssRule(source, '.update-row');
@@ -47,7 +48,7 @@ describe('settings footer layout', () => {
   });
 
   it('keeps both footer actions in the same button vocabulary as the settings actions', async () => {
-    const source = await readFile('src/renderer/styles.css', 'utf8');
+    const source = await readRendererStyles();
     const footerAction = getCssRule(source, '.settings-footer-action');
     const diagnosticsExport = getCssRule(source, '.settings-diagnostics-export');
 

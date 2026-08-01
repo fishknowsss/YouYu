@@ -1,6 +1,6 @@
 {
   "name": "youyu",
-  "version": "1.6.8",
+  "version": "1.6.9",
   "private": true,
   "author": "118 Studio",
   "description": "YouYu Windows proxy desktop app",
@@ -39,7 +39,7 @@
     "smoke": "tsx scripts/smoke-test.ts"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260710.1",
+    "@cloudflare/workers-types": "5.20260801.1",
     "@electron/get": "5.1.0",
     "@eslint/js": "10.0.1",
     "@types/node": "24.10.2",
@@ -62,7 +62,7 @@
     "typescript-eslint": "8.63.0",
     "vite": "7.3.6",
     "vitest": "4.1.5",
-    "wrangler": "4.110.0",
+    "wrangler": "4.118.0",
     "yaml": "2.8.3"
   },
   "dependencies": {

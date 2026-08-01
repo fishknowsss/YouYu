@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { AppSettingsInput, AppSnapshot, RuleProfile } from '../../shared/ipc';
 import { updateInstallingMessage } from '../../shared/updateProgress';
+import { SettingsSelect } from '../components/SettingsSelect';
 import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { isActionErrorMessage } from '../actionMessages';
 
@@ -17,7 +18,21 @@ type SettingsProps = {
   onInstallUpdate: () => void;
 };
 
-export function Settings({
+export const ruleProfileOptions = [
+  { value: 'ruleset', label: '智能规则' },
+  { value: 'subscription', label: '机场规则' }
+] as const;
+
+const refreshIntervalOptions = [
+  { value: 0, label: '关闭' },
+  { value: 6, label: '6 小时' },
+  { value: 12, label: '12 小时' },
+  { value: 24, label: '24 小时' }
+] as const;
+
+export const Settings = memo(SettingsView, areSettingsPropsEqual);
+
+function SettingsView({
   snapshot,
   busy,
   busyLabel,
@@ -47,20 +62,31 @@ export function Settings({
   const actionMessageIsError = isActionErrorMessage(message);
   const actionStatus = actionMessageIsError ? message : diagnosticIssue || message;
   const actionStatusIsError = actionMessageIsError || Boolean(diagnosticIssue);
+  const snapshotSettingsKey = getSnapshotSettingsKey(snapshot);
+  const snapshotSubscriptionUrl = snapshot.subscriptionUrl;
+  const snapshotRuleProfile = snapshot.ruleProfile;
+  const snapshotTunEnabled = snapshot.features.tunEnabled;
+  const snapshotRefreshIntervalHours = snapshot.features.subscriptionRefreshIntervalHours;
 
   useEffect(() => {
-    const snapshotSettingsKey = getSnapshotSettingsKey(snapshot);
     if (settingsDirty && pendingSettingsKey.current !== snapshotSettingsKey) {
       return;
     }
 
-    setSubscriptionUrl(snapshot.subscriptionUrl);
-    setRuleProfile(snapshot.ruleProfile);
-    setTunEnabled(snapshot.features.tunEnabled);
-    setSubscriptionRefreshIntervalHours(snapshot.features.subscriptionRefreshIntervalHours);
+    setSubscriptionUrl(snapshotSubscriptionUrl);
+    setRuleProfile(snapshotRuleProfile);
+    setTunEnabled(snapshotTunEnabled);
+    setSubscriptionRefreshIntervalHours(snapshotRefreshIntervalHours);
     setSettingsDirty(false);
     pendingSettingsKey.current = undefined;
-  }, [snapshot, settingsDirty]);
+  }, [
+    settingsDirty,
+    snapshotRefreshIntervalHours,
+    snapshotRuleProfile,
+    snapshotSettingsKey,
+    snapshotSubscriptionUrl,
+    snapshotTunEnabled
+  ]);
 
   function save() {
     const nextSettings: AppSettingsInput = {
@@ -103,45 +129,39 @@ export function Settings({
           </div>
 
           <div className="settings-row settings-control-row">
-            <label className="field settings-control-field">
-              <span>规则来源</span>
-              <select
-                value={ruleProfile}
-                disabled={busy}
-                onChange={(event) => {
-                  setSettingsDirty(true);
-                  setRuleProfile(event.target.value as RuleProfile);
-                }}
-              >
-                <option value="ruleset">智能规则</option>
-                <option value="subscription">机场规则</option>
-              </select>
-            </label>
+            <SettingsSelect<RuleProfile>
+              label="规则来源"
+              value={ruleProfile}
+              options={ruleProfileOptions}
+              disabled={busy}
+              onChange={(nextRuleProfile) => {
+                setSettingsDirty(true);
+                setRuleProfile(nextRuleProfile);
+              }}
+            />
             <NetworkStatus label="系统代理" value={formatEnabled(snapshot.features.systemProxyEnabled)} />
-            <button className="wide-button settings-save-button" disabled={busy} onClick={save}>
+            <button className="wide-button settings-save-button settings-action-save" disabled={busy} onClick={save}>
               {saving ? '保存中' : '保存'}
             </button>
           </div>
 
           <div className="settings-row settings-control-row">
-            <label className="field settings-control-field">
-              <span>后台刷新</span>
-              <select
-                value={subscriptionRefreshIntervalHours}
-                disabled={busy}
-                onChange={(event) => {
-                  setSettingsDirty(true);
-                  setSubscriptionRefreshIntervalHours(Number(event.target.value));
-                }}
-              >
-                <option value={0}>关闭</option>
-                <option value={6}>6 小时</option>
-                <option value={12}>12 小时</option>
-                <option value={24}>24 小时</option>
-              </select>
-            </label>
+            <SettingsSelect
+              label="后台刷新"
+              value={subscriptionRefreshIntervalHours}
+              options={refreshIntervalOptions}
+              disabled={busy}
+              onChange={(nextRefreshInterval) => {
+                setSettingsDirty(true);
+                setSubscriptionRefreshIntervalHours(nextRefreshInterval);
+              }}
+            />
             <NetworkStatus label="DNS 增强" value={formatEnabled(snapshot.features.dnsEnhanced)} />
-            <button className="secondary-button settings-control-button" disabled={busy} onClick={onSyncRemoteConfig}>
+            <button
+              className="secondary-button settings-control-button settings-action-sync"
+              disabled={busy}
+              onClick={onSyncRemoteConfig}
+            >
               {syncing ? '同步中' : '同步'}
             </button>
           </div>
@@ -163,7 +183,11 @@ export function Settings({
               <span className="network-route-note">严格路由 {tunEnabled ? '开启' : '待用'}</span>
             </label>
             <NetworkStatus label="流量识别" value={formatEnabled(snapshot.features.snifferEnabled)} />
-            <button className="secondary-button settings-control-button" disabled={busy} onClick={onRepair}>
+            <button
+              className="secondary-button settings-control-button settings-action-repair"
+              disabled={busy}
+              onClick={onRepair}
+            >
               {repairing ? '修复中' : '修复'}
             </button>
           </div>
@@ -182,7 +206,7 @@ export function Settings({
                 </span>
               </div>
               <button
-                className="secondary-button settings-footer-action settings-diagnostics-export"
+                className="secondary-button settings-footer-action settings-diagnostics-export settings-action-export"
                 disabled={busy}
                 onClick={onExportDiagnostics}
               >
@@ -195,6 +219,7 @@ export function Settings({
             <UpdatePanel
               snapshot={snapshot}
               busy={busy}
+              busyLabel={busyLabel}
               onCheckUpdate={onCheckUpdate}
               onInstallUpdate={onInstallUpdate}
             />
@@ -203,6 +228,41 @@ export function Settings({
       </section>
     </div>
   );
+}
+
+function areSettingsPropsEqual(previous: SettingsProps, next: SettingsProps): boolean {
+  return (
+    previous.busy === next.busy &&
+    previous.busyLabel === next.busyLabel &&
+    previous.message === next.message &&
+    previous.onRepair === next.onRepair &&
+    previous.onSave === next.onSave &&
+    previous.onSyncRemoteConfig === next.onSyncRemoteConfig &&
+    previous.onExportDiagnostics === next.onExportDiagnostics &&
+    previous.onCheckUpdate === next.onCheckUpdate &&
+    previous.onInstallUpdate === next.onInstallUpdate &&
+    getSettingsRenderKey(previous.snapshot) === getSettingsRenderKey(next.snapshot)
+  );
+}
+
+export function getSettingsRenderKey(snapshot: AppSnapshot): string {
+  return JSON.stringify({
+    subscriptionUrl: snapshot.subscriptionUrl,
+    remoteSubscriptionUrl: snapshot.remoteSubscriptionUrl ?? '',
+    ruleProfile: snapshot.ruleProfile,
+    features: {
+      systemProxyEnabled: snapshot.features.systemProxyEnabled,
+      dnsEnhanced: snapshot.features.dnsEnhanced,
+      snifferEnabled: snapshot.features.snifferEnabled,
+      tunEnabled: snapshot.features.tunEnabled,
+      subscriptionRefreshIntervalHours: snapshot.features.subscriptionRefreshIntervalHours
+    },
+    diagnostics: {
+      issueKind: snapshot.diagnostics.issueKind ?? '',
+      logCount: snapshot.diagnostics.logCount ?? snapshot.diagnostics.logs.length
+    },
+    update: snapshot.update
+  });
 }
 
 function formatEnabled(enabled: boolean): string {
@@ -246,42 +306,43 @@ function NetworkStatus({ label, value, className = '' }: { label: string; value:
 function UpdatePanel({
   snapshot,
   busy,
+  busyLabel,
   onCheckUpdate,
   onInstallUpdate
 }: {
   snapshot: AppSnapshot;
   busy: boolean;
+  busyLabel: string;
   onCheckUpdate: () => void;
   onInstallUpdate: () => void;
 }) {
   const update = snapshot.update;
-  const ready = update.status === 'downloaded';
+  const installing =
+    update.status === 'installing' || (busy && busyLabel === '安装中' && update.status === 'downloaded');
+  const ready = update.status === 'downloaded' && !installing;
   const downloading = update.status === 'downloading';
   const verifying = update.downloadPhase === 'verifying';
   const fullPackage = update.downloadPhase === 'full-download';
   const waiting =
-    update.status === 'checking' ||
-    update.status === 'downloading' ||
-    update.status === 'available' ||
-    update.status === 'installing';
-  const buttonLabel = ready
-    ? '安装'
-    : downloading
-      ? verifying
-        ? '校验中'
-        : fullPackage
-          ? '完整包'
-          : '下载中'
-      : update.status === 'checking'
-        ? '检查中'
-        : update.status === 'available'
-          ? '准备中'
-          : update.status === 'installing'
-            ? '安装中'
+    update.status === 'checking' || update.status === 'downloading' || update.status === 'available' || installing;
+  const buttonLabel = installing
+    ? '安装中'
+    : ready
+      ? '安装'
+      : downloading
+        ? verifying
+          ? '校验中'
+          : fullPackage
+            ? '完整包'
+            : '下载中'
+        : update.status === 'checking'
+          ? '检查中'
+          : update.status === 'available'
+            ? '准备中'
             : '检查';
   const progress = getDisplayUpdateProgress(update);
 
-  const statusText = formatUpdateStatus(update);
+  const statusText = installing ? updateInstallingMessage : formatUpdateStatus(update);
 
   return (
     <div
@@ -301,10 +362,11 @@ function UpdatePanel({
         </div>
       )}
       <button
-        className={`${ready ? 'wide-button' : 'secondary-button'} settings-footer-action`}
+        className={`${ready ? 'wide-button settings-action-install' : 'secondary-button settings-action-check'} settings-footer-action`}
         disabled={busy || waiting}
         onClick={ready ? onInstallUpdate : onCheckUpdate}
       >
+        {installing && <span className="update-install-spinner" aria-hidden="true" />}
         {buttonLabel}
       </button>
     </div>

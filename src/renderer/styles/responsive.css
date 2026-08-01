@@ -1,0 +1,51 @@
+@media (max-width: 920px) {
+  .app-shell.easy-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .easy-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .advanced-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .connection-card {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 404px);
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .connection-actions {
+    grid-template-columns: 146px 108px minmax(0, 128px);
+    gap: 7px;
+  }
+
+  .node-mode-toggle {
+    height: 38px;
+  }
+
+  .node-health-metric,
+  .connection-actions .power-button {
+    height: 38px;
+  }
+
+  .route-test-head-row,
+  .route-test-row {
+    grid-template-columns:
+      minmax(70px, 1fr)
+      50px
+      58px
+      minmax(92px, 1fr)
+      56px
+      54px
+      minmax(94px, 1fr)
+      46px;
+    gap: 5px;
+  }
+
+  .test-detail-strip {
+    grid-template-columns: 72px minmax(150px, 1.4fr) minmax(104px, 1fr) 50px;
+  }
+}

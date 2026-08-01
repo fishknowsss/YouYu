@@ -8,6 +8,44 @@ afterEach(() => {
 });
 
 describe('TrafficTracker', () => {
+  it('flushes the in-memory traffic checkpoint after an explicit sample', async () => {
+    const flush = vi.fn(async () => undefined);
+    const tracker = new TrafficTracker({
+      store: { addTraffic: async () => undefined, flush } as unknown as TrafficStore,
+      isRunning: () => true,
+      readRuntimeStats: async () => ({ activeConnections: 0, uploadTotal: 0, downloadTotal: 0 })
+    });
+
+    await tracker.flush();
+
+    expect(flush).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds remembered excluded connections to avoid unbounded tracker growth', async () => {
+    const connections = Array.from({ length: 5000 }, (_, index) => ({
+      id: `remote-${index}`,
+      upload: index + 1,
+      download: index + 2,
+      metadata: { process: 'ToDesk.exe' }
+    }));
+    const tracker = new TrafficTracker({
+      store: { addTraffic: async () => undefined, flush: async () => undefined } as unknown as TrafficStore,
+      isRunning: () => true,
+      readRuntimeStats: async () => ({
+        activeConnections: connections.length,
+        uploadTotal: 20_000_000,
+        downloadTotal: 30_000_000,
+        connections
+      })
+    });
+
+    await tracker.flush();
+
+    expect(
+      (tracker as unknown as { excludedConnections: Map<string, unknown> }).excludedConnections.size
+    ).toBeLessThanOrEqual(4096);
+  });
+
   it('filters remote desktop process traffic from reported deltas', async () => {
     const added: Array<{ upload: number; download: number }> = [];
     const samples: RuntimeStats[] = [

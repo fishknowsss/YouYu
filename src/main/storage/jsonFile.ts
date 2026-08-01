@@ -41,7 +41,7 @@ export async function readJsonFile<T>(filePath: string, options: JsonReadOptions
   let backup = await readJsonCandidate<T>(backupPath);
   if (backup.status === 'found') {
     if (!options.validate || options.validate(backup.value)) {
-      await writeJsonFileAtomic(filePath, backup.value, { preserveInvalid: options.preserveInvalid });
+      await restoreJsonFileFromBackup(filePath, backup.raw);
       return { status: 'found', value: backup.value, recoveredFromBackup: true };
     }
     backup = { status: 'invalid', raw: backup.raw };
@@ -137,6 +137,11 @@ async function writeTextFileAtomic(filePath: string, content: string): Promise<v
     await handle?.close().catch(() => undefined);
     await rm(tempPath, { force: true }).catch(() => undefined);
   }
+}
+
+async function restoreJsonFileFromBackup(filePath: string, backupRaw: string): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeTextFileAtomic(filePath, backupRaw);
 }
 
 function createTempPath(filePath: string): string {

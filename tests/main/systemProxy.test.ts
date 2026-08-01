@@ -3,6 +3,7 @@ import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSystemProxyAdapter } from '../../src/main/platform/systemProxy';
+import { classifyRuntimeFailure } from '../../src/main/runtimeRecoveryPolicy';
 
 const installedStorePackageFamilies = [
   'Microsoft.WindowsStore_8wekyb3d8bbwe',
@@ -66,6 +67,12 @@ describe('createSystemProxyAdapter', () => {
         if (command.args[0] === 'add' && command.args.includes('ProxyOverride')) {
           currentOverride = command.args[command.args.indexOf('/d') + 1] ?? '';
         }
+        if (command.args[0] === 'delete' && command.args.includes('ProxyServer')) {
+          proxyServer = '';
+        }
+        if (command.args[0] === 'delete' && command.args.includes('ProxyOverride')) {
+          currentOverride = '';
+        }
         return '';
       }
     });
@@ -122,6 +129,12 @@ describe('createSystemProxyAdapter', () => {
         if (command.args[0] === 'add' && command.args.includes('ProxyOverride')) {
           currentOverride = command.args[command.args.indexOf('/d') + 1] ?? '';
         }
+        if (command.args[0] === 'delete' && command.args.includes('ProxyServer')) {
+          proxyServer = '';
+        }
+        if (command.args[0] === 'delete' && command.args.includes('ProxyOverride')) {
+          currentOverride = '';
+        }
         return '';
       }
     });
@@ -139,6 +152,30 @@ describe('createSystemProxyAdapter', () => {
     await proxy.restore();
 
     expect(calls.some((call) => call.includes('ProxyServer /t REG_SZ /d old:8080'))).toBe(true);
+  });
+
+  it('treats the documented reg.exe missing-value result as an absent optional proxy string', async () => {
+    const proxyState = { enabled: false, server: '', override: '' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    const runCommand = async (command: { file: string; args: string[] }) => {
+      const missingOptionalValue =
+        command.file === 'reg.exe' &&
+        command.args[0] === 'query' &&
+        ((command.args.includes('ProxyServer') && !proxyState.server) ||
+          (command.args.includes('ProxyOverride') && !proxyState.override));
+      if (missingOptionalValue) {
+        throw Object.assign(new Error('reg.exe query failed'), {
+          stderr: 'ERROR: The system was unable to find the specified registry key or value.'
+        });
+      }
+      return mutableCommands(command);
+    };
+    const proxy = createSystemProxyAdapter({ platform: 'win32', runCommand });
+
+    await proxy.enable();
+    await expect(proxy.restore()).resolves.toBeUndefined();
+
+    expect(proxyState).toEqual({ enabled: false, server: '', override: '' });
   });
 
   it('rejects enable when the applied proxy cannot be verified after notification', async () => {
@@ -660,6 +697,33 @@ describe('createSystemProxyAdapter', () => {
     }
   });
 
+  it('relinquishes only a user-edited field and restores the remaining app-owned fields', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const proxyState = {
+      enabled: false,
+      server: 'old:8080',
+      override: 'old.local;<local>'
+    };
+    const runCommand = createMutableProxyCommands(proxyState);
+
+    try {
+      const firstProcess = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await firstProcess.enable();
+      proxyState.server = 'user:9090';
+
+      const restartedProcess = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await restartedProcess.restore();
+
+      expect(proxyState).toEqual({
+        enabled: true,
+        server: 'user:9090',
+        override: 'old.local;<local>'
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('does not overwrite a proxy that the user changed before a normal stop', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
     const proxyState = {
@@ -778,6 +842,129 @@ describe('createSystemProxyAdapter', () => {
       failRefresh = false;
       await expect(proxy.restore()).resolves.toBeUndefined();
       await expect(access(ownershipPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps ownership and rejects restore when registry write-back cannot be verified', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const ownershipPath = join(dir, 'system-proxy-ownership.json');
+    const proxyState = {
+      enabled: false,
+      server: 'old:8080',
+      override: 'old.local;<local>'
+    };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    let ignoreRegistryWrites = false;
+    const runCommand = async (command: { file: string; args: string[] }) => {
+      if (ignoreRegistryWrites && command.file === 'reg.exe' && ['add', 'delete'].includes(command.args[0] ?? '')) {
+        return '';
+      }
+      return mutableCommands(command);
+    };
+
+    try {
+      const proxy = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await proxy.enable();
+      ignoreRegistryWrites = true;
+
+      await expect(proxy.restore()).rejects.toThrow('Failed to verify current-user proxy after restore');
+      await expect(access(ownershipPath)).resolves.toBeUndefined();
+      expect(proxyState).toMatchObject({ enabled: true, server: '127.0.0.1:7890' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps ownership and blocks restore when a managed registry value cannot be read', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const ownershipPath = join(dir, 'system-proxy-ownership.json');
+    const proxyState = {
+      enabled: false,
+      server: 'old:8080',
+      override: 'old.local;<local>'
+    };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    let failServerRead = false;
+    const runCommand = async (command: { file: string; args: string[] }) => {
+      if (
+        failServerRead &&
+        command.file === 'reg.exe' &&
+        command.args[0] === 'query' &&
+        command.args.includes('ProxyServer')
+      ) {
+        throw new Error('registry access denied');
+      }
+      return mutableCommands(command);
+    };
+
+    try {
+      const proxy = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await proxy.enable();
+      failServerRead = true;
+
+      const restoreError = await proxy.restore().then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(restoreError).toBeInstanceOf(Error);
+      expect((restoreError as Error).message).toContain('registry access denied');
+      expect(classifyRuntimeFailure(restoreError)).toMatchObject({
+        code: 'PROXY_RESTORE_REQUIRED',
+        retryable: false
+      });
+      await expect(access(ownershipPath)).resolves.toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not swallow a registry deletion failure while restoring an absent previous value', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const ownershipPath = join(dir, 'system-proxy-ownership.json');
+    const proxyState = { enabled: false, server: '', override: '' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    let failServerDelete = false;
+    const runCommand = async (command: { file: string; args: string[] }) => {
+      if (
+        failServerDelete &&
+        command.file === 'reg.exe' &&
+        command.args[0] === 'delete' &&
+        command.args.includes('ProxyServer')
+      ) {
+        throw new Error('ProxyServer delete denied');
+      }
+      return mutableCommands(command);
+    };
+
+    try {
+      const proxy = createSystemProxyAdapter({ platform: 'win32', runCommand, stateDirectory: dir });
+      await proxy.enable();
+      failServerDelete = true;
+
+      await expect(proxy.restore()).rejects.toThrow('ProxyServer delete denied');
+      await expect(access(ownershipPath)).resolves.toBeUndefined();
+      expect(proxyState).toMatchObject({ enabled: true, server: '127.0.0.1:7890' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an unreadable ownership file and blocks startup recovery', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const ownershipPath = join(dir, 'system-proxy-ownership.json');
+    await writeFile(ownershipPath, '{"version":2,"previous":', 'utf8');
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      stateDirectory: dir,
+      runCommand: createMutableProxyCommands({ enabled: false, server: '', override: '' })
+    });
+
+    try {
+      await expect(proxy.restore()).rejects.toThrow('Invalid system proxy ownership state');
+      await expect(access(ownershipPath)).resolves.toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

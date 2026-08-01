@@ -49,7 +49,7 @@ describe('TrafficStore', () => {
     expect(snapshot.stats.pendingDownload).toBe(140);
   });
 
-  it('persists normalized identity fields before concurrent reads return', async () => {
+  it('invalidates an identity whose device seed is missing while preserving local traffic', async () => {
     await writeFile(
       join(dir, 'traffic.json'),
       JSON.stringify({
@@ -62,11 +62,12 @@ describe('TrafficStore', () => {
           deviceName: 'DESKTOP',
           verificationStatus: 'verified'
         },
-        totalUpload: 0,
-        totalDownload: 0,
-        pendingUpload: 0,
-        pendingDownload: 0,
-        daily: {},
+        totalUpload: 120,
+        totalDownload: 340,
+        pendingUpload: 12,
+        pendingDownload: 34,
+        pendingReport: { id: 'stale-report', upload: 12, download: 34, reportedAt: '2026-05-10T08:00:00.000Z' },
+        daily: { '2026-05-10': { upload: 120, download: 340 } },
         nodeUsage: {}
       })
     );
@@ -76,16 +77,147 @@ describe('TrafficStore', () => {
     const persisted = JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8')) as {
       deviceSeed?: string;
       identity?: { registeredAt?: string };
+      pendingReport?: unknown;
+      reportStatus?: string;
+      reportError?: string;
     };
     const reopened = await new TrafficStore(dir).read();
 
     expect(first.deviceSeed).not.toBe('');
     expect(second.deviceSeed).toBe(first.deviceSeed);
-    expect(second.identity?.registeredAt).toBe(first.identity?.registeredAt);
+    expect(first.identity).toBeUndefined();
+    expect(second.totalUpload).toBe(120);
+    expect(second.pendingUpload).toBe(12);
     expect(persisted.deviceSeed).toBe(first.deviceSeed);
-    expect(persisted.identity?.registeredAt).toBe(first.identity?.registeredAt);
+    expect(persisted.identity).toBeUndefined();
+    expect(persisted.pendingReport).toBeUndefined();
+    expect(persisted.reportStatus).toBe('failed');
+    expect(persisted.reportError).toContain('re-registration');
     expect(reopened.deviceSeed).toBe(first.deviceSeed);
-    expect(reopened.identity?.registeredAt).toBe(first.identity?.registeredAt);
+    expect(reopened.identity).toBeUndefined();
+  });
+
+  it('keeps high-frequency traffic in memory until checkpoint or explicit flush', async () => {
+    const store = new TrafficStore(dir, { checkpointIntervalMs: 60_000 });
+
+    await store.addTraffic(10, 20, new Date('2026-05-10T08:00:00.000Z'));
+    await store.addTraffic(30, 40, new Date('2026-05-10T08:00:10.000Z'));
+
+    expect((await store.getSnapshot(new Date('2026-05-10T08:00:20.000Z'))).stats.totalUpload).toBe(40);
+    expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8')).totalUpload).toBe(0);
+
+    await store.flush();
+    expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8')).totalUpload).toBe(40);
+  });
+
+  it('persists a dirty in-memory snapshot when the checkpoint expires', async () => {
+    const store = new TrafficStore(dir, { checkpointIntervalMs: 5 });
+    await store.addTraffic(15, 25, new Date('2026-05-10T08:00:00.000Z'));
+
+    await vi.waitFor(
+      async () => {
+        expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8'))).toMatchObject({
+          totalUpload: 15,
+          totalDownload: 25
+        });
+      },
+      { timeout: 500, interval: 5 }
+    );
+  });
+
+  it('does not expose the mutable in-memory snapshot to callers', async () => {
+    const store = new TrafficStore(dir);
+    const snapshot = await store.read();
+
+    snapshot.totalUpload = 999;
+    snapshot.daily['2099-01-01'] = { upload: 999, download: 999 };
+
+    await expect(store.read()).resolves.toMatchObject({ totalUpload: 0, daily: {} });
+  });
+
+  it('persists staged traffic together with a critical identity mutation', async () => {
+    const store = new TrafficStore(dir, { checkpointIntervalMs: 60_000 });
+    await store.addTraffic(25, 75, new Date('2026-05-10T08:00:00.000Z'));
+
+    await store.registerIdentity({ userId: 'u_1', deviceId: 'd_1', name: 'Alice', deviceName: 'PC' });
+
+    const persisted = JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8'));
+    expect(persisted.totalUpload).toBe(25);
+    expect(persisted.totalDownload).toBe(75);
+    expect(persisted.identity).toMatchObject({ userId: 'u_1', deviceId: 'd_1' });
+  });
+
+  it('bounds retained daily and node histories during normalization', async () => {
+    const daily = Object.fromEntries(
+      Array.from({ length: 450 }, (_, index) => {
+        const date = new Date(Date.UTC(2025, 0, 1 + index)).toISOString().slice(0, 10);
+        return [date, { upload: index, download: index }];
+      })
+    );
+    const nodeUsage = Object.fromEntries(
+      Array.from({ length: 600 }, (_, index) => [
+        `Node ${index.toString().padStart(3, '0')}`,
+        {
+          upload: index,
+          download: index,
+          durationMs: index,
+          lastUsedAt: new Date(1_700_000_000_000 + index).toISOString()
+        }
+      ])
+    );
+    await writeFile(
+      join(dir, 'traffic.json'),
+      JSON.stringify({
+        version: 4,
+        deviceSeed: 'seed-1',
+        totalUpload: 1,
+        totalDownload: 1,
+        pendingUpload: 0,
+        pendingDownload: 0,
+        daily,
+        nodeUsage
+      }),
+      'utf8'
+    );
+
+    await new TrafficStore(dir).read();
+    const persisted = JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8'));
+    expect(Object.keys(persisted.daily)).toHaveLength(400);
+    expect(Object.keys(persisted.nodeUsage)).toHaveLength(512);
+    expect(persisted.daily).toHaveProperty('2026-03-26');
+    expect(persisted.daily).not.toHaveProperty('2025-01-01');
+    expect(persisted.nodeUsage).toHaveProperty('Node 599');
+    expect(persisted.nodeUsage).not.toHaveProperty('Node 000');
+  });
+
+  it('rejects a stale activation response after the device seed changes', async () => {
+    const store = new TrafficStore(dir);
+    const oldSeed = await store.createDeviceSeed();
+    await writeFile(
+      join(dir, 'traffic.json'),
+      JSON.stringify({
+        version: 4,
+        deviceSeed: 'replacement-seed',
+        totalUpload: 0,
+        totalDownload: 0,
+        pendingUpload: 0,
+        pendingDownload: 0,
+        daily: {},
+        nodeUsage: {}
+      }),
+      'utf8'
+    );
+    const reopened = new TrafficStore(dir);
+
+    await expect(
+      reopened.activateIdentity(
+        { userId: 'u_1', deviceId: 'd_1', name: 'Alice', deviceName: 'PC' },
+        { totalUpload: 0, totalDownload: 0, todayUpload: 0, todayDownload: 0, date: '2026-05-10' },
+        new Date('2026-05-10T08:00:00.000Z'),
+        oldSeed
+      )
+    ).rejects.toMatchObject({ code: 'DEVICE_SEED_STALE' });
+    expect((await reopened.getSnapshot()).identity).toBeUndefined();
   });
 
   it('uses the local calendar day for today totals', async () => {

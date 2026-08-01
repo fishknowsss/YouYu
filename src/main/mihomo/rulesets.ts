@@ -7,6 +7,7 @@ export type MihomoRuleProvider = {
   path?: string;
   url?: string;
   interval?: number;
+  'size-limit'?: number;
   proxy?: string;
 };
 
@@ -47,6 +48,7 @@ const defaultDirect = 'DIRECT';
 const defaultReject = 'REJECT';
 
 const ruleBase = 'https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash';
+const ruleProviderSizeLimitBytes = 32 * 1024 * 1024;
 
 const ruleSets: Array<{ name: string; file: string; behavior: RuleProviderBehavior }> = [
   { name: 'Advertising', file: 'Advertising/Advertising_Classical.yaml', behavior: 'classical' },
@@ -110,6 +112,7 @@ export function buildYouYuRuleProviders(downloadProxy = defaultProxy): Record<st
         behavior,
         format: 'yaml',
         interval: 86400,
+        'size-limit': ruleProviderSizeLimitBytes,
         proxy: downloadProxy,
         path: `./rulesets/${name}.yaml`,
         url: `${ruleBase}/${file}`

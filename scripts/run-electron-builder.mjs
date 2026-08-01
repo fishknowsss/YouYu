@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createBuildEnvironment, resolveBuildMode } from './build-mode.mjs';
+import { assertWindowsSigningEnvironment, validateWindowsReleaseSignatures } from './windows-signing.mjs';
 
 const builderCli = join(process.cwd(), 'node_modules', 'electron-builder', 'cli.js');
 const mode = resolveBuildMode(process.argv.slice(2));
@@ -14,10 +15,14 @@ const generatedSubscription = join(process.cwd(), 'resources', 'generated', 'def
 const releaseDir = join(process.cwd(), 'release');
 const updateMetadataName = internalBuild ? 'latest-in.yml' : noPetBuild ? 'latest-no.yml' : 'latest.yml';
 const nodeOptions = [process.env.NODE_OPTIONS, '--disable-warning=DEP0190'].filter(Boolean).join(' ');
+const signingPolicy = assertWindowsSigningEnvironment(process.env);
 
 await prepareSubscriptionResource();
 
 const builderArgs = [builderCli, '--win', 'nsis', '--x64', '--publish', 'never'];
+if (signingPolicy.required) {
+  builderArgs.push('-c.forceCodeSigning=true', `-c.win.signtoolOptions.publisherName=${signingPolicy.publisherName}`);
+}
 if (internalBuild) {
   builderArgs.push('-c.win.artifactName=YouYu-${version}-${arch}-in.${ext}');
 } else if (noPetBuild) {
@@ -26,15 +31,27 @@ if (internalBuild) {
 
 await runBuilder();
 await prepareUpdateMetadata();
+if (signingPolicy.required) {
+  await validateWindowsReleaseSignatures({
+    releaseDir,
+    version: (await import('../package.json', { with: { type: 'json' } })).default.version,
+    channel: internalBuild ? 'in' : noPetBuild ? 'no' : 'standard',
+    expectedPublisher: signingPolicy.publisherName
+  });
+}
 
 async function runBuilder() {
+  const buildEnvironment = {
+    ...createBuildEnvironment(process.env, mode),
+    NODE_OPTIONS: nodeOptions
+  };
+  if (!buildEnvironment.CSC_LINK && buildEnvironment.WIN_CSC_LINK) {
+    buildEnvironment.CSC_LINK = buildEnvironment.WIN_CSC_LINK;
+  }
   const child = spawn(process.execPath, builderArgs, {
     stdio: 'inherit',
     windowsHide: true,
-    env: {
-      ...createBuildEnvironment(process.env, mode),
-      NODE_OPTIONS: nodeOptions
-    }
+    env: buildEnvironment
   });
 
   await new Promise((resolve, reject) => {

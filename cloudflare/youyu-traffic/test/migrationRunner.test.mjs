@@ -40,6 +40,8 @@ test('migration runner repairs legacy subscription columns once and preserves th
   const runner = createSqliteRunner(database);
 
   const plan = await planWorkerMigrations(runner);
+  assert.ok(plan.missingTables.includes('admin_settings'));
+  assert.ok(plan.missingTables.includes('traffic_report_dedup'));
   assert.deepEqual(plan.subscriptionColumnsToAdd, [
     'remote_config.subscription_url',
     'user_remote_config.subscription_url'
@@ -53,6 +55,7 @@ test('migration runner repairs legacy subscription columns once and preserves th
 
   await applyWorkerMigrations(runner);
   database.prepare('UPDATE remote_config SET subscription_url = ? WHERE id = 1').run('https://example.com/global');
+  database.prepare('UPDATE admin_settings SET traffic_limit_bytes = ? WHERE id = 1').run(987654321);
   database
     .prepare('UPDATE user_remote_config SET subscription_url = ? WHERE user_id = ?')
     .run('https://example.com/alice', 'user-1');
@@ -68,6 +71,16 @@ test('migration runner repairs legacy subscription columns once and preserves th
       .subscription_url,
     'https://example.com/alice'
   );
+  assert.equal(
+    database.prepare('SELECT traffic_limit_bytes FROM admin_settings WHERE id = 1').get().traffic_limit_bytes,
+    987654321
+  );
+  assert.equal(
+    database
+      .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'traffic_report_dedup'")
+      .get().count,
+    1
+  );
 });
 
 test('migration CLI requires an explicit target and operation', () => {
@@ -75,6 +88,38 @@ test('migration CLI requires an explicit target and operation', () => {
   assert.throws(() => parseMigrationArgs(['--remote']), /operation/);
   assert.deepEqual(parseMigrationArgs(['--local', '--dry-run']), { mode: 'local', operation: 'dry-run' });
   assert.deepEqual(parseMigrationArgs(['--remote', '--apply']), { mode: 'remote', operation: 'apply' });
+});
+
+test('migration runner repairs the quota expiry column and preserves later settings', async (context) => {
+  const database = new DatabaseSync(':memory:');
+  context.after(() => database.close());
+  database.exec(currentSchema);
+  database.exec(`
+    DROP TABLE admin_settings;
+    CREATE TABLE admin_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      traffic_limit_bytes INTEGER NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO admin_settings (id, traffic_limit_bytes, updated_at)
+    VALUES (1, 123456789, '2026-07-20T00:00:00.000Z');
+  `);
+  const runner = createSqliteRunner(database);
+  const plan = await planWorkerMigrations(runner);
+  assert.ok(plan.columnsToAdd.includes('admin_settings.traffic_expires_at'));
+
+  await applyWorkerMigrations(runner);
+  assert.equal(
+    database.prepare('SELECT traffic_expires_at FROM admin_settings WHERE id = 1').get().traffic_expires_at,
+    '2026-08-11T20:00:00.000Z'
+  );
+  database.prepare('UPDATE admin_settings SET traffic_expires_at = ? WHERE id = 1').run('2026-09-01T00:00:00.000Z');
+  await applyWorkerMigrations(runner);
+  assert.equal(
+    database.prepare('SELECT traffic_expires_at FROM admin_settings WHERE id = 1').get().traffic_expires_at,
+    '2026-09-01T00:00:00.000Z'
+  );
+  assert.equal(runner.alterStatements.filter((sql) => sql.includes('traffic_expires_at')).length, 1);
 });
 
 test('migration runner refuses a remote-config-only database before writing', async (context) => {
@@ -175,6 +220,18 @@ test('migration runner rejects critical primary-key and unique-constraint drift 
         CREATE INDEX idx_traffic_reports_created_at ON traffic_reports(created_at);
       `,
       expected: /traffic_reports primary key \(\) expected \(id\)/
+    },
+    {
+      name: 'traffic_report_dedup primary key',
+      setup: `
+        DROP TABLE traffic_report_dedup;
+        CREATE TABLE traffic_report_dedup (
+          id TEXT NOT NULL, payload_hash TEXT, traffic_date TEXT NOT NULL, anomaly INTEGER NOT NULL,
+          legacy_device_id TEXT, legacy_upload_delta INTEGER, legacy_download_delta INTEGER,
+          legacy_reported_at TEXT
+        );
+      `,
+      expected: /traffic_report_dedup primary key \(\) expected \(id\)/
     },
     {
       name: 'rate_limits primary key',

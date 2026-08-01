@@ -1,14 +1,20 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { TrafficReporter } from '../../src/main/traffic/reporter';
 import {
   createTemporaryRuntimeLeaseManager,
   createTrafficRegistrationCoordinator
 } from '../../src/main/traffic/registration';
+import { TrafficStore } from '../../src/main/traffic/store';
 
 const input = { name: 'Alice', passphrase: 'secret' };
 
 function createHarness(options: {
   register: (proxyUrl?: string) => Promise<void>;
   pending?: typeof input;
+  getPendingRegistration?: () => Promise<typeof input | undefined>;
   runtimeAvailable?: boolean;
   hasSubscription?: boolean;
 }) {
@@ -17,6 +23,7 @@ function createHarness(options: {
     options.register(request?.proxyUrl)
   );
   const registerPendingIdentity = vi.fn(async () => undefined);
+  const getPendingRegistration = vi.fn(options.getPendingRegistration ?? (async () => options.pending));
   const clearIdentity = vi.fn(async () => undefined);
   const stopRuntime = vi.fn(async () => undefined);
   const releaseTemporaryRuntime = vi.fn(async () => {
@@ -31,7 +38,7 @@ function createHarness(options: {
     reporter: { register },
     store: {
       registerPendingIdentity,
-      getPendingRegistration: vi.fn(async () => options.pending),
+      getPendingRegistration,
       clearIdentity
     },
     hasSubscription: async () => options.hasSubscription ?? true,
@@ -45,6 +52,7 @@ function createHarness(options: {
     coordinator,
     register,
     registerPendingIdentity,
+    getPendingRegistration,
     clearIdentity,
     acquireTemporaryRuntime,
     releaseTemporaryRuntime,
@@ -54,6 +62,162 @@ function createHarness(options: {
 }
 
 describe('createTrafficRegistrationCoordinator', () => {
+  it('rejects reentry before invoking the second foreground critical section and releases after settlement', async () => {
+    const harness = createHarness({ register: async () => undefined });
+    const firstResponse = deferred<void>();
+    const firstOperation = vi.fn(async () => {
+      await firstResponse.promise;
+      return 'first';
+    });
+    const secondOperation = vi.fn(async () => 'second');
+
+    const first = harness.coordinator.runExclusiveForeground(firstOperation);
+    await vi.waitFor(() => expect(firstOperation).toHaveBeenCalledOnce());
+    await expect(harness.coordinator.runExclusiveForeground(secondOperation)).rejects.toMatchObject({
+      message: '流量登记正在进行，请稍后重试',
+      code: 'REGISTRATION_IN_PROGRESS'
+    });
+    expect(secondOperation).not.toHaveBeenCalled();
+
+    firstResponse.resolve();
+    await expect(first).resolves.toBe('first');
+    await expect(harness.coordinator.runExclusiveForeground(secondOperation)).resolves.toBe('second');
+    expect(secondOperation).toHaveBeenCalledOnce();
+  });
+
+  it('does not let an old direct failure retry over a newer successful registration', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'youyu-traffic-registration-race-'));
+    const firstDirectResponse = deferred<Response>();
+    const allowTemporaryRuntime = deferred<void>();
+    let runtimeAvailable = false;
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(() => firstDirectResponse.promise)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            userId: 'new-user',
+            deviceId: 'new-device',
+            name: 'Bob',
+            traffic: {
+              totalUpload: 0,
+              totalDownload: 0,
+              todayUpload: 0,
+              todayDownload: 0,
+              date: '2026-08-01'
+            }
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            userId: 'old-user',
+            deviceId: 'old-device',
+            name: 'Alice',
+            traffic: {
+              totalUpload: 0,
+              totalDownload: 0,
+              todayUpload: 0,
+              todayDownload: 0,
+              date: '2026-08-01'
+            }
+          }),
+          { status: 200 }
+        )
+      );
+    const store = new TrafficStore(directory);
+    const reporter = new TrafficReporter({
+      store,
+      endpoint: 'https://traffic.example.com',
+      appVersion: '1.6.9',
+      fetch
+    });
+    const releaseTemporaryRuntime = vi.fn(async () => {
+      runtimeAvailable = false;
+    });
+    const acquireTemporaryRuntime = vi.fn(async () => {
+      await allowTemporaryRuntime.promise;
+      runtimeAvailable = true;
+      return releaseTemporaryRuntime;
+    });
+    const coordinator = createTrafficRegistrationCoordinator({
+      reporter,
+      store,
+      hasSubscription: async () => true,
+      acquireTemporaryRuntime,
+      stopRuntime: async () => undefined,
+      getProxyUrl: () => (runtimeAvailable ? 'http://127.0.0.1:7890' : undefined)
+    });
+
+    try {
+      const first = coordinator.register({ name: 'Alice', passphrase: 'old-secret' });
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      firstDirectResponse.reject(Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }));
+      await vi.waitFor(() => expect(acquireTemporaryRuntime).toHaveBeenCalledOnce());
+
+      await expect(coordinator.register({ name: 'Bob', passphrase: 'new-secret' })).resolves.toEqual({
+        committed: true
+      });
+      allowTemporaryRuntime.resolve();
+
+      await expect(first).rejects.toThrow('本次流量登记已被较新的操作取代');
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(releaseTemporaryRuntime).toHaveBeenCalledOnce();
+      await expect(store.getSnapshot()).resolves.toMatchObject({
+        identity: { userId: 'new-user', deviceId: 'new-device', name: 'Bob' }
+      });
+    } finally {
+      allowTemporaryRuntime.resolve();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('skips pending activation while a foreground registration is in flight', async () => {
+    const foregroundResponse = deferred<void>();
+    let calls = 0;
+    const harness = createHarness({
+      pending: input,
+      register: async () => {
+        calls += 1;
+        if (calls === 1) await foregroundResponse.promise;
+      }
+    });
+
+    const foreground = harness.coordinator.runExclusiveForeground(() =>
+      harness.coordinator.register({ name: 'Bob', passphrase: 'new-secret' })
+    );
+    await vi.waitFor(() => expect(harness.register).toHaveBeenCalledOnce());
+
+    await expect(harness.coordinator.activatePending()).resolves.toBe(false);
+    expect(harness.register).toHaveBeenCalledOnce();
+    expect(harness.getPendingRegistration).not.toHaveBeenCalled();
+
+    foregroundResponse.resolve();
+    await expect(foreground).resolves.toEqual({ committed: true });
+  });
+
+  it('abandons a pending snapshot when a foreground registration starts while it is loading', async () => {
+    const pendingResponse = deferred<typeof input | undefined>();
+    const harness = createHarness({
+      register: async () => undefined,
+      getPendingRegistration: () => pendingResponse.promise
+    });
+
+    const pendingActivation = harness.coordinator.activatePending();
+    await vi.waitFor(() => expect(harness.getPendingRegistration).toHaveBeenCalledOnce());
+    await expect(
+      harness.coordinator.runExclusiveForeground(() =>
+        harness.coordinator.register({ name: 'Bob', passphrase: 'new-secret' })
+      )
+    ).resolves.toEqual({ committed: true });
+    pendingResponse.resolve(input);
+
+    await expect(pendingActivation).resolves.toBe(false);
+    expect(harness.register).toHaveBeenCalledOnce();
+  });
+
   it('always stops a temporary runtime after a permanent proxy activation failure', async () => {
     const harness = createHarness({
       register: async (proxyUrl) => {

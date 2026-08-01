@@ -12,6 +12,10 @@ export interface MihomoDistributionManifest {
     file: string;
     size: number;
     sha256: string;
+    unsignedSize?: number;
+    unsignedSha256?: string;
+    authenticodeSubject?: string;
+    authenticodeThumbprint?: string;
     versionOutput: string;
   };
   upstreamAsset: {
@@ -50,6 +54,10 @@ export function validateMihomoDistribution(
   distributionDir: string,
   options?: { readVersionOutput?: (binaryPath: string) => string | Promise<string> }
 ): Promise<MihomoDistributionValidation>;
+export function assertPackagedMihomoMatchesSource(
+  sourceManifest: MihomoDistributionManifest,
+  packagedManifest: MihomoDistributionManifest
+): { signed: false } | { signed: true; signerSubject: string; signerThumbprint: string };
 export function resolveMihomoSourceReleaseAssetName(manifest: MihomoDistributionManifest, appVersion: string): string;
 export function validateMihomoSourceArchive(
   archivePath: string,

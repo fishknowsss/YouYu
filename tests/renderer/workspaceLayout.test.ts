@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import { readRendererStyles } from './helpers/rendererStyles';
 
 describe('professional workspace layout contract', () => {
   it('uses the shared header shell on every professional page', async () => {
@@ -13,7 +14,7 @@ describe('professional workspace layout contract', () => {
   });
 
   it('keeps header actions and dashboard headings on shared geometry tokens', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     const home = await readFile('src/renderer/pages/Home.tsx', 'utf8');
 
     expect(styles).toContain('--header-action-height: 40px;');
@@ -31,7 +32,7 @@ describe('professional workspace layout contract', () => {
   });
 
   it('uses one readable header-button geometry and the sidebar hover surface', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     const headerButton = getCssRule(styles, '.header-actions > button');
     const headerSecondary = getCssRule(styles, '.header-actions > .secondary-button');
     const sidebarHover = getCssRule(styles, '.nav-list button:not(.active):hover:not(:disabled)');
@@ -43,12 +44,19 @@ describe('professional workspace layout contract', () => {
     expect(sidebarHover).toContain('background: var(--interactive-hover);');
   });
 
+  it('does not apply the node-test hover surface while the action is disabled', async () => {
+    const styles = await readRendererStyles();
+
+    expect(styles).toContain('.node:not(.active) .node-test:hover:not(:disabled)');
+    expect(styles).not.toContain('.node:not(.active) .node-test:hover {');
+  });
+
   it('keeps header buttons and status badges on one typography contract', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     const sharedHeaderAction = getCssRule(styles, '.header-actions > button,\n.header-actions > .status-badge');
     const statusBadge = getCssRule(styles, '.status-badge');
 
-    expect(styles).toContain('--font-size-action: 16px;');
+    expect(styles).toContain('--font-size-action: 15px;');
     expect(styles).toContain('--line-height-action: 20px;');
     expect(styles).toContain('--font-weight-bold: 700;');
     expect(sharedHeaderAction).toContain('font-size: var(--font-size-action);');
@@ -77,7 +85,7 @@ describe('professional workspace layout contract', () => {
   });
 
   it('reserves the Windows thin-scrollbar gutter in the route-test header', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     const routeTestHead = getCssRule(styles, '.route-test-head');
 
     expect(styles).toContain('--route-test-scrollbar-gutter: 10px;');
@@ -85,7 +93,7 @@ describe('professional workspace layout contract', () => {
   });
 
   it('uses the shared thin border on every pet preview surface', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
 
     expect(getCssRule(styles, '.pet-preview-card')).toContain('border: 1px solid var(--line);');
     expect(getCssRule(styles, '.pet-preview-large,\n.pet-preview-detail')).toContain('border: 1px solid var(--line);');

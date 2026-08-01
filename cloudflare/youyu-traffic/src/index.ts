@@ -1,4 +1,6 @@
 import { adminPage } from './adminPage';
+import { ADMIN_SCRIPT } from './adminScript';
+import { ADMIN_STYLES } from './adminStyles';
 
 export interface Env {
   DB: D1Database;
@@ -26,6 +28,24 @@ type TrafficReportInput = {
   appVersion?: string;
 };
 
+type TrafficReportDedupRow = {
+  payloadHash: string | null;
+  trafficDate: string;
+  anomaly: number;
+  legacyDeviceId: string | null;
+  legacyUploadDelta: number | null;
+  legacyDownloadDelta: number | null;
+  legacyReportedAt: string | null;
+};
+
+type TrafficReportAuditRow = {
+  deviceId: string;
+  uploadDelta: number;
+  downloadDelta: number;
+  reportedAt: string;
+  trafficDate: string;
+};
+
 type TrafficSummary = {
   date: string;
   totalUpload: number;
@@ -41,6 +61,44 @@ type RemoteConfigInput = {
   enabled?: boolean | null;
   subscriptionUrl?: string | null;
   ruleProfile?: string | null;
+};
+
+type AdminTrafficLimitInput = {
+  trafficLimitBytes?: unknown;
+  trafficExpiresAt?: unknown;
+};
+
+type AdminTrafficLimitRow = {
+  trafficLimitBytes?: number | null;
+  trafficExpiresAt?: string | null;
+  uploadBytes?: number | null;
+  downloadBytes?: number | null;
+};
+
+type AdminTrafficLimitSummary = {
+  trafficLimitBytes: number;
+  trafficExpiresAt: string;
+  uploadBytes: number;
+  downloadBytes: number;
+  usedBytes: number;
+  remainingBytes: number;
+  exceededBytes: number;
+  usagePercent: number;
+};
+
+type AdminTrafficTrendRange = 'hour' | 'day' | 'month';
+
+type AdminTrafficTrendRow = {
+  bucket?: string | null;
+  uploadBytes?: number | null;
+  downloadBytes?: number | null;
+};
+
+type AdminTrafficTrendPoint = {
+  key: string;
+  label: string;
+  uploadBytes: number;
+  downloadBytes: number;
 };
 
 type RemoteConfigRow = {
@@ -91,9 +149,19 @@ type UserMergeInput = {
   requestId?: string;
 };
 
+type AdminPagination = {
+  limit: number;
+  offset: number;
+};
+
 const TRAFFIC_REPORT_RETENTION_DAYS = 90;
 const RETENTION_DELETE_BATCH_SIZE = 500;
 const RETENTION_MAX_REPORT_BATCHES = 20;
+const ADMIN_COLLECTION_MAX_PAGE_SIZE = 200;
+const ADMIN_COLLECTION_MAX_OFFSET = 1_000_000;
+const ADMIN_USERS_DEFAULT_PAGE_SIZE = 200;
+const ADMIN_TRAFFIC_DEFAULT_PAGE_SIZE = 60;
+const ADMIN_ANOMALIES_DEFAULT_PAGE_SIZE = 100;
 const JSON_REQUEST_MAX_BODY_BYTES = 16 * 1024;
 const ADMIN_CONFIG_MAX_BODY_BYTES = 64 * 1024;
 const ACTIVATION_MAX_NAME_LENGTH = 80;
@@ -102,6 +170,10 @@ const ACTIVATION_MAX_PLATFORM_LENGTH = 32;
 const ACTIVATION_MAX_APP_VERSION_LENGTH = 64;
 const TRAFFIC_TIME_ZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ANOMALY_THRESHOLD_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_TRAFFIC_LIMIT_BYTES = 3148 * 1024 * 1024 * 1024;
+const DEFAULT_TRAFFIC_EXPIRES_AT = '2026-08-11T20:00:00.000Z';
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 export type RetentionCleanupResult = {
   cutoff: string;
@@ -114,98 +186,136 @@ export type RetentionCleanupResult = {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === 'OPTIONS') return optionsResponse();
-
+    const requestId = crypto.randomUUID();
+    const startedAt = Date.now();
+    let response: Response;
+    let errorCode: string | undefined;
     try {
-      if (request.method === 'POST' && url.pathname === '/api/activate') {
-        return await activate(request, env);
-      }
-      if (request.method === 'POST' && url.pathname === '/api/traffic/report') {
-        return await reportTraffic(request, env);
-      }
-      if (request.method === 'GET' && url.pathname === '/api/config') {
-        return await getClientConfig(request, env);
-      }
-      if (request.method === 'GET' && url.pathname === '/api/admin/users') {
-        await requireAdmin(request, env);
-        return listUsers(env);
-      }
-      if (request.method === 'GET' && url.pathname === '/api/admin/config') {
-        await requireAdmin(request, env);
-        return await getAdminConfig(env);
-      }
-      if (request.method === 'POST' && url.pathname === '/api/admin/config') {
-        await requireAdmin(request, env);
-        return await updateAdminConfig(request, env);
-      }
-      if (request.method === 'POST' && url.pathname === '/api/admin/config/sync-users') {
-        await requireAdmin(request, env);
-        return await syncGlobalConfigToUsers(env);
-      }
-      if (request.method === 'POST' && url.pathname === '/api/admin/maintenance') {
-        await requireAdmin(request, env);
-        return json({ ok: true, cleanup: await cleanupExpiredData(env) });
-      }
-      if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/admin')) {
-        return new Response(adminPage(), {
-          headers: {
-            'cache-control': 'no-store, no-transform',
-            'content-security-policy':
-              "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
-            'content-type': 'text/html; charset=utf-8',
-            'x-content-type-options': 'nosniff'
-          }
-        });
-      }
-      const userTrafficMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/traffic$/);
-      if (request.method === 'GET' && userTrafficMatch) {
-        await requireAdmin(request, env);
-        return await getUserTraffic(env, userTrafficMatch[1]);
-      }
-      const userMergePreviewMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/merge-preview$/);
-      if (request.method === 'GET' && userMergePreviewMatch) {
-        await requireAdmin(request, env);
-        return await previewAdminUserMerge(request, env, userMergePreviewMatch[1]);
-      }
-      const userMergeMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/merge$/);
-      if (request.method === 'POST' && userMergeMatch) {
-        await requireAdmin(request, env);
-        return await mergeAdminUser(request, env, userMergeMatch[1]);
-      }
-      const userConfigMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/config$/);
-      if (userConfigMatch) {
-        await requireAdmin(request, env);
-        if (request.method === 'GET') return await getAdminUserConfig(env, userConfigMatch[1]);
-        if (request.method === 'POST') return await updateAdminUserConfig(request, env, userConfigMatch[1]);
-      }
-      const userConfigResetMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/config\/reset$/);
-      if (request.method === 'POST' && userConfigResetMatch) {
-        await requireAdmin(request, env);
-        return await resetAdminUserConfig(env, userConfigResetMatch[1]);
-      }
-      if (request.method === 'GET' && url.pathname === '/api/admin/anomalies') {
-        await requireAdmin(request, env);
-        return await listAnomalies(env);
-      }
-      return json({ error: 'not found' }, 404);
+      response = await dispatchRequest(request, env, url);
     } catch (error) {
       const message = error instanceof HttpError ? error.message : 'internal error';
       const status = error instanceof HttpError ? error.status : 500;
-      return json({ error: message }, status);
+      const code = error instanceof HttpError ? error.code : 'INTERNAL_ERROR';
+      errorCode = code;
+      response = json({ error: message, code, requestId }, status);
     }
+    const finalized = withRequestId(response, requestId);
+    logRequestTelemetry(request, url, finalized.status, requestId, Date.now() - startedAt, errorCode);
+    return finalized;
   },
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
     ctx.waitUntil(
       cleanupExpiredData(env, controller.scheduledTime).catch((error) => {
-        console.error('retention cleanup failed', error);
+        console.error({
+          event: 'retention_cleanup_error',
+          scheduledTime: controller.scheduledTime,
+          errorCode: 'D1_MAINTENANCE_FAILED'
+        });
         throw error;
       })
     );
   }
 };
 
+async function dispatchRequest(request: Request, env: Env, url: URL): Promise<Response> {
+  if (request.method === 'OPTIONS') return optionsResponse();
+  if (request.method === 'POST' && url.pathname === '/api/activate') return activate(request, env);
+  if (request.method === 'POST' && url.pathname === '/api/traffic/report') return reportTraffic(request, env);
+  if (request.method === 'GET' && url.pathname === '/api/config') return getClientConfig(request, env);
+  if (request.method === 'GET' && url.pathname === '/api/admin/users') {
+    await requireAdmin(request, env);
+    return listUsers(env, parseAdminPagination(url, ADMIN_USERS_DEFAULT_PAGE_SIZE));
+  }
+  if (request.method === 'GET' && url.pathname === '/api/admin/config') {
+    await requireAdmin(request, env);
+    return getAdminConfig(env);
+  }
+  if (request.method === 'POST' && url.pathname === '/api/admin/config') {
+    await requireAdmin(request, env);
+    return updateAdminConfig(request, env);
+  }
+  if (request.method === 'GET' && url.pathname === '/api/admin/traffic-limit') {
+    await requireAdmin(request, env);
+    return getAdminTrafficLimit(env);
+  }
+  if (request.method === 'POST' && url.pathname === '/api/admin/traffic-limit') {
+    await requireAdmin(request, env);
+    return updateAdminTrafficLimit(request, env);
+  }
+  if (request.method === 'GET' && url.pathname === '/api/admin/traffic-trend') {
+    await requireAdmin(request, env);
+    return getAdminTrafficTrend(env, url.searchParams.get('range'));
+  }
+  if (request.method === 'POST' && url.pathname === '/api/admin/config/sync-users') {
+    await requireAdmin(request, env);
+    await requireEmptyBody(request);
+    return syncGlobalConfigToUsers(env);
+  }
+  if (request.method === 'POST' && url.pathname === '/api/admin/maintenance') {
+    await requireAdmin(request, env);
+    await requireEmptyBody(request);
+    return json({ ok: true, cleanup: await cleanupExpiredData(env) });
+  }
+  if (request.method === 'GET' && url.pathname === '/admin/assets/app.css') {
+    return staticAsset(ADMIN_STYLES, 'text/css; charset=utf-8');
+  }
+  if (request.method === 'GET' && url.pathname === '/admin/assets/app.js') {
+    return staticAsset(ADMIN_SCRIPT, 'text/javascript; charset=utf-8');
+  }
+  if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/admin')) {
+    return new Response(adminPage(), {
+      headers: {
+        'cache-control': 'no-store, no-transform',
+        'content-security-policy':
+          "default-src 'none'; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+        'content-type': 'text/html; charset=utf-8',
+        'cross-origin-resource-policy': 'same-origin',
+        'referrer-policy': 'no-referrer',
+        'x-content-type-options': 'nosniff'
+      }
+    });
+  }
+  const userTrafficMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/traffic$/);
+  if (request.method === 'GET' && userTrafficMatch) {
+    await requireAdmin(request, env);
+    return getUserTraffic(env, userTrafficMatch[1], parseAdminPagination(url, ADMIN_TRAFFIC_DEFAULT_PAGE_SIZE));
+  }
+  const userMergePreviewMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/merge-preview$/);
+  if (request.method === 'GET' && userMergePreviewMatch) {
+    await requireAdmin(request, env);
+    return previewAdminUserMerge(request, env, userMergePreviewMatch[1]);
+  }
+  const userMergeMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/merge$/);
+  if (request.method === 'POST' && userMergeMatch) {
+    await requireAdmin(request, env);
+    return mergeAdminUser(request, env, userMergeMatch[1]);
+  }
+  const userConfigMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/config$/);
+  if (userConfigMatch) {
+    await requireAdmin(request, env);
+    if (request.method === 'GET') return getAdminUserConfig(env, userConfigMatch[1]);
+    if (request.method === 'POST') return updateAdminUserConfig(request, env, userConfigMatch[1]);
+  }
+  const userConfigResetMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/config\/reset$/);
+  if (request.method === 'POST' && userConfigResetMatch) {
+    await requireAdmin(request, env);
+    await requireEmptyBody(request);
+    return resetAdminUserConfig(env, userConfigResetMatch[1]);
+  }
+  if (request.method === 'GET' && url.pathname === '/api/admin/anomalies') {
+    await requireAdmin(request, env);
+    return listAnomalies(env, parseAdminPagination(url, ADMIN_ANOMALIES_DEFAULT_PAGE_SIZE));
+  }
+  throw new HttpError(404, 'not found');
+}
+
 async function activate(request: Request, env: Env): Promise<Response> {
   const input = (await readJsonObjectWithLimit(request, JSON_REQUEST_MAX_BODY_BYTES)) as ActivateInput;
+  assertOnlyFields(
+    input,
+    ['name', 'passphrase', 'deviceSeed', 'deviceKey', 'deviceName', 'platform', 'appVersion'],
+    'unsupported activation field'
+  );
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (!name) throw new HttpError(400, 'missing name');
   if (!isBoundedText(name, ACTIVATION_MAX_NAME_LENGTH)) throw new HttpError(400, 'invalid name');
@@ -213,7 +323,11 @@ async function activate(request: Request, env: Env): Promise<Response> {
   const normalizedName = normalizeName(name);
   if (!normalizedName) throw new HttpError(400, 'invalid name');
 
+  if (input.passphrase !== undefined && typeof input.passphrase !== 'string') {
+    throw new HttpError(400, 'invalid passphrase');
+  }
   const passphrase = typeof input.passphrase === 'string' ? input.passphrase.trim() : '';
+  if (passphrase && !isBoundedText(passphrase, 512)) throw new HttpError(400, 'invalid passphrase');
   const deviceSeed = typeof input.deviceSeed === 'string' ? input.deviceSeed.trim() : '';
   if (!deviceSeed) throw new HttpError(400, 'missing device');
   if (!isUuid(deviceSeed)) throw new HttpError(400, 'invalid device');
@@ -375,6 +489,37 @@ async function updateAdminConfig(request: Request, env: Env): Promise<Response> 
   return json({ config: await getGlobalRemoteConfig(env) });
 }
 
+async function getAdminTrafficLimit(env: Env): Promise<Response> {
+  return json(await getAdminTrafficLimitSummary(env));
+}
+
+async function updateAdminTrafficLimit(request: Request, env: Env): Promise<Response> {
+  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as AdminTrafficLimitInput;
+  if (Object.keys(input).some((field) => field !== 'trafficLimitBytes' && field !== 'trafficExpiresAt')) {
+    throw new HttpError(400, 'unsupported traffic limit field');
+  }
+  const updatesLimit = hasOwnField(input, 'trafficLimitBytes');
+  const updatesExpiry = hasOwnField(input, 'trafficExpiresAt');
+  if (!updatesLimit && !updatesExpiry) throw new HttpError(400, 'invalid traffic limit');
+  const current = await getAdminTrafficLimitSummary(env);
+  const trafficLimitBytes = updatesLimit ? parseTrafficLimitBytes(input.trafficLimitBytes) : current.trafficLimitBytes;
+  const trafficExpiresAt = updatesExpiry ? parseTrafficExpiresAt(input.trafficExpiresAt) : current.trafficExpiresAt;
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `INSERT INTO admin_settings (id, traffic_limit_bytes, traffic_expires_at, updated_at)
+     VALUES (1, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       traffic_limit_bytes = excluded.traffic_limit_bytes,
+       traffic_expires_at = excluded.traffic_expires_at,
+       updated_at = excluded.updated_at`
+  )
+    .bind(trafficLimitBytes, trafficExpiresAt, now)
+    .run();
+
+  return json(await getAdminTrafficLimitSummary(env));
+}
+
 async function getAdminUserConfig(env: Env, userId: string): Promise<Response> {
   await requireKnownUser(env, userId);
   const override = await getUserRemoteConfig(env, userId);
@@ -506,6 +651,7 @@ async function previewAdminUserMerge(request: Request, env: Env, sourceUserId: s
 
 async function mergeAdminUser(request: Request, env: Env, sourceUserId: string): Promise<Response> {
   const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserMergeInput;
+  assertOnlyFields(input, ['targetUserId', 'configResolution', 'requestId'], 'unsupported merge field');
   const targetUserId = typeof input.targetUserId === 'string' ? input.targetUserId.trim().toLowerCase() : '';
   if (!targetUserId || !isUuid(targetUserId)) throw new HttpError(400, 'invalid target user');
   const requestId =
@@ -790,24 +936,42 @@ function sameAdminMergeConfig(left: AdminMergeConfigRow, right: AdminMergeConfig
 }
 
 async function reportTraffic(request: Request, env: Env): Promise<Response> {
+  await requireJsonMediaType(request);
   const bodyText = await readRequestTextWithLimit(request, JSON_REQUEST_MAX_BODY_BYTES);
   const input = safeParseJson(bodyText) as TrafficReportInput;
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HttpError(400, 'invalid json');
+  assertOnlyFields(
+    input,
+    ['reportId', 'userId', 'deviceId', 'uploadDelta', 'downloadDelta', 'reportedAt', 'appVersion'],
+    'unsupported traffic report field'
+  );
   const reportId = normalizeReportId(input.reportId);
-  const userId = String(input.userId ?? '').trim();
-  const deviceId = String(input.deviceId ?? '').trim();
-  const upload = normalizeBytes(input.uploadDelta);
-  const download = normalizeBytes(input.downloadDelta);
+  const userId = typeof input.userId === 'string' ? input.userId.trim().toLowerCase() : '';
+  const deviceId = typeof input.deviceId === 'string' ? input.deviceId.trim().toLowerCase() : '';
+  const upload = parseTrafficDelta(input.uploadDelta, 'invalid upload delta');
+  const download = parseTrafficDelta(input.downloadDelta, 'invalid download delta');
+  const reportedAt = parseOptionalReportTimestamp(input.reportedAt);
   const now = new Date().toISOString();
   const date = toTrafficDateKey(new Date(now));
 
   if (!userId || !deviceId) throw new HttpError(400, 'missing identity');
-  if (!reportId) throw new HttpError(400, 'missing report id');
+  if (!isUuid(userId) || !isUuid(deviceId)) throw new HttpError(400, 'invalid identity');
+  if (input.reportId === undefined || input.reportId === null || input.reportId === '') {
+    throw new HttpError(400, 'missing report id');
+  }
+  if (!reportId) throw new HttpError(400, 'invalid report id');
 
   await verifyDeviceRequest(request, env, userId, deviceId, bodyText);
-  const appVersion = cleanOptional(input.appVersion);
+  const appVersion = normalizeActivationText(
+    input.appVersion,
+    ACTIVATION_MAX_APP_VERSION_LENGTH,
+    'invalid app version'
+  );
+  if (appVersion && !/^[A-Za-z0-9][A-Za-z0-9.+_-]*$/.test(appVersion)) {
+    throw new HttpError(400, 'invalid app version');
+  }
   if (upload === 0 && download === 0) {
-    const result = await env.DB.prepare(
+    const heartbeat = await env.DB.prepare(
       `UPDATE devices
        SET last_seen_at = ?, app_version = COALESCE(?, app_version)
        WHERE id = ?
@@ -820,21 +984,36 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
     )
       .bind(now, appVersion, deviceId)
       .run();
-    if (getD1Changes(result) === 0) throw new HttpError(409, 'device state changed');
+    if (getD1Changes(heartbeat) === 0) throw new HttpError(409, 'device state changed');
     return json({ ok: true, traffic: await getTrafficSummary(env, deviceId, date) });
   }
 
   const anomaly = upload >= ANOMALY_THRESHOLD_BYTES || download >= ANOMALY_THRESHOLD_BYTES;
+  const payloadHash = await createTrafficReportPayloadHash({
+    deviceId,
+    upload,
+    download,
+    reportedAt
+  });
+  const existingResponse = await recoverTrafficReportDuplicate(env, reportId, payloadHash, {
+    deviceId,
+    upload,
+    download,
+    reportedAt
+  });
+  if (existingResponse) return existingResponse;
+
   const writes = [
     env.DB.prepare(
-      `INSERT INTO traffic_reports (id, user_id, device_id, upload_delta, download_delta, reported_at, created_at)
-       SELECT ?, devices.user_id, devices.id, ?, ?, ?, ?
+      `INSERT INTO traffic_report_dedup
+         (id, payload_hash, traffic_date, anomaly)
+       SELECT ?, ?, ?, ?
        FROM devices
        INNER JOIN users ON users.id = devices.user_id
        WHERE devices.id = ?
          AND users.status = 'active'
          AND users.merged_into_user_id IS NULL`
-    ).bind(reportId, upload, download, cleanOptional(input.reportedAt) ?? now, now, deviceId),
+    ).bind(reportId, payloadHash, date, anomaly ? 1 : 0, deviceId),
     env.DB.prepare(
       `UPDATE devices
        SET last_seen_at = ?, app_version = COALESCE(?, app_version)
@@ -845,7 +1024,18 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
              AND users.status = 'active'
              AND users.merged_into_user_id IS NULL
          )`
-    ).bind(now, appVersion, deviceId),
+    ).bind(now, appVersion, deviceId)
+  ];
+  writes.push(
+    env.DB.prepare(
+      `INSERT INTO traffic_reports (id, user_id, device_id, upload_delta, download_delta, reported_at, created_at)
+       SELECT ?, devices.user_id, devices.id, ?, ?, ?, ?
+       FROM devices
+       INNER JOIN users ON users.id = devices.user_id
+       WHERE devices.id = ?
+         AND users.status = 'active'
+         AND users.merged_into_user_id IS NULL`
+    ).bind(reportId, upload, download, reportedAt ?? now, now, deviceId),
     env.DB.prepare(
       `INSERT INTO traffic_daily (user_id, device_id, date, upload_bytes, download_bytes, updated_at)
        SELECT devices.user_id, devices.id, ?, ?, ?, ?
@@ -859,7 +1049,7 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
          download_bytes = download_bytes + excluded.download_bytes,
          updated_at = excluded.updated_at`
     ).bind(date, upload, download, now, deviceId)
-  ];
+  );
   if (anomaly) {
     writes.push(
       env.DB.prepare(
@@ -879,17 +1069,145 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
     if (getD1Changes(results[0]) === 0) throw new HttpError(409, 'device state changed');
   } catch (error) {
     if (isUniqueConstraintError(error)) {
-      return json({
-        ok: true,
-        anomaly: false,
-        duplicate: true,
-        traffic: await getTrafficSummary(env, deviceId, date)
+      const duplicateResponse = await recoverTrafficReportDuplicate(env, reportId, payloadHash, {
+        deviceId,
+        upload,
+        download,
+        reportedAt
       });
+      if (duplicateResponse) return duplicateResponse;
+      const auditResponse = await recoverTrafficReportFromAudit(env, reportId, payloadHash, {
+        deviceId,
+        upload,
+        download,
+        reportedAt
+      });
+      if (auditResponse) return auditResponse;
     }
     throw error;
   }
 
-  return json({ ok: true, anomaly, traffic: await getTrafficSummary(env, deviceId, date) });
+  const traffic = await getTrafficSummary(env, deviceId, date);
+  return json({ ok: true, anomaly, traffic });
+}
+
+async function createTrafficReportPayloadHash(input: {
+  deviceId: string;
+  upload: number;
+  download: number;
+  reportedAt: string | null;
+}): Promise<string> {
+  // User ids can change during a merge and appVersion can change while an accepted report awaits its lost response.
+  // Neither changes the traffic mutation, so the stable device and mutation-bearing fields define idempotency.
+  return sha256Hex(JSON.stringify([1, input.deviceId, input.upload, input.download, input.reportedAt]));
+}
+
+async function recoverTrafficReportDuplicate(
+  env: Env,
+  reportId: string,
+  payloadHash: string,
+  input: { deviceId: string; upload: number; download: number; reportedAt: string | null }
+): Promise<Response | null> {
+  let existing = await getTrafficReportDedup(env, reportId);
+  if (!existing) return null;
+
+  if (existing.payloadHash) {
+    if (existing.payloadHash !== payloadHash) throw new HttpError(409, 'report id conflict');
+  } else {
+    const legacyPayloadMatches =
+      existing.legacyDeviceId === input.deviceId &&
+      Number(existing.legacyUploadDelta) === input.upload &&
+      Number(existing.legacyDownloadDelta) === input.download &&
+      (!input.reportedAt || existing.legacyReportedAt === input.reportedAt);
+    if (!legacyPayloadMatches) throw new HttpError(409, 'report id conflict');
+
+    const sealed = await env.DB.prepare(
+      `UPDATE traffic_report_dedup
+       SET
+         payload_hash = ?,
+         legacy_device_id = NULL,
+         legacy_upload_delta = NULL,
+         legacy_download_delta = NULL,
+         legacy_reported_at = NULL
+       WHERE id = ? AND payload_hash IS NULL`
+    )
+      .bind(payloadHash, reportId)
+      .run();
+    if (getD1Changes(sealed) === 0) {
+      existing = await getTrafficReportDedup(env, reportId);
+      if (!existing || existing.payloadHash !== payloadHash) throw new HttpError(409, 'report id conflict');
+    }
+  }
+
+  return json({
+    ok: true,
+    anomaly: Number(existing.anomaly) === 1,
+    duplicate: true,
+    traffic: await getTrafficSummary(env, input.deviceId, existing.trafficDate)
+  });
+}
+
+async function getTrafficReportDedup(env: Env, reportId: string): Promise<TrafficReportDedupRow | null> {
+  return env.DB.prepare(
+    `SELECT
+       payload_hash AS payloadHash,
+       traffic_date AS trafficDate,
+       anomaly,
+       legacy_device_id AS legacyDeviceId,
+       legacy_upload_delta AS legacyUploadDelta,
+       legacy_download_delta AS legacyDownloadDelta,
+       legacy_reported_at AS legacyReportedAt
+     FROM traffic_report_dedup
+     WHERE id = ?`
+  )
+    .bind(reportId)
+    .first<TrafficReportDedupRow>();
+}
+
+async function recoverTrafficReportFromAudit(
+  env: Env,
+  reportId: string,
+  payloadHash: string,
+  input: { deviceId: string; upload: number; download: number; reportedAt: string | null }
+): Promise<Response | null> {
+  const audit = await env.DB.prepare(
+    `SELECT
+       device_id AS deviceId,
+       upload_delta AS uploadDelta,
+       download_delta AS downloadDelta,
+       reported_at AS reportedAt,
+       COALESCE(strftime('%Y-%m-%d', created_at, '+8 hours'), substr(created_at, 1, 10), '1970-01-01') AS trafficDate
+     FROM traffic_reports
+     WHERE id = ?`
+  )
+    .bind(reportId)
+    .first<TrafficReportAuditRow>();
+  if (!audit) return null;
+  if (
+    audit.deviceId !== input.deviceId ||
+    Number(audit.uploadDelta) !== input.upload ||
+    Number(audit.downloadDelta) !== input.download ||
+    (input.reportedAt && audit.reportedAt !== input.reportedAt)
+  ) {
+    throw new HttpError(409, 'report id conflict');
+  }
+
+  const anomaly = input.upload >= ANOMALY_THRESHOLD_BYTES || input.download >= ANOMALY_THRESHOLD_BYTES;
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO traffic_report_dedup (id, payload_hash, traffic_date, anomaly)
+     VALUES (?, ?, ?, ?)`
+  )
+    .bind(reportId, payloadHash, audit.trafficDate, anomaly ? 1 : 0)
+    .run();
+  const proof = await getTrafficReportDedup(env, reportId);
+  if (!proof || proof.payloadHash !== payloadHash) throw new HttpError(409, 'report id conflict');
+
+  return json({
+    ok: true,
+    anomaly,
+    duplicate: true,
+    traffic: await getTrafficSummary(env, input.deviceId, audit.trafficDate)
+  });
 }
 
 export async function cleanupExpiredData(
@@ -963,6 +1281,201 @@ function hasD1Rows(result: unknown): boolean {
   return Array.isArray(rows) && rows.length > 0;
 }
 
+async function getAdminTrafficLimitSummary(env: Env): Promise<AdminTrafficLimitSummary> {
+  let row = await queryAdminTrafficLimitSummary(env);
+  if (!row) {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO admin_settings (id, traffic_limit_bytes, traffic_expires_at, updated_at)
+       VALUES (1, ?, ?, ?)`
+    )
+      .bind(DEFAULT_TRAFFIC_LIMIT_BYTES, DEFAULT_TRAFFIC_EXPIRES_AT, new Date().toISOString())
+      .run();
+    row = await queryAdminTrafficLimitSummary(env);
+  }
+
+  const trafficLimitBytes = parseStoredTrafficLimitBytes(row?.trafficLimitBytes);
+  const trafficExpiresAt = parseStoredTrafficExpiresAt(row?.trafficExpiresAt);
+  const uploadBytes = normalizeBytes(row?.uploadBytes);
+  const downloadBytes = normalizeBytes(row?.downloadBytes);
+  const usedBytes = uploadBytes + downloadBytes;
+  return {
+    trafficLimitBytes,
+    trafficExpiresAt,
+    uploadBytes,
+    downloadBytes,
+    usedBytes,
+    remainingBytes: Math.max(trafficLimitBytes - usedBytes, 0),
+    exceededBytes: Math.max(usedBytes - trafficLimitBytes, 0),
+    usagePercent: (usedBytes / trafficLimitBytes) * 100
+  };
+}
+
+async function queryAdminTrafficLimitSummary(env: Env): Promise<AdminTrafficLimitRow | null> {
+  return env.DB.prepare(
+    `WITH traffic_totals AS (
+       SELECT
+         COALESCE(SUM(traffic_daily.upload_bytes), 0) AS uploadBytes,
+         COALESCE(SUM(traffic_daily.download_bytes), 0) AS downloadBytes
+       FROM traffic_daily
+       INNER JOIN users ON users.id = traffic_daily.user_id
+       WHERE users.status = 'active' AND users.merged_into_user_id IS NULL
+     )
+     SELECT
+       admin_settings.traffic_limit_bytes AS trafficLimitBytes,
+       admin_settings.traffic_expires_at AS trafficExpiresAt,
+       traffic_totals.uploadBytes,
+       traffic_totals.downloadBytes
+     FROM admin_settings
+     CROSS JOIN traffic_totals
+     WHERE admin_settings.id = 1`
+  ).first<AdminTrafficLimitRow>();
+}
+
+async function getAdminTrafficTrend(env: Env, requestedRange: string | null): Promise<Response> {
+  const range = parseAdminTrafficTrendRange(requestedRange);
+  const now = new Date();
+  const points =
+    range === 'hour'
+      ? await getHourlyTrafficTrend(env, now)
+      : range === 'month'
+        ? await getMonthlyTrafficTrend(env, now)
+        : await getDailyTrafficTrend(env, now);
+
+  return json({
+    range,
+    timeZone: 'Asia/Shanghai',
+    generatedAt: now.toISOString(),
+    points
+  });
+}
+
+async function getHourlyTrafficTrend(env: Env, now: Date): Promise<AdminTrafficTrendPoint[]> {
+  const shiftedNow = new Date(now.getTime() + TRAFFIC_TIME_ZONE_OFFSET_MS);
+  const dayStart =
+    Date.UTC(shiftedNow.getUTCFullYear(), shiftedNow.getUTCMonth(), shiftedNow.getUTCDate()) -
+    TRAFFIC_TIME_ZONE_OFFSET_MS;
+  const currentHour = shiftedNow.getUTCHours();
+  const result = await env.DB.prepare(
+    `SELECT
+       strftime('%H', traffic_reports.created_at, '+8 hours') AS bucket,
+       COALESCE(SUM(traffic_reports.upload_delta), 0) AS uploadBytes,
+       COALESCE(SUM(traffic_reports.download_delta), 0) AS downloadBytes
+     FROM traffic_reports
+     INNER JOIN users ON users.id = traffic_reports.user_id
+     WHERE traffic_reports.created_at >= ?
+       AND traffic_reports.created_at <= ?
+       AND users.status = 'active'
+       AND users.merged_into_user_id IS NULL
+     GROUP BY bucket
+     ORDER BY bucket`
+  )
+    .bind(new Date(dayStart).toISOString(), now.toISOString())
+    .all<AdminTrafficTrendRow>();
+  const totals = trendRowsByBucket(result.results);
+
+  return Array.from({ length: currentHour + 1 }, (_, hour) => {
+    const key = String(hour).padStart(2, '0');
+    const values = totals.get(key);
+    return {
+      key,
+      label: `${key}:00`,
+      uploadBytes: values?.uploadBytes ?? 0,
+      downloadBytes: values?.downloadBytes ?? 0
+    };
+  });
+}
+
+async function getDailyTrafficTrend(env: Env, now: Date): Promise<AdminTrafficTrendPoint[]> {
+  const shiftedNow = new Date(now.getTime() + TRAFFIC_TIME_ZONE_OFFSET_MS);
+  const endDate = shiftedNow.toISOString().slice(0, 10);
+  const startDate = new Date(shiftedNow.getTime() - 29 * DAY_MS).toISOString().slice(0, 10);
+  const result = await env.DB.prepare(
+    `SELECT
+       traffic_daily.date AS bucket,
+       COALESCE(SUM(traffic_daily.upload_bytes), 0) AS uploadBytes,
+       COALESCE(SUM(traffic_daily.download_bytes), 0) AS downloadBytes
+     FROM traffic_daily
+     INNER JOIN users ON users.id = traffic_daily.user_id
+     WHERE traffic_daily.date >= ?
+       AND traffic_daily.date <= ?
+       AND users.status = 'active'
+       AND users.merged_into_user_id IS NULL
+     GROUP BY traffic_daily.date
+     ORDER BY traffic_daily.date`
+  )
+    .bind(startDate, endDate)
+    .all<AdminTrafficTrendRow>();
+  const totals = trendRowsByBucket(result.results);
+
+  return Array.from({ length: 30 }, (_, index) => {
+    const key = new Date(shiftedNow.getTime() - (29 - index) * DAY_MS).toISOString().slice(0, 10);
+    const values = totals.get(key);
+    return {
+      key,
+      label: key.slice(5).replace('-', '/'),
+      uploadBytes: values?.uploadBytes ?? 0,
+      downloadBytes: values?.downloadBytes ?? 0
+    };
+  });
+}
+
+async function getMonthlyTrafficTrend(env: Env, now: Date): Promise<AdminTrafficTrendPoint[]> {
+  const shiftedNow = new Date(now.getTime() + TRAFFIC_TIME_ZONE_OFFSET_MS);
+  const endMonthIndex = shiftedNow.getUTCFullYear() * 12 + shiftedNow.getUTCMonth();
+  const monthKeys = Array.from({ length: 12 }, (_, index) => monthKeyFromIndex(endMonthIndex - 11 + index));
+  const startDate = `${monthKeys[0]}-01`;
+  const endDate = `${monthKeyFromIndex(endMonthIndex + 1)}-01`;
+  const result = await env.DB.prepare(
+    `SELECT
+       substr(traffic_daily.date, 1, 7) AS bucket,
+       COALESCE(SUM(traffic_daily.upload_bytes), 0) AS uploadBytes,
+       COALESCE(SUM(traffic_daily.download_bytes), 0) AS downloadBytes
+     FROM traffic_daily
+     INNER JOIN users ON users.id = traffic_daily.user_id
+     WHERE traffic_daily.date >= ?
+       AND traffic_daily.date < ?
+       AND users.status = 'active'
+       AND users.merged_into_user_id IS NULL
+     GROUP BY bucket
+     ORDER BY bucket`
+  )
+    .bind(startDate, endDate)
+    .all<AdminTrafficTrendRow>();
+  const totals = trendRowsByBucket(result.results);
+
+  return monthKeys.map((key) => {
+    const values = totals.get(key);
+    return {
+      key,
+      label: key.replace('-', '/'),
+      uploadBytes: values?.uploadBytes ?? 0,
+      downloadBytes: values?.downloadBytes ?? 0
+    };
+  });
+}
+
+function trendRowsByBucket(
+  rows: AdminTrafficTrendRow[] | undefined
+): Map<string, { uploadBytes: number; downloadBytes: number }> {
+  return new Map(
+    (rows ?? [])
+      .filter((row) => typeof row.bucket === 'string')
+      .map((row) => [
+        row.bucket as string,
+        {
+          uploadBytes: normalizeBytes(row.uploadBytes),
+          downloadBytes: normalizeBytes(row.downloadBytes)
+        }
+      ])
+  );
+}
+
+function monthKeyFromIndex(index: number): string {
+  const year = Math.floor(index / 12);
+  const month = index - year * 12 + 1;
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}`;
+}
+
 async function getTrafficSummary(env: Env, deviceId: string, date: string): Promise<TrafficSummary> {
   const summary = await env.DB.prepare(
     `WITH identity AS (
@@ -1020,7 +1533,7 @@ function toTrafficDateKey(date: Date): string {
   return new Date(date.getTime() + TRAFFIC_TIME_ZONE_OFFSET_MS).toISOString().slice(0, 10);
 }
 
-async function listUsers(env: Env): Promise<Response> {
+async function listUsers(env: Env, pagination: AdminPagination): Promise<Response> {
   const result = await env.DB.prepare(
     `SELECT
        users.id,
@@ -1083,13 +1596,17 @@ async function listUsers(env: Env): Promise<Response> {
       ) anomaly_totals ON anomaly_totals.user_id = users.id
       LEFT JOIN user_remote_config ON user_remote_config.user_id = users.id
       LEFT JOIN remote_config ON remote_config.id = 1
-      WHERE users.status = 'active' AND users.merged_into_user_id IS NULL
-      ORDER BY downloadBytes DESC, uploadBytes DESC, lastSeenAt DESC`
-  ).all();
-  return json({ users: result.results });
+       WHERE users.status = 'active' AND users.merged_into_user_id IS NULL
+       ORDER BY downloadBytes DESC, uploadBytes DESC, lastSeenAt DESC, users.id ASC
+       LIMIT ? OFFSET ?`
+  )
+    .bind(pagination.limit + 1, pagination.offset)
+    .all();
+  const page = createAdminPage(result.results, pagination);
+  return json({ users: page.items, page: page.metadata });
 }
 
-async function getUserTraffic(env: Env, userId: string): Promise<Response> {
+async function getUserTraffic(env: Env, userId: string, pagination: AdminPagination): Promise<Response> {
   const result = await env.DB.prepare(
     `SELECT
        traffic_daily.date,
@@ -1101,15 +1618,16 @@ async function getUserTraffic(env: Env, userId: string): Promise<Response> {
      FROM traffic_daily
      LEFT JOIN devices ON devices.id = traffic_daily.device_id
      WHERE traffic_daily.user_id = ?
-     ORDER BY traffic_daily.date DESC
-     LIMIT 60`
+     ORDER BY traffic_daily.date DESC, traffic_daily.device_id ASC
+     LIMIT ? OFFSET ?`
   )
-    .bind(userId)
+    .bind(userId, pagination.limit + 1, pagination.offset)
     .all();
-  return json({ rows: result.results });
+  const page = createAdminPage(result.results, pagination);
+  return json({ rows: page.items, page: page.metadata });
 }
 
-async function listAnomalies(env: Env): Promise<Response> {
+async function listAnomalies(env: Env, pagination: AdminPagination): Promise<Response> {
   const result = await env.DB.prepare(
     `SELECT
        traffic_anomalies.id,
@@ -1125,10 +1643,13 @@ async function listAnomalies(env: Env): Promise<Response> {
      FROM traffic_anomalies
      LEFT JOIN users ON users.id = traffic_anomalies.user_id
      LEFT JOIN devices ON devices.id = traffic_anomalies.device_id
-     ORDER BY traffic_anomalies.created_at DESC
-     LIMIT 100`
-  ).all();
-  return json({ anomalies: result.results });
+     ORDER BY traffic_anomalies.created_at DESC, traffic_anomalies.id ASC
+     LIMIT ? OFFSET ?`
+  )
+    .bind(pagination.limit + 1, pagination.offset)
+    .all();
+  const page = createAdminPage(result.results, pagination);
+  return json({ anomalies: page.items, page: page.metadata });
 }
 
 async function getGlobalRemoteConfig(env: Env): Promise<RemoteControlConfig> {
@@ -1331,25 +1852,144 @@ function bytesToHex(bytes: Uint8Array): string {
 async function requireAdmin(request: Request, env: Env): Promise<void> {
   const expectedToken = env.ADMIN_TOKEN?.trim();
   if (!expectedToken) throw new HttpError(403, 'admin disabled');
-  const rateLimitKey = `admin:${getClientIp(request)}`;
-  await consumeRateLimitAttempt(env, rateLimitKey, 10, 15 * 60 * 1000);
   const token = request.headers
     .get('authorization')
     ?.replace(/^Bearer\s+/i, '')
     .trim();
-  if (!constantTimeEqual(token ?? '', expectedToken)) {
-    throw new HttpError(403, 'forbidden');
+  if (constantTimeEqual(token ?? '', expectedToken)) return;
+
+  const rateLimitKey = `admin:${getClientIp(request)}`;
+  await consumeRateLimitAttempt(env, rateLimitKey, 10, 15 * 60 * 1000);
+  throw new HttpError(403, 'forbidden');
+}
+
+function parseAdminPagination(url: URL, defaultLimit: number): AdminPagination {
+  for (const key of url.searchParams.keys()) {
+    if (key !== 'limit' && key !== 'offset') throw new HttpError(400, 'invalid pagination');
   }
-  await clearRateLimit(env, rateLimitKey);
+  if (url.searchParams.getAll('limit').length > 1 || url.searchParams.getAll('offset').length > 1) {
+    throw new HttpError(400, 'invalid pagination');
+  }
+
+  const limit = parsePaginationInteger(url.searchParams.get('limit'), defaultLimit, 1, ADMIN_COLLECTION_MAX_PAGE_SIZE);
+  const offset = parsePaginationInteger(url.searchParams.get('offset'), 0, 0, ADMIN_COLLECTION_MAX_OFFSET);
+  return { limit, offset };
+}
+
+function parsePaginationInteger(value: string | null, fallback: number, minimum: number, maximum: number): number {
+  if (value === null || value === '') return fallback;
+  if (!/^(?:0|[1-9]\d*)$/.test(value)) throw new HttpError(400, 'invalid pagination');
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new HttpError(400, 'invalid pagination');
+  }
+  return parsed;
+}
+
+function createAdminPage<T>(
+  rows: T[],
+  pagination: AdminPagination
+): {
+  items: T[];
+  metadata: {
+    limit: number;
+    offset: number;
+    returned: number;
+    hasMore: boolean;
+    nextOffset: number | null;
+  };
+} {
+  const hasMore = rows.length > pagination.limit;
+  const items = hasMore ? rows.slice(0, pagination.limit) : rows;
+  return {
+    items,
+    metadata: {
+      limit: pagination.limit,
+      offset: pagination.offset,
+      returned: items.length,
+      hasMore,
+      nextOffset: hasMore ? pagination.offset + items.length : null
+    }
+  };
 }
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: {
-      'content-type': 'application/json; charset=utf-8'
+      'cache-control': 'no-store',
+      'content-type': 'application/json; charset=utf-8',
+      'x-content-type-options': 'nosniff'
     }
   });
+}
+
+function staticAsset(body: string, contentType: string): Response {
+  return new Response(body, {
+    headers: {
+      'cache-control': 'no-store, no-transform',
+      'content-type': contentType,
+      'cross-origin-resource-policy': 'same-origin',
+      'x-content-type-options': 'nosniff'
+    }
+  });
+}
+
+function withRequestId(response: Response, requestId: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set('x-request-id', requestId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
+function logRequestTelemetry(
+  request: Request,
+  url: URL,
+  status: number,
+  requestId: string,
+  durationMs: number,
+  errorCode?: string
+): void {
+  if (status < 500 && durationMs < 1000) return;
+  const entry = {
+    event: status >= 500 ? 'worker_request_error' : 'worker_request_slow',
+    requestId,
+    method: request.method,
+    route: safeRouteLabel(url.pathname),
+    status,
+    durationMs,
+    ...(errorCode ? { errorCode } : {})
+  };
+  if (status >= 500) console.error(entry);
+  else console.warn(entry);
+}
+
+function safeRouteLabel(pathname: string): string {
+  if (/^\/api\/admin\/users\/[^/]+\/merge-preview$/.test(pathname)) return '/api/admin/users/:id/merge-preview';
+  if (/^\/api\/admin\/users\/[^/]+\/merge$/.test(pathname)) return '/api/admin/users/:id/merge';
+  if (/^\/api\/admin\/users\/[^/]+\/config\/reset$/.test(pathname)) return '/api/admin/users/:id/config/reset';
+  if (/^\/api\/admin\/users\/[^/]+\/config$/.test(pathname)) return '/api/admin/users/:id/config';
+  if (/^\/api\/admin\/users\/[^/]+\/traffic$/.test(pathname)) return '/api/admin/users/:id/traffic';
+  const knownRoutes = new Set([
+    '/',
+    '/admin',
+    '/admin/assets/app.css',
+    '/admin/assets/app.js',
+    '/api/activate',
+    '/api/traffic/report',
+    '/api/config',
+    '/api/admin/users',
+    '/api/admin/config',
+    '/api/admin/traffic-limit',
+    '/api/admin/traffic-trend',
+    '/api/admin/config/sync-users',
+    '/api/admin/maintenance',
+    '/api/admin/anomalies'
+  ]);
+  return knownRoutes.has(pathname) ? pathname : '/unmatched';
 }
 
 function optionsResponse(): Response {
@@ -1362,8 +2002,12 @@ function optionsResponse(): Response {
 }
 
 async function readRequestTextWithLimit(request: Request, maxBytes: number): Promise<string> {
-  const declaredLength = request.headers.get('content-length')?.trim();
-  if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > maxBytes) {
+  const declaredLength = request.headers.get('content-length');
+  if (declaredLength !== null && !/^(?:0|[1-9]\d*)$/.test(declaredLength.trim())) {
+    await request.body?.cancel('invalid content length').catch(() => undefined);
+    throw new HttpError(400, 'invalid content length');
+  }
+  if (declaredLength !== null && (!Number.isSafeInteger(Number(declaredLength)) || Number(declaredLength) > maxBytes)) {
     await request.body?.cancel('request too large').catch(() => undefined);
     throw new HttpError(413, 'request too large');
   }
@@ -1409,6 +2053,7 @@ async function readRequestTextWithLimit(request: Request, maxBytes: number): Pro
 }
 
 async function readJsonObjectWithLimit(request: Request, maxBytes: number): Promise<Record<string, unknown>> {
+  await requireJsonMediaType(request);
   const bodyText = await readRequestTextWithLimit(request, maxBytes);
   let parsed: unknown;
   try {
@@ -1420,6 +2065,36 @@ async function readJsonObjectWithLimit(request: Request, maxBytes: number): Prom
     throw new HttpError(400, 'invalid json');
   }
   return parsed as Record<string, unknown>;
+}
+
+async function requireJsonMediaType(request: Request): Promise<void> {
+  const contentType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+  if (contentType === 'application/json' || /^application\/[a-z0-9!#$&^_.+-]+\+json$/.test(contentType)) return;
+  await request.body?.cancel('unsupported media type').catch(() => undefined);
+  throw new HttpError(415, 'unsupported media type');
+}
+
+async function requireEmptyBody(request: Request): Promise<void> {
+  const declaredLength = request.headers.get('content-length');
+  if (declaredLength !== null && !/^(?:0|[1-9]\d*)$/.test(declaredLength.trim())) {
+    await request.body?.cancel('invalid content length').catch(() => undefined);
+    throw new HttpError(400, 'invalid content length');
+  }
+  if (declaredLength !== null && Number(declaredLength) > 0) {
+    await request.body?.cancel('unexpected request body').catch(() => undefined);
+    throw new HttpError(400, 'unexpected request body');
+  }
+  if (!request.body) return;
+  const reader = request.body.getReader();
+  try {
+    const first = await reader.read();
+    if (!first.done && first.value.byteLength > 0) {
+      await reader.cancel('unexpected request body').catch(() => undefined);
+      throw new HttpError(400, 'unexpected request body');
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function normalizeName(value: string): string {
@@ -1482,9 +2157,89 @@ function normalizeBytes(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
+function parseTrafficDelta(value: unknown, errorMessage: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new HttpError(400, errorMessage);
+  }
+  return value;
+}
+
+function parseOptionalReportTimestamp(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || value.length > 40 || hasControlCharacters(value)) {
+    throw new HttpError(400, 'invalid reported at');
+  }
+  return parseStrictIsoDateTime(value.trim(), 'invalid reported at');
+}
+
+function parseTrafficLimitBytes(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new HttpError(400, 'invalid traffic limit');
+  }
+  return value;
+}
+
+function parseStoredTrafficLimitBytes(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_TRAFFIC_LIMIT_BYTES;
+}
+
+function parseTrafficExpiresAt(value: unknown): string {
+  if (typeof value !== 'string') throw new HttpError(400, 'invalid traffic expiry');
+  return parseStrictIsoDateTime(value.trim(), 'invalid traffic expiry');
+}
+
+function parseStrictIsoDateTime(text: string, errorMessage: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(
+    text
+  );
+  if (!match) throw new HttpError(400, errorMessage);
+  const milliseconds = Number((match[7] ?? '').padEnd(3, '0'));
+  const nominal = new Date(
+    Date.UTC(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5]),
+      Number(match[6]),
+      milliseconds
+    )
+  );
+  if (
+    nominal.getUTCFullYear() !== Number(match[1]) ||
+    nominal.getUTCMonth() !== Number(match[2]) - 1 ||
+    nominal.getUTCDate() !== Number(match[3]) ||
+    nominal.getUTCHours() !== Number(match[4]) ||
+    nominal.getUTCMinutes() !== Number(match[5]) ||
+    nominal.getUTCSeconds() !== Number(match[6])
+  ) {
+    throw new HttpError(400, errorMessage);
+  }
+  if (match[8] && (Number(match[9]) > 23 || Number(match[10]) > 59)) {
+    throw new HttpError(400, errorMessage);
+  }
+  const date = new Date(text);
+  if (!Number.isFinite(date.getTime())) throw new HttpError(400, errorMessage);
+  return date.toISOString();
+}
+
+function parseStoredTrafficExpiresAt(value: unknown): string {
+  try {
+    return parseTrafficExpiresAt(value);
+  } catch {
+    return DEFAULT_TRAFFIC_EXPIRES_AT;
+  }
+}
+
+function parseAdminTrafficTrendRange(value: string | null): AdminTrafficTrendRange {
+  if (value === null || value === '') return 'day';
+  if (value === 'hour' || value === 'day' || value === 'month') return value;
+  throw new HttpError(400, 'invalid traffic trend range');
+}
+
 function normalizeReportId(value: unknown): string | undefined {
-  const text = normalizeText(value, 120);
-  return text && /^[A-Za-z0-9:_-]{8,120}$/.test(text) ? text : undefined;
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return isUuid(text) ? text : undefined;
 }
 
 function parseNullableConfigText(value: unknown, maxLength: number, errorMessage: string): string | null {
@@ -1511,6 +2266,11 @@ function assertSupportedRemoteConfigInput(input: RemoteConfigInput): void {
   if (Object.keys(input).some((field) => !supportedFields.has(field))) {
     throw new HttpError(400, 'unsupported config field');
   }
+}
+
+function assertOnlyFields(input: object, supportedFields: string[], errorMessage: string): void {
+  const supported = new Set(supportedFields);
+  if (Object.keys(input).some((field) => !supported.has(field))) throw new HttpError(400, errorMessage);
 }
 
 function normalizeRuleProfile(value: unknown): 'ruleset' | 'subscription' {
@@ -1541,11 +2301,6 @@ function safeParseJson(value: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function normalizeText(value: unknown, maxLength: number): string | null {
-  const text = typeof value === 'string' ? value.trim() : '';
-  return text ? text.slice(0, maxLength) : null;
 }
 
 function normalizeStoredSubscriptionUrl(value: unknown): string | undefined {
@@ -1583,10 +2338,77 @@ function isUniqueConstraintError(error: unknown): boolean {
 }
 
 class HttpError extends Error {
+  readonly code: string;
+
   constructor(
     readonly status: number,
     message: string
   ) {
     super(message);
+    this.code = errorCodeFor(status, message);
   }
+}
+
+function errorCodeFor(status: number, message: string): string {
+  const knownCodes: Record<string, string> = {
+    'admin disabled': 'ADMIN_DISABLED',
+    'config conflict': 'CONFIG_CONFLICT',
+    'device state changed': 'DEVICE_STATE_CHANGED',
+    forbidden: 'FORBIDDEN',
+    'internal error': 'INTERNAL_ERROR',
+    'invalid app version': 'INVALID_APP_VERSION',
+    'invalid config resolution': 'INVALID_CONFIG_RESOLUTION',
+    'invalid content length': 'INVALID_CONTENT_LENGTH',
+    'invalid device': 'INVALID_DEVICE',
+    'invalid device key': 'INVALID_DEVICE_KEY',
+    'invalid device name': 'INVALID_DEVICE_NAME',
+    'invalid download delta': 'INVALID_DOWNLOAD_DELTA',
+    'invalid enabled': 'INVALID_ENABLED',
+    'invalid identity': 'INVALID_IDENTITY',
+    'invalid json': 'INVALID_JSON',
+    'invalid name': 'INVALID_NAME',
+    'invalid pagination': 'INVALID_PAGINATION',
+    'invalid passphrase': 'INVALID_PASSPHRASE',
+    'invalid platform': 'INVALID_PLATFORM',
+    'invalid request id': 'INVALID_REQUEST_ID',
+    'invalid report id': 'INVALID_REPORT_ID',
+    'invalid reported at': 'INVALID_REPORTED_AT',
+    'invalid rule profile': 'INVALID_RULE_PROFILE',
+    'invalid signature': 'INVALID_SIGNATURE',
+    'invalid subscription url': 'INVALID_SUBSCRIPTION_URL',
+    'invalid target user': 'INVALID_TARGET_USER',
+    'invalid traffic expiry': 'INVALID_TRAFFIC_EXPIRY',
+    'invalid traffic limit': 'INVALID_TRAFFIC_LIMIT',
+    'invalid traffic trend range': 'INVALID_TRAFFIC_TREND_RANGE',
+    'invalid user': 'INVALID_USER',
+    'invalid user merge': 'INVALID_USER_MERGE',
+    'merge request conflict': 'MERGE_REQUEST_CONFLICT',
+    'merge state changed': 'MERGE_STATE_CHANGED',
+    'missing device': 'MISSING_DEVICE',
+    'missing identity': 'MISSING_IDENTITY',
+    'missing name': 'MISSING_NAME',
+    'missing report id': 'MISSING_REPORT_ID',
+    'not found': 'NOT_FOUND',
+    'registration conflict': 'REGISTRATION_CONFLICT',
+    'registration disabled': 'REGISTRATION_DISABLED',
+    'report id conflict': 'REPORT_ID_CONFLICT',
+    'request too large': 'REQUEST_TOO_LARGE',
+    'same user': 'SAME_USER',
+    'signature required': 'SIGNATURE_REQUIRED',
+    'stale signature': 'STALE_SIGNATURE',
+    'too many attempts': 'TOO_MANY_ATTEMPTS',
+    'unexpected request body': 'UNEXPECTED_REQUEST_BODY',
+    'unknown device': 'UNKNOWN_DEVICE',
+    'unknown target user': 'UNKNOWN_TARGET_USER',
+    'unknown user': 'UNKNOWN_USER',
+    'unsupported activation field': 'UNSUPPORTED_ACTIVATION_FIELD',
+    'unsupported config field': 'UNSUPPORTED_CONFIG_FIELD',
+    'unsupported merge field': 'UNSUPPORTED_MERGE_FIELD',
+    'unsupported media type': 'UNSUPPORTED_MEDIA_TYPE',
+    'unsupported traffic report field': 'UNSUPPORTED_TRAFFIC_REPORT_FIELD',
+    'unsupported traffic limit field': 'UNSUPPORTED_TRAFFIC_LIMIT_FIELD',
+    'user already merged': 'USER_ALREADY_MERGED',
+    'invalid upload delta': 'INVALID_UPLOAD_DELTA'
+  };
+  return knownCodes[message] ?? (status >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_REJECTED');
 }

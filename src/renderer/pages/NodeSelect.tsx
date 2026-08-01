@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { AppSnapshot } from '../../shared/ipc';
 import { NodeList } from '../components/NodeList';
 import { WorkspaceHeader } from '../components/WorkspaceHeader';
@@ -15,7 +16,9 @@ type NodeSelectProps = {
   onRefresh: () => void;
 };
 
-export function NodeSelect({
+export const NodeSelect = memo(NodeSelectView, areNodeSelectPropsEqual);
+
+function NodeSelectView({
   snapshot,
   busy,
   message,
@@ -67,4 +70,28 @@ export function NodeSelect({
       <p className="inline-message">{message || ' '}</p>
     </div>
   );
+}
+
+function areNodeSelectPropsEqual(previous: NodeSelectProps, next: NodeSelectProps): boolean {
+  return (
+    previous.busy === next.busy &&
+    previous.message === next.message &&
+    previous.testingAll === next.testingAll &&
+    previous.switchingNode === next.switchingNode &&
+    previous.onSelect === next.onSelect &&
+    previous.onTestNode === next.onTestNode &&
+    previous.onTestAll === next.onTestAll &&
+    previous.onCancelTestAll === next.onCancelTestAll &&
+    previous.onRefresh === next.onRefresh &&
+    getNodeSelectRenderKey(previous.snapshot) === getNodeSelectRenderKey(next.snapshot)
+  );
+}
+
+export function getNodeSelectRenderKey(snapshot: AppSnapshot): string {
+  return JSON.stringify([
+    snapshot.subscriptionUrl,
+    snapshot.status,
+    snapshot.currentNode,
+    snapshot.nodes.map((node) => [node.name, node.delay ?? null, node.active ?? false, node.testState ?? ''])
+  ]);
 }

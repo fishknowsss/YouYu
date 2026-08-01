@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDevYouYuApi } from '../../src/renderer/devApi';
 import { NodeSelect } from '../../src/renderer/pages/NodeSelect';
 import { resetConnectivityCacheForTests, TestPage } from '../../src/renderer/pages/TestPage';
-import type { AppSnapshot, ConnectivityServiceKey, OperationRequest } from '../../src/shared/ipc';
+import type { AppSnapshot, ConnectivityResult, ConnectivityServiceKey, OperationRequest } from '../../src/shared/ipc';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -138,6 +138,52 @@ describe('testing interactions', () => {
     expect(container.querySelectorAll('.test-status.testing')).toHaveLength(0);
     expect(findButton(container, '测全部')?.disabled).toBe(false);
   });
+
+  it('keeps different single-service retries independently owned until both complete', async () => {
+    const snapshot = await createRunningSnapshot();
+    const pending = new Map<ConnectivityServiceKey, ReturnType<typeof deferred<ConnectivityResult>>>();
+    const testConnectivity = vi.fn((key: ConnectivityServiceKey) => {
+      const operation = deferred<ConnectivityResult>();
+      pending.set(key, operation);
+      return operation.promise;
+    });
+    Object.defineProperty(window, 'youyu', {
+      configurable: true,
+      value: { testConnectivity, cancelOperation: vi.fn(async () => true) } as unknown as NonNullable<Window['youyu']>
+    });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<TestPage snapshot={snapshot} />));
+    const steamRetry = findServiceRetryButton(container, 'Steam');
+    const chatGptRetry = findServiceRetryButton(container, 'ChatGPT');
+    await act(async () => {
+      steamRetry?.click();
+      chatGptRetry?.click();
+      await Promise.resolve();
+    });
+
+    expect(testConnectivity.mock.calls.map(([key]) => key)).toEqual(['steam', 'chatgpt']);
+    expect(findServiceRow(container, 'Steam')?.querySelector('.test-status')?.textContent).toBe('测试中');
+    expect(findServiceRow(container, 'ChatGPT')?.querySelector('.test-status')?.textContent).toBe('测试中');
+    expect(findButton(container, '测全部')?.disabled).toBe(true);
+
+    await act(async () => {
+      pending.get('chatgpt')?.resolve(createConnectivityResult('chatgpt', 'ChatGPT', 73));
+      await Promise.resolve();
+    });
+    expect(findServiceRow(container, 'ChatGPT')?.querySelector('.test-status')?.textContent).toBe('可用');
+    expect(findServiceRow(container, 'Steam')?.querySelector('.test-status')?.textContent).toBe('测试中');
+
+    await act(async () => {
+      pending.get('steam')?.resolve(createConnectivityResult('steam', 'Steam', 91));
+      await Promise.resolve();
+    });
+    expect(findServiceRow(container, 'Steam')?.querySelector('.test-status')?.textContent).toBe('可用');
+    expect(container.querySelectorAll('.test-status.testing')).toHaveLength(0);
+    expect(findButton(container, '测全部')?.disabled).toBe(false);
+  });
 });
 
 async function createRunningSnapshot(): Promise<AppSnapshot> {
@@ -155,4 +201,37 @@ async function createRunningSnapshot(): Promise<AppSnapshot> {
 
 function findButton(container: HTMLElement, text: string): HTMLButtonElement | undefined {
   return [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === text);
+}
+
+function findServiceRow(container: HTMLElement, name: string): HTMLElement | undefined {
+  return [...container.querySelectorAll<HTMLElement>('.route-test-row')].find(
+    (row) => row.querySelector('.test-service-name')?.textContent === name
+  );
+}
+
+function findServiceRetryButton(container: HTMLElement, name: string): HTMLButtonElement | undefined {
+  return findServiceRow(container, name)?.querySelector<HTMLButtonElement>('.test-retry') ?? undefined;
+}
+
+function createConnectivityResult(key: ConnectivityServiceKey, name: string, totalMs: number): ConnectivityResult {
+  return {
+    key,
+    name,
+    url: `https://${key}.example.com`,
+    status: 'available',
+    statusText: '可用',
+    reachability: 'ok',
+    checkedAt: '2026-08-01T08:00:00.000Z',
+    timings: { totalMs }
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }

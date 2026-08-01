@@ -1120,6 +1120,94 @@ describe('createMihomoApiClient', () => {
     expect(nodes.every((node) => node.testState !== 'testing')).toBe(true);
   });
 
+  it('does not let a superseded node test overwrite the newer cached result', async () => {
+    const pendingDelays: Array<(response: Response) => void> = [];
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      const path = String(url);
+      if (path.endsWith('/providers/proxies')) return Response.json({ providers: {} });
+      if (path.endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: { type: 'Selector', now: 'overlap-owner-node', all: ['overlap-owner-node'] },
+            'overlap-owner-node': {}
+          }
+        });
+      }
+      if (path.includes('/delay')) {
+        return new Promise<Response>((resolve) => pendingDelays.push(resolve));
+      }
+      return new Response(null, { status: 204 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    const older = api.testNodeDelay('overlap-owner-node');
+    await vi.waitFor(() => expect(pendingDelays).toHaveLength(2));
+    const newer = api.testNodeDelay('overlap-owner-node');
+    await vi.waitFor(() => expect(pendingDelays).toHaveLength(4));
+
+    pendingDelays[2](Response.json({ delay: 90 }));
+    pendingDelays[3](Response.json({ delay: 90 }));
+    await expect(newer).resolves.toBe(90);
+    pendingDelays[0](Response.json({ delay: 180 }));
+    pendingDelays[1](Response.json({ delay: 180 }));
+    await expect(older).resolves.toBe(180);
+
+    await expect(api.listNodes()).resolves.toEqual([
+      { name: 'overlap-owner-node', delay: 90, active: true, testState: 'tested' }
+    ]);
+  });
+
+  it('restores the original state after cancel-start-cancel overlap', async () => {
+    type PendingDelay = { reject: (error: Error) => void };
+    const pendingDelays: PendingDelay[] = [];
+    let deferDelays = false;
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/providers/proxies')) return Response.json({ providers: {} });
+      if (path.endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: { type: 'Selector', now: 'cancel-owner-node', all: ['cancel-owner-node'] },
+            'cancel-owner-node': {}
+          }
+        });
+      }
+      if (path.includes('/delay')) {
+        if (!deferDelays) return Response.json({ delay: 77 });
+        return new Promise<Response>((_resolve, reject) => {
+          const pending = { reject };
+          pendingDelays.push(pending);
+          const abort = () => reject(new DOMException('Aborted', 'AbortError'));
+          if (init?.signal?.aborted) abort();
+          else init?.signal?.addEventListener('abort', abort, { once: true });
+        });
+      }
+      return new Response(null, { status: 204 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+    await expect(api.testNodeDelay('cancel-owner-node')).resolves.toBe(77);
+    deferDelays = true;
+
+    const olderController = new AbortController();
+    const older = api.testNodeDelay('cancel-owner-node', { signal: olderController.signal });
+    await vi.waitFor(() => expect(pendingDelays).toHaveLength(2));
+    const newerController = new AbortController();
+    const newer = api.testNodeDelay('cancel-owner-node', { signal: newerController.signal });
+    await vi.waitFor(() => expect(pendingDelays).toHaveLength(4));
+
+    olderController.abort();
+    await expect(older).rejects.toThrow(/aborted|cancelled/i);
+    await expect(api.listNodes()).resolves.toEqual([
+      { name: 'cancel-owner-node', delay: 77, active: true, testState: 'testing' }
+    ]);
+
+    newerController.abort();
+    await expect(newer).rejects.toThrow(/aborted|cancelled/i);
+    await expect(api.listNodes()).resolves.toEqual([
+      { name: 'cancel-owner-node', delay: 77, active: true, testState: 'tested' }
+    ]);
+  });
+
   it('updates every proxy provider reported by mihomo', async () => {
     const fetcher = vi.fn(async (url: string | URL | Request) => {
       if (String(url).endsWith('/providers/proxies')) {

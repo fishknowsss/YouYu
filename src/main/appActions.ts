@@ -1,6 +1,7 @@
 import type { AppSettingsInput, AppSnapshot, MihomoMode, ProxyNode, StrategyKey } from '../shared/ipc';
 import type { LifecycleController } from './lifecycle';
 import type { MihomoApiClient } from './mihomo/api';
+import { runRuntimeOperationWithSafeRetry } from './runtimeRecoveryPolicy';
 import type { AppSettings } from './storage/settings';
 
 type SettingsAccess = {
@@ -51,7 +52,7 @@ export async function saveSubscriptionSettings(
   await deps.settingsStore.update(next);
   options.signal?.throwIfAborted();
   if (deps.lifecycle.getStatus() === 'running') {
-    await restartWithRepairRetry(deps, options.signal);
+    await restartWithSafeRetry(deps, options.signal);
   }
   return deps.createSnapshot();
 }
@@ -68,7 +69,7 @@ export async function updateSubscriptionNodes(
 
   const wasStopped = deps.lifecycle.getStatus() !== 'running';
   if (wasStopped) {
-    await startWithRepairRetry(deps, options.signal);
+    await startWithSafeRetry(deps, options.signal);
     return deps.createSnapshot();
   }
 
@@ -76,7 +77,7 @@ export async function updateSubscriptionNodes(
     await deps.createMihomoApi({ secret: settings.controllerSecret }).updateProvider({ signal: options.signal });
   } catch (_error) {
     options.signal?.throwIfAborted();
-    await restartWithRepairRetry(deps, options.signal);
+    await restartWithSafeRetry(deps, options.signal);
   }
   return deps.createSnapshot();
 }
@@ -106,7 +107,7 @@ export async function testMihomoNode(
 ): Promise<AppSnapshot> {
   const settings = await deps.settingsStore.read();
   if (deps.lifecycle.getStatus() !== 'running') {
-    await startWithRepairRetry(deps);
+    await startWithSafeRetry(deps);
   }
   const delay = await deps.createMihomoApi({ secret: settings.controllerSecret }).testNodeDelay(name);
   await options.onDelayTested?.(name, delay);
@@ -116,7 +117,7 @@ export async function testMihomoNode(
 export async function testAllMihomoNodes(deps: AppActionDeps, options: TestAllNodesOptions = {}): Promise<AppSnapshot> {
   const settings = await deps.settingsStore.read();
   if (deps.lifecycle.getStatus() !== 'running') {
-    await startWithRepairRetry(deps);
+    await startWithSafeRetry(deps);
   }
   await deps.createMihomoApi({ secret: settings.controllerSecret }).testAllNodes({
     signal: options.signal,
@@ -136,7 +137,7 @@ export async function closeMihomoConnections(deps: AppActionDeps): Promise<AppSn
   return deps.createSnapshot();
 }
 
-async function startWithRepairRetry(
+async function startWithSafeRetry(
   deps: Pick<AppActionDeps, 'lifecycle' | 'runtime'>,
   signal?: AbortSignal
 ): Promise<void> {
@@ -144,17 +145,10 @@ async function startWithRepairRetry(
     await deps.runtime.start(signal);
     return;
   }
-  try {
-    await deps.lifecycle.start(signal);
-  } catch {
-    signal?.throwIfAborted();
-    await deps.lifecycle.repair(signal).catch(() => undefined);
-    signal?.throwIfAborted();
-    await deps.lifecycle.start(signal);
-  }
+  await runRuntimeOperationWithSafeRetry(() => deps.lifecycle.start(signal), { signal });
 }
 
-async function restartWithRepairRetry(
+async function restartWithSafeRetry(
   deps: Pick<AppActionDeps, 'lifecycle' | 'runtime'>,
   signal?: AbortSignal
 ): Promise<void> {
@@ -164,5 +158,5 @@ async function restartWithRepairRetry(
   }
   await deps.lifecycle.stop();
   signal?.throwIfAborted();
-  await startWithRepairRetry(deps, signal);
+  await startWithSafeRetry(deps, signal);
 }

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS traffic_daily (
 CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_device_key ON devices(device_key) WHERE device_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_traffic_daily_user_date ON traffic_daily(user_id, date);
+CREATE INDEX IF NOT EXISTS idx_traffic_daily_date_user ON traffic_daily(date, user_id);
 
 CREATE TABLE IF NOT EXISTS traffic_reports (
   id TEXT PRIMARY KEY,
@@ -51,6 +52,17 @@ CREATE TABLE IF NOT EXISTS traffic_reports (
 
 CREATE INDEX IF NOT EXISTS idx_traffic_reports_user_created ON traffic_reports(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_traffic_reports_created_at ON traffic_reports(created_at);
+
+CREATE TABLE IF NOT EXISTS traffic_report_dedup (
+  id TEXT PRIMARY KEY,
+  payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),
+  traffic_date TEXT NOT NULL,
+  anomaly INTEGER NOT NULL DEFAULT 0 CHECK (anomaly IN (0, 1)),
+  legacy_device_id TEXT,
+  legacy_upload_delta INTEGER,
+  legacy_download_delta INTEGER,
+  legacy_reported_at TEXT
+) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS rate_limits (
   key TEXT PRIMARY KEY,
@@ -72,6 +84,14 @@ CREATE TABLE IF NOT EXISTS remote_config (
   direct_rules TEXT NOT NULL DEFAULT '[]',
   proxy_rules TEXT NOT NULL DEFAULT '[]',
   anomaly_threshold_bytes INTEGER NOT NULL DEFAULT 1073741824,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  traffic_limit_bytes INTEGER NOT NULL DEFAULT 3380139261952
+    CHECK (traffic_limit_bytes > 0 AND traffic_limit_bytes <= 9007199254740991),
+  traffic_expires_at TEXT NOT NULL DEFAULT '2026-08-11T20:00:00.000Z',
   updated_at TEXT NOT NULL
 );
 

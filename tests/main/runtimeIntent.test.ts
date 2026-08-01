@@ -27,7 +27,7 @@ describe('createRuntimeIntentController', () => {
   it('does not create a user start intent until the registration guard passes', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
     const startProxy = source.slice(
-      source.indexOf('async function startProxy'),
+      source.indexOf('async function performStartProxy'),
       source.indexOf('async function selectBestAutoNode')
     );
 

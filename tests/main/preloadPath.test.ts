@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import { productionRendererCsp } from '../../scripts/renderer-csp';
 
 describe('packaged preload path', () => {
   it('loads the electron-vite preload output file', async () => {
@@ -19,9 +20,12 @@ describe('packaged preload path', () => {
     expect(source).toContain("window.webContents.on('will-navigate'");
     expect(source).toContain("window.webContents.on('will-attach-webview'");
     expect(source).toContain('untrusted IPC sender');
+    expect(source).toContain('parseIpcArguments(channel, args)');
     expect(source).toContain('await systemProxy.restore()');
+    expect(source).toContain("recordError('恢复遗留系统代理失败', error)");
     expect(html).toContain('Content-Security-Policy');
-    expect(html).toContain("object-src 'none'");
+    expect(html).toContain('__YOUYU_RENDERER_CSP__');
+    expect(productionRendererCsp).toContain("object-src 'none'");
     expect(builder).toContain('requestedExecutionLevel: asInvoker');
     expect(builder).toContain('perMachine: true');
     expect(installer).not.toContain('SetShellVarContext current');

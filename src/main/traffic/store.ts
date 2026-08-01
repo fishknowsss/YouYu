@@ -87,15 +87,23 @@ export type TrafficSecretStorage = {
 
 type TrafficStoreOptions = {
   secretStorage?: TrafficSecretStorage;
+  checkpointIntervalMs?: number;
 };
 
 const trafficFileName = 'traffic.json';
 const currentVersion = 4;
 const trafficTimeZoneOffsetMs = 8 * 60 * 60 * 1000;
+const defaultCheckpointIntervalMs = 30_000;
+const maxDailyEntries = 400;
+const maxNodeUsageEntries = 512;
+export const trafficIdentityRequiresReregistration = 'traffic device identity requires re-registration';
 
 export class TrafficStore {
   private readonly filePath: string;
   private queue: Promise<unknown> = Promise.resolve();
+  private cached: TrafficFile | undefined;
+  private dirty = false;
+  private checkpointTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly baseDir: string,
@@ -105,15 +113,19 @@ export class TrafficStore {
   }
 
   async read(): Promise<TrafficFile> {
-    return this.enqueue(() => this.readCurrent());
+    return this.enqueue(async () => structuredClone(await this.readCurrent()));
+  }
+
+  async flush(): Promise<void> {
+    await this.enqueue(() => this.persistCached());
   }
 
   private async readCurrent(): Promise<TrafficFile> {
+    if (this.cached) return this.cached;
     const result = await readJsonFile<Partial<TrafficFile>>(this.filePath, {
       preserveInvalid: false,
       validate: (value) =>
-        typeof value?.deviceSeed === 'string' &&
-        typeof value.totalUpload === 'number' &&
+        typeof value?.totalUpload === 'number' &&
         typeof value.totalDownload === 'number' &&
         Boolean(value.daily) &&
         typeof value.daily === 'object',
@@ -124,6 +136,7 @@ export class TrafficStore {
     });
     if (result.status === 'found') {
       const normalized = this.normalize(result.value);
+      this.cached = normalized;
       const legacyPending = normalized.pendingRegistration;
       if (legacyPending?.passphrase && !this.options.secretStorage?.isEncryptionAvailable()) {
         const sanitized = {
@@ -156,6 +169,7 @@ export class TrafficStore {
     }
 
     const defaults = this.createDefaults();
+    this.cached = defaults;
     await this.write(defaults, false);
     await this.removeLegacySecretArtifacts();
     return defaults;
@@ -208,7 +222,7 @@ export class TrafficStore {
             : (current.reportStatus ?? 'idle'),
         reportError: undefined
       };
-      await this.write(next);
+      this.stage(next);
     });
   }
 
@@ -258,7 +272,8 @@ export class TrafficStore {
   async activateIdentity(
     identity: Omit<TrafficIdentity, 'registeredAt'>,
     totals: ActivationTrafficTotals,
-    syncedAt = new Date()
+    syncedAt = new Date(),
+    expectedDeviceSeed?: string
   ): Promise<{ identity: TrafficIdentity; pendingUpload: number; pendingDownload: number }> {
     const totalUpload = normalizeOptionalBytes(totals.totalUpload);
     const totalDownload = normalizeOptionalBytes(totals.totalDownload);
@@ -277,6 +292,11 @@ export class TrafficStore {
 
     return this.enqueue(async () => {
       const current = await this.readCurrent();
+      if (expectedDeviceSeed && current.deviceSeed !== expectedDeviceSeed) {
+        throw Object.assign(new Error('traffic device seed changed during activation'), {
+          code: 'DEVICE_SEED_STALE'
+        });
+      }
       const sameIdentity = isSameTrafficIdentity(current.identity, identity);
       const replacingVerifiedIdentity = Boolean(
         current.identity && current.identity.verificationStatus !== 'pending' && !sameIdentity
@@ -596,7 +616,7 @@ export class TrafficStore {
   }
 
   async getDeviceSecret(): Promise<string | undefined> {
-    const current = await this.read();
+    const current = await this.enqueue(() => this.readCurrent());
     return current.deviceSeed;
   }
 
@@ -604,7 +624,7 @@ export class TrafficStore {
     identity?: TrafficIdentity;
     stats: PersistentTrafficStats;
   }> {
-    const current = await this.read();
+    const current = await this.enqueue(() => this.readCurrent());
     const today = current.daily[toDateKey(now)] ?? { upload: 0, download: 0 };
     const serverTotalUpload = current.serverTotalUpload;
     const serverTotalDownload = current.serverTotalDownload;
@@ -646,7 +666,53 @@ export class TrafficStore {
   }
 
   private async write(value: TrafficFile, backupExisting = true): Promise<void> {
-    await writeJsonFileAtomic(this.filePath, this.normalize(value), { backupExisting, preserveInvalid: false });
+    this.cached = this.normalize(value);
+    this.dirty = true;
+    try {
+      await this.persistCached(backupExisting);
+    } catch (error) {
+      this.scheduleCheckpoint();
+      throw error;
+    }
+  }
+
+  private stage(value: TrafficFile): void {
+    this.cached = this.normalize(value);
+    this.dirty = true;
+    this.scheduleCheckpoint();
+  }
+
+  private async persistCached(backupExisting = true): Promise<void> {
+    if (!this.dirty || !this.cached) return;
+    const value = this.cached;
+    await writeJsonFileAtomic(this.filePath, value, { backupExisting, preserveInvalid: false });
+    if (this.cached === value) {
+      this.dirty = false;
+      this.clearCheckpoint();
+    }
+  }
+
+  private scheduleCheckpoint(): void {
+    if (this.checkpointTimer || !this.dirty) return;
+    const configured = this.options.checkpointIntervalMs ?? defaultCheckpointIntervalMs;
+    const delay = Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : defaultCheckpointIntervalMs;
+    this.checkpointTimer = setTimeout(() => {
+      this.checkpointTimer = undefined;
+      void this.enqueue(async () => {
+        try {
+          await this.persistCached();
+        } catch {
+          // Keep the dirty snapshot in memory. The next mutation or the explicit shutdown flush retries it.
+        }
+      });
+    }, delay);
+    this.checkpointTimer.unref?.();
+  }
+
+  private clearCheckpoint(): void {
+    if (!this.checkpointTimer) return;
+    clearTimeout(this.checkpointTimer);
+    this.checkpointTimer = undefined;
   }
 
   private async removeLegacySecretArtifacts(): Promise<void> {
@@ -687,32 +753,36 @@ export class TrafficStore {
   }
 
   private normalize(value: Partial<TrafficFile>): TrafficFile {
+    const deviceSeed = normalizeDeviceSeed(value.deviceSeed);
+    const identityInvalidated = !deviceSeed && hasIdentityBoundState(value);
     return {
       version: currentVersion,
-      deviceSeed: typeof value.deviceSeed === 'string' && value.deviceSeed ? value.deviceSeed : randomUUID(),
-      identity: normalizeIdentity(value.identity),
-      pendingRegistration: normalizePendingRegistration(value.pendingRegistration),
+      deviceSeed: deviceSeed ?? randomUUID(),
+      identity: deviceSeed ? normalizeIdentity(value.identity) : undefined,
+      pendingRegistration: deviceSeed ? normalizePendingRegistration(value.pendingRegistration) : undefined,
       totalUpload: normalizeBytes(value.totalUpload),
       totalDownload: normalizeBytes(value.totalDownload),
-      serverTotalUpload: normalizeOptionalBytes(value.serverTotalUpload),
-      serverTotalDownload: normalizeOptionalBytes(value.serverTotalDownload),
-      serverTodayUpload: normalizeOptionalBytes(value.serverTodayUpload),
-      serverTodayDownload: normalizeOptionalBytes(value.serverTodayDownload),
-      serverTodayDate: normalizeDateKey(value.serverTodayDate),
-      serverTodayLocalUpload: normalizeOptionalBytes(value.serverTodayLocalUpload),
-      serverTodayLocalDownload: normalizeOptionalBytes(value.serverTodayLocalDownload),
-      serverUserId: typeof value.serverUserId === 'string' ? value.serverUserId : undefined,
-      serverDeviceId: typeof value.serverDeviceId === 'string' ? value.serverDeviceId : undefined,
-      serverSyncedAt: typeof value.serverSyncedAt === 'string' ? value.serverSyncedAt : undefined,
+      serverTotalUpload: deviceSeed ? normalizeOptionalBytes(value.serverTotalUpload) : undefined,
+      serverTotalDownload: deviceSeed ? normalizeOptionalBytes(value.serverTotalDownload) : undefined,
+      serverTodayUpload: deviceSeed ? normalizeOptionalBytes(value.serverTodayUpload) : undefined,
+      serverTodayDownload: deviceSeed ? normalizeOptionalBytes(value.serverTodayDownload) : undefined,
+      serverTodayDate: deviceSeed ? normalizeDateKey(value.serverTodayDate) : undefined,
+      serverTodayLocalUpload: deviceSeed ? normalizeOptionalBytes(value.serverTodayLocalUpload) : undefined,
+      serverTodayLocalDownload: deviceSeed ? normalizeOptionalBytes(value.serverTodayLocalDownload) : undefined,
+      serverUserId: deviceSeed && typeof value.serverUserId === 'string' ? value.serverUserId : undefined,
+      serverDeviceId: deviceSeed && typeof value.serverDeviceId === 'string' ? value.serverDeviceId : undefined,
+      serverSyncedAt: deviceSeed && typeof value.serverSyncedAt === 'string' ? value.serverSyncedAt : undefined,
       pendingUpload: normalizeBytes(value.pendingUpload),
       pendingDownload: normalizeBytes(value.pendingDownload),
-      pendingReport: normalizePendingReport(value.pendingReport),
+      pendingReport: deviceSeed ? normalizePendingReport(value.pendingReport) : undefined,
       daily: normalizeDaily(value.daily),
       nodeUsage: normalizeNodeUsage(value.nodeUsage),
       lastUpdatedAt: typeof value.lastUpdatedAt === 'string' ? value.lastUpdatedAt : undefined,
-      lastReportedAt: typeof value.lastReportedAt === 'string' ? value.lastReportedAt : undefined,
-      reportStatus: normalizeReportStatus(value.reportStatus),
-      reportError: typeof value.reportError === 'string' ? value.reportError : undefined
+      lastReportedAt: deviceSeed && typeof value.lastReportedAt === 'string' ? value.lastReportedAt : undefined,
+      reportStatus: identityInvalidated ? 'failed' : normalizeReportStatus(value.reportStatus),
+      reportError: identityInvalidated
+        ? trafficIdentityRequiresReregistration
+        : normalizeOptionalText(value.reportError, 2048)
     };
   }
 
@@ -881,31 +951,50 @@ function normalizePendingReport(value: unknown): PendingTrafficReport | undefine
 
 function normalizeDaily(value: unknown): Record<string, TrafficDay> {
   if (!value || typeof value !== 'object') return {};
-  const next: Record<string, TrafficDay> = {};
+  const entries: Array<[string, TrafficDay]> = [];
   for (const [key, day] of Object.entries(value as Record<string, Partial<TrafficDay>>)) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) continue;
-    next[key] = {
-      upload: normalizeBytes(day.upload),
-      download: normalizeBytes(day.download)
-    };
+    entries.push([
+      key,
+      {
+        upload: normalizeBytes(day.upload),
+        download: normalizeBytes(day.download)
+      }
+    ]);
   }
-  return next;
+  if (entries.length <= maxDailyEntries) return Object.fromEntries(entries);
+  return Object.fromEntries(entries.toSorted(([left], [right]) => right.localeCompare(left)).slice(0, maxDailyEntries));
 }
 
 function normalizeNodeUsage(value: unknown): Record<string, TrafficNodeUsage> {
   if (!value || typeof value !== 'object') return {};
-  const next: Record<string, TrafficNodeUsage> = {};
+  const entries: Array<[string, TrafficNodeUsage]> = [];
   for (const [key, usage] of Object.entries(value as Record<string, Partial<TrafficNodeUsage>>)) {
     const nodeName = normalizeNodeName(key);
     if (!nodeName) continue;
-    next[nodeName] = {
-      upload: normalizeBytes(usage.upload),
-      download: normalizeBytes(usage.download),
-      durationMs: normalizeDurationMs(usage.durationMs),
-      lastUsedAt: typeof usage.lastUsedAt === 'string' ? usage.lastUsedAt : undefined
-    };
+    entries.push([
+      nodeName,
+      {
+        upload: normalizeBytes(usage.upload),
+        download: normalizeBytes(usage.download),
+        durationMs: normalizeDurationMs(usage.durationMs),
+        lastUsedAt: typeof usage.lastUsedAt === 'string' ? usage.lastUsedAt : undefined
+      }
+    ]);
   }
-  return next;
+  if (entries.length <= maxNodeUsageEntries) return Object.fromEntries(entries);
+  return Object.fromEntries(
+    entries
+      .toSorted(([leftName, left], [rightName, right]) => {
+        const time = parseTimestamp(right.lastUsedAt) - parseTimestamp(left.lastUsedAt);
+        if (time) return time;
+        const bytes = right.upload + right.download - (left.upload + left.download);
+        if (bytes) return bytes;
+        if (right.durationMs !== left.durationMs) return right.durationMs - left.durationMs;
+        return leftName.localeCompare(rightName);
+      })
+      .slice(0, maxNodeUsageEntries)
+  );
 }
 
 function summarizeNodeUsage(value: Record<string, TrafficNodeUsage>): PersistentTrafficStats['nodeUsage'] {
@@ -966,8 +1055,37 @@ function normalizeDurationMs(value: unknown): number {
 function normalizeNodeName(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const text = value.trim();
-  if (!text || text === 'DIRECT') return undefined;
+  if (!text || text === 'DIRECT' || text.length > 256) return undefined;
   return text;
+}
+
+function normalizeDeviceSeed(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const seed = value.trim();
+  return seed || undefined;
+}
+
+function hasIdentityBoundState(value: Partial<TrafficFile>): boolean {
+  return Boolean(
+    value.identity ||
+    value.pendingRegistration ||
+    value.pendingReport ||
+    value.serverUserId ||
+    value.serverDeviceId ||
+    value.serverSyncedAt ||
+    value.lastReportedAt
+  );
+}
+
+function normalizeOptionalText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  return text ? text.slice(0, maxLength) : undefined;
+}
+
+function parseTimestamp(value: string | undefined): number {
+  const timestamp = Date.parse(value ?? '');
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function normalizeReportStatus(value: unknown): PersistentTrafficStats['reportStatus'] {

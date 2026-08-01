@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AppSnapshot,
   ConnectivityCategory,
@@ -51,9 +51,18 @@ const services: Array<{
 const maxCacheEntries = 12;
 const connectivityCache = new Map<string, { results: TestResults; activeKey: ConnectivityServiceKey }>();
 
-export function TestPage({ snapshot }: TestPageProps) {
+export const TestPage = memo(TestPageView, areTestPagePropsEqual);
+
+function TestPageView({ snapshot }: TestPageProps) {
   const cacheKey = getConnectivityCacheKey(snapshot);
   return <TestPageContent key={cacheKey} snapshot={snapshot} cacheKey={cacheKey} />;
+}
+
+function areTestPagePropsEqual(previous: TestPageProps, next: TestPageProps): boolean {
+  return (
+    previous.snapshot.status === next.snapshot.status &&
+    getConnectivityCacheKey(previous.snapshot) === getConnectivityCacheKey(next.snapshot)
+  );
 }
 
 function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: string }) {
@@ -63,6 +72,7 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
   const [stoppingAll, setStoppingAll] = useState(false);
   const activeRef = useRef(true);
   const runGenerationRef = useRef(0);
+  const individualRunsRef = useRef(new Map<ConnectivityServiceKey, symbol>());
   const activeRequestIdsRef = useRef(new Set<string>());
   const apiReady = Boolean(window.youyu);
   const proxyReady = snapshot.status === 'running';
@@ -72,10 +82,12 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
 
   useEffect(() => {
     const activeRequestIds = activeRequestIdsRef.current;
+    const individualRuns = individualRunsRef.current;
     activeRef.current = true;
     return () => {
       activeRef.current = false;
       runGenerationRef.current += 1;
+      individualRuns.clear();
       const api = window.youyu;
       for (const requestId of activeRequestIds) {
         void api?.cancelOperation(requestId).catch(() => false);
@@ -87,50 +99,28 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
 
   async function testOne(key: ConnectivityServiceKey) {
     const api = window.youyu;
-    if (!api || !proxyReady) return;
+    if (!api || !proxyReady || busyAll || stoppingAll || individualRunsRef.current.has(key)) return;
 
-    const runGeneration = ++runGenerationRef.current;
+    const runToken = Symbol(key);
+    individualRunsRef.current.set(key, runToken);
     selectActiveKey(key);
-    commitResults(
-      (current) => ({
-        ...current,
-        [key]: {
-          ...current[key],
-          testing: true
-        }
-      }),
-      runGeneration
-    );
+    commitIndividualResult(key, runToken, (current) => ({
+      ...current,
+      testing: true
+    }));
     try {
       const result = await requestConnectivityTest(api, key);
-      commitResults(
-        (current) => ({
-          ...current,
-          [key]: result
-        }),
-        runGeneration
-      );
+      commitIndividualResult(key, runToken, () => result);
     } catch (error) {
-      commitResults(
-        (current) => ({
-          ...current,
-          [key]: {
-            ...current[key],
-            status: 'failed',
-            statusText: '失败',
-            checkedAt: new Date().toISOString(),
-            testing: false,
-            error: error instanceof Error ? error.message : String(error)
-          }
-        }),
-        runGeneration
-      );
+      commitIndividualResult(key, runToken, (current) => createFailedResult(current, error));
+    } finally {
+      if (individualRunsRef.current.get(key) === runToken) individualRunsRef.current.delete(key);
     }
   }
 
   async function testAll() {
     const api = window.youyu;
-    if (!api || !proxyReady) return;
+    if (!api || !proxyReady || individualRunsRef.current.size > 0) return;
 
     const runGeneration = ++runGenerationRef.current;
     setBusyAll(true);
@@ -170,6 +160,15 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
     const next = updater(getCachedResults(cacheKey));
     setCachedResults(cacheKey, next);
     setResults(next);
+  }
+
+  function commitIndividualResult(
+    key: ConnectivityServiceKey,
+    runToken: symbol,
+    updater: (current: TestRow) => TestRow
+  ) {
+    if (!activeRef.current || individualRunsRef.current.get(key) !== runToken) return;
+    commitResults((current) => ({ ...current, [key]: updater(current[key]) }));
   }
 
   async function requestConnectivityTest(api: ConnectivityApi, key: ConnectivityServiceKey) {
@@ -234,7 +233,7 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
         actions={
           <button
             className="wide-button"
-            disabled={!apiReady || !proxyReady || stoppingAll}
+            disabled={!apiReady || !proxyReady || stoppingAll || (!busyAll && individualRunsRef.current.size > 0)}
             onClick={() => void (busyAll ? stopAll() : testAll())}
             aria-pressed={busyAll}
           >

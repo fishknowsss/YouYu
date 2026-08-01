@@ -2,6 +2,25 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 describe('traffic identity runtime handoff', () => {
+  it('guards the complete runtime handoff before entering its critical section', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const entry = source.slice(
+      source.indexOf('async function registerTrafficIdentity'),
+      source.indexOf('async function performTrafficIdentityRegistration')
+    );
+    const criticalSection = source.slice(
+      source.indexOf('async function performTrafficIdentityRegistration'),
+      source.indexOf('async function cancelProxyStart')
+    );
+
+    expect(entry).toContain(
+      'return trafficRegistration.runExclusiveForeground(() => performTrafficIdentityRegistration(input));'
+    );
+    expect(entry).not.toContain('trafficStore.getSnapshot()');
+    expect(criticalSection).toContain('await trafficTracker.flush()');
+    expect(criticalSection).toContain('resumeTrafficCollection()');
+  });
+
   it('settles the old cloud usage before committing a verified user switch', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
     const registration = source.slice(
@@ -43,7 +62,7 @@ describe('traffic identity runtime handoff', () => {
       changedIdentityBranch.indexOf('await syncRemoteConfig')
     );
     expect(changedIdentityBranch.indexOf('await syncRemoteConfig')).toBeLessThan(
-      changedIdentityBranch.indexOf('await restartLifecycleForIntent(newIntentGeneration)')
+      changedIdentityBranch.indexOf('await restartLifecycleForExpectedIntent(newIntentGeneration)')
     );
     expect(changedIdentityBranch).not.toContain("lifecycle.getStatus() === 'running'");
     expect(registration).toContain("} else if (lifecycle.getStatus() === 'running')");
@@ -56,7 +75,7 @@ describe('traffic identity runtime handoff', () => {
       source.indexOf('function runtimeActionsForIntent')
     );
 
-    expect(restart).toContain('await lifecycle.restart(signal)');
+    expect(restart).toContain('runRuntimeOperationWithSafeRetry(() => lifecycle.restart(signal)');
     expect(restart).toContain('throwIfRuntimeIntentCanceled(intentGeneration)');
   });
 
@@ -72,7 +91,7 @@ describe('traffic identity runtime handoff', () => {
     expect(registration).toContain('recordPostCommitIssue');
     expect(registration).toContain('await applyRemoteSubscription(undefined)');
     expect(registration).toContain('throwOnError: true');
-    expect(registration).toContain('await restartLifecycleForIntent(newIntentGeneration)');
+    expect(registration).toContain('await restartLifecycleForExpectedIntent(newIntentGeneration)');
     expect(registration).toContain('if (!postCommitIssue) clearLastError()');
   });
 });

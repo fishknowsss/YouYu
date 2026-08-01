@@ -1,9 +1,9 @@
 import React from 'react';
-import { readFile } from 'node:fs/promises';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { AppSnapshot } from '../../src/shared/ipc';
 import { Settings } from '../../src/renderer/pages/Settings';
+import { readRendererStyles } from './helpers/rendererStyles';
 
 describe('settings diagnostic export', () => {
   it('places the exportable log count to the left of a concise export button', () => {
@@ -26,16 +26,18 @@ describe('settings diagnostic export', () => {
     expect(html).toContain('class="settings-diagnostics-summary" role="status" aria-live="polite" aria-atomic="true"');
     expect(html).toContain('诊断日志');
     expect(html).toContain('37 条');
-    expect(html).toContain('class="secondary-button settings-footer-action settings-diagnostics-export"');
+    expect(html).toContain(
+      'class="secondary-button settings-footer-action settings-diagnostics-export settings-action-export"'
+    );
     expect(html).toContain('>导出</button>');
-    expect(html).toContain('class="secondary-button settings-footer-action"');
+    expect(html).toContain('class="secondary-button settings-action-check settings-footer-action"');
     expect(html).toContain('>检查</button>');
     expect(html).toContain('class="settings-action-status is-error"');
     expect(html).toContain('DNS 异常 · 点击修复');
   });
 
   it('keeps all six settings rows on one grid and gives diagnostics a full-width action', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     const formRule = getRule(styles, '.settings-form-grid');
     const rowRule = getRule(styles, '.settings-row');
     const barRule = getRule(styles, '.settings-diagnostics-bar');
@@ -74,7 +76,7 @@ describe('settings diagnostic export', () => {
     );
 
     expect(html).toMatch(
-      /<button class="secondary-button settings-footer-action settings-diagnostics-export" disabled="">导出中<\/button>/
+      /<button class="secondary-button settings-footer-action settings-diagnostics-export settings-action-export" disabled="">导出中<\/button>/
     );
   });
 
@@ -88,7 +90,7 @@ describe('settings diagnostic export', () => {
   it('caps a long diagnostic status without moving the log count or export action', async () => {
     const longMessage = `无法连接后台：${'网络路径仍不可用'.repeat(12)}`;
     const html = renderSettings(longMessage, createSnapshot(200));
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     const statusRule = getRule(styles, '.settings-action-status');
 
     expect(html).toContain(longMessage);
@@ -156,7 +158,7 @@ describe('settings diagnostic export', () => {
   });
 
   it('does not apply the secondary hover surface to disabled buttons', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     expect(styles).toContain('.secondary-button:hover:not(:disabled)');
     expect(styles).toContain('.wide-button:hover:not(:disabled)');
     expect(styles).not.toContain('.secondary-button:hover,');
@@ -164,7 +166,7 @@ describe('settings diagnostic export', () => {
   });
 
   it('keeps the selected sidebar item on an accent surface while hovering', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     const selectedHoverRule = getRule(styles, '.nav-list button.active:hover:not(:disabled)');
 
     expect(styles).toContain('.nav-list button:not(.active):hover:not(:disabled)');
@@ -173,14 +175,34 @@ describe('settings diagnostic export', () => {
   });
 
   it('keeps the hidden version entry visually inert and lifted from the bottom edge', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
+    const shellRule = getRule(styles, '.app-shell');
     const versionRule = getRule(styles, '.version-chip');
+    const versionTextRule = getRule(styles, '.version-chip span');
 
+    expect(shellRule).toContain('--sidebar-version-width: 88px;');
     expect(versionRule).toContain('width: var(--sidebar-version-width);');
     expect(versionRule).toContain('var(--sidebar-block-padding)');
     expect(versionRule).not.toContain('transition:');
+    expect(versionTextRule).not.toContain('text-overflow: ellipsis');
+    expect(versionTextRule).not.toContain('overflow: hidden');
     expect(styles).not.toContain('.version-chip:hover:not(:disabled)');
     expect(styles).not.toContain('.version-chip:active:not(:disabled)');
+  });
+
+  it('gives every settings utility action an explicit hover state and semantic tone', async () => {
+    const styles = await readRendererStyles();
+    const repair = getRule(styles, '.settings-action-repair');
+    const repairHover = getRule(styles, '.settings-action-repair:hover:not(:disabled)');
+    const check = getRule(styles, '.settings-action-check');
+    const checkHover = getRule(styles, '.settings-action-check:hover:not(:disabled)');
+
+    expect(styles).toContain('.settings-action-sync:hover:not(:disabled)');
+    expect(styles).toContain('.settings-action-export:hover:not(:disabled)');
+    expect(repair).toContain('background: var(--danger-soft);');
+    expect(repairHover).toContain('background: var(--danger-soft-hover);');
+    expect(check).toContain('background: var(--accent-secondary);');
+    expect(checkHover).toContain('background: var(--accent-secondary-hover);');
   });
 });
 

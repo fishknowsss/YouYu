@@ -151,6 +151,29 @@ async function startTruncatedHttpProxy() {
   };
 }
 
+async function startOversizedHttpProxy(declaredLength: number) {
+  const sockets = new Set<Socket>();
+  const server = createHttpServer((request, response) => {
+    request.resume();
+    request.once('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': String(declaredLength)
+      });
+      response.end('{}');
+    });
+  });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+  const port = await listen(server);
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: () => closeServer(server, sockets)
+  };
+}
+
 function writeChunkedJson(socket: TLSSocket, body: unknown): void {
   const json = JSON.stringify(body);
   const chunks = [json.slice(0, 17), json.slice(17, 49), json.slice(49)];
@@ -292,12 +315,14 @@ describe('RemoteConfigClient cache', () => {
   it('reconciles the identity-bound cache before the main process performs a network sync', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
     const sync = source.slice(
-      source.indexOf('async function syncRemoteConfig'),
-      source.indexOf('function startRemoteConfigPolling')
+      source.indexOf('async function performRemoteConfigSync'),
+      source.indexOf('async function syncRemoteConfig')
     );
 
-    expect(sync.indexOf('remoteConfigClient.getActiveConfig()')).toBeLessThan(sync.indexOf('remoteConfigClient.sync('));
-    expect(sync.indexOf('applyRemoteSubscription(await remoteConfigClient.getActiveConfig())')).toBeLessThan(
+    expect(sync.indexOf('const cachedSnapshot = await remoteConfigClient.getActiveConfigSnapshot()')).toBeLessThan(
+      sync.indexOf('remoteConfigClient.sync(')
+    );
+    expect(sync.indexOf('applyRemoteSubscription(cachedSnapshot.config, cachedSnapshot)')).toBeLessThan(
       sync.indexOf('remoteConfigClient.sync(')
     );
   });
@@ -483,6 +508,27 @@ describe('RemoteConfigClient cache', () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  it('rejects an oversized direct remote-config response before parsing it', async () => {
+    const body = JSON.stringify({
+      config: { version: 7, enabled: true, directRules: [], proxyRules: [] }
+    });
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.6.8',
+      store: createRegisteredStore(),
+      fetch: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { 'content-length': String(256 * 1024 + 1) }
+          })
+      )
+    });
+
+    await expect(client.sync()).rejects.toThrow('code=RESPONSE_BODY_TOO_LARGE');
+  });
+
   it('discards a response when the registered identity changes while the request is in flight', async () => {
     await writeFile(join(dir, 'remote-config.json'), JSON.stringify(cacheEnvelope()), 'utf8');
     let identity = { userId: 'user-1', deviceId: 'device-1', verificationStatus: 'verified' as const };
@@ -611,6 +657,39 @@ describe('RemoteConfigClient cache', () => {
     }
   });
 
+  it('rejects an oversized remote-config response through an HTTPS CONNECT tunnel', async () => {
+    const origin = await startTlsOrigin((socket) => {
+      socket.end(
+        [
+          'HTTP/1.1 200 OK',
+          'Content-Type: application/json',
+          `Content-Length: ${256 * 1024 + 1}`,
+          'Connection: close',
+          '',
+          '{}'
+        ].join('\r\n')
+      );
+    });
+    const proxy = await startConnectProxy(origin.port);
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: `https://agent1:${origin.port}`,
+      appVersion: '1.6.8',
+      requestTimeoutMs: 1000,
+      store: createRegisteredStore(),
+      fetch: rejectDirectFetch
+    });
+
+    try {
+      await expect(within(withTestCertificate(() => client.sync({ proxyUrl: proxy.url })))).rejects.toThrow(
+        'code=RESPONSE_BODY_TOO_LARGE'
+      );
+    } finally {
+      await proxy.close();
+      await origin.close();
+    }
+  });
+
   it('does not trust an unknown TLS certificate merely because the request uses the local proxy', async () => {
     const origin = await startTlsOrigin((socket) => {
       writeChunkedJson(socket, {
@@ -650,6 +729,24 @@ describe('RemoteConfigClient cache', () => {
 
     try {
       await expect(within(client.sync({ proxyUrl: proxy.url }))).rejects.toThrow('remote config response aborted');
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it('rejects an oversized remote-config response received through an HTTP proxy', async () => {
+    const proxy = await startOversizedHttpProxy(256 * 1024 + 1);
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'http://config.invalid',
+      appVersion: '1.6.8',
+      requestTimeoutMs: 1000,
+      store: createRegisteredStore(),
+      fetch: rejectDirectFetch
+    });
+
+    try {
+      await expect(client.sync({ proxyUrl: proxy.url })).rejects.toThrow('code=RESPONSE_BODY_TOO_LARGE');
     } finally {
       await proxy.close();
     }

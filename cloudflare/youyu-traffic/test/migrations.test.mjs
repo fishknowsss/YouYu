@@ -17,7 +17,10 @@ test('legacy database can apply every migration in order', () => {
   for (const name of [
     '2026-07-03-add-remote-subscription-url.sql',
     '2026-07-08-security-and-idempotency.sql',
-    '2026-07-11-retention-cleanup.sql'
+    '2026-07-11-retention-cleanup.sql',
+    '2026-07-19-add-admin-traffic-limit.sql',
+    '2026-07-20-add-traffic-expiry-and-trend-index.sql',
+    '2026-08-01-persist-traffic-report-dedup.sql'
   ]) {
     database.exec(readFileSync(new URL(`migrations/${name}`, baseUrl), 'utf8'));
   }
@@ -26,7 +29,15 @@ test('legacy database can apply every migration in order', () => {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
     .all()
     .map((row) => row.name);
-  for (const table of ['remote_config', 'user_remote_config', 'traffic_anomalies', 'traffic_reports', 'rate_limits']) {
+  for (const table of [
+    'remote_config',
+    'admin_settings',
+    'user_remote_config',
+    'traffic_anomalies',
+    'traffic_reports',
+    'traffic_report_dedup',
+    'rate_limits'
+  ]) {
     assert.ok(tables.includes(table), `${table} should exist`);
   }
   const remoteColumns = database
@@ -35,6 +46,88 @@ test('legacy database can apply every migration in order', () => {
     .map((row) => row.name);
   assert.ok(remoteColumns.includes('subscription_url'));
   assert.ok(remoteColumns.includes('anomaly_threshold_bytes'));
+  assert.equal(
+    database.prepare('SELECT traffic_expires_at FROM admin_settings WHERE id = 1').get().traffic_expires_at,
+    '2026-08-11T20:00:00.000Z'
+  );
+  assert.equal(
+    database
+      .prepare(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_traffic_daily_date_user'"
+      )
+      .get().count,
+    1
+  );
+  database.close();
+});
+
+test('traffic report dedup migration backfills audit ids once without changing traffic totals', () => {
+  const database = new DatabaseSync(':memory:');
+  database.exec(currentSchema);
+  database.exec(`
+    DROP TABLE traffic_report_dedup;
+    INSERT INTO users (id, name, normalized_name, status, created_at)
+    VALUES ('user-1', 'Alice', 'alice', 'active', '2026-07-01T00:00:00.000Z');
+    INSERT INTO devices (id, user_id, device_seed, first_seen_at, last_seen_at)
+    VALUES ('device-1', 'user-1', 'seed-1', '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z');
+    INSERT INTO traffic_reports
+      (id, user_id, device_id, upload_delta, download_delta, reported_at, created_at)
+    VALUES
+      ('report-1', 'user-1', 'device-1', 1073741824, 200, '2026-07-01T00:00:00.000Z', '2026-07-01T20:00:00.000Z');
+    INSERT INTO traffic_daily
+      (user_id, device_id, date, upload_bytes, download_bytes, updated_at)
+    VALUES
+      ('user-1', 'device-1', '2026-07-02', 1073741824, 200, '2026-07-01T20:00:00.000Z');
+  `);
+  const migration = readFileSync(new URL('migrations/2026-08-01-persist-traffic-report-dedup.sql', baseUrl), 'utf8');
+
+  database.exec(migration);
+  assert.deepEqual(
+    { ...database.prepare('SELECT * FROM traffic_report_dedup WHERE id = ?').get('report-1') },
+    {
+      id: 'report-1',
+      payload_hash: null,
+      traffic_date: '2026-07-02',
+      anomaly: 1,
+      legacy_device_id: 'device-1',
+      legacy_upload_delta: 1073741824,
+      legacy_download_delta: 200,
+      legacy_reported_at: '2026-07-01T00:00:00.000Z'
+    }
+  );
+  database
+    .prepare(
+      `UPDATE traffic_report_dedup
+       SET payload_hash = ?, legacy_device_id = NULL, legacy_upload_delta = NULL,
+           legacy_download_delta = NULL, legacy_reported_at = NULL
+       WHERE id = ?`
+    )
+    .run('a'.repeat(64), 'report-1');
+  database.exec(migration);
+  assert.deepEqual(
+    {
+      ...database
+        .prepare(
+          `SELECT payload_hash, legacy_device_id, legacy_upload_delta, legacy_download_delta, legacy_reported_at
+           FROM traffic_report_dedup WHERE id = ?`
+        )
+        .get('report-1')
+    },
+    {
+      payload_hash: 'a'.repeat(64),
+      legacy_device_id: null,
+      legacy_upload_delta: null,
+      legacy_download_delta: null,
+      legacy_reported_at: null
+    }
+  );
+  assert.deepEqual(
+    { ...database.prepare('SELECT upload_bytes, download_bytes FROM traffic_daily').get() },
+    {
+      upload_bytes: 1073741824,
+      download_bytes: 200
+    }
+  );
   database.close();
 });
 
@@ -87,5 +180,34 @@ test('device identity and user merge migration normalizes removed remote control
     .get();
   assert.equal(mergeTable.name, 'user_merge_audit');
   assert.equal(deviceKeyIndex.name, 'idx_devices_device_key');
+  database.close();
+});
+
+test('admin settings migration installs the default traffic limit once and preserves later changes', () => {
+  const database = new DatabaseSync(':memory:');
+  const migration = readFileSync(new URL('migrations/2026-07-19-add-admin-traffic-limit.sql', baseUrl), 'utf8');
+
+  database.exec(migration);
+  assert.equal(
+    database.prepare('SELECT traffic_limit_bytes FROM admin_settings WHERE id = 1').get().traffic_limit_bytes,
+    3380139261952
+  );
+  assert.equal(
+    database.prepare('SELECT traffic_expires_at FROM admin_settings WHERE id = 1').get().traffic_expires_at,
+    '2026-08-11T20:00:00.000Z'
+  );
+
+  database
+    .prepare('UPDATE admin_settings SET traffic_limit_bytes = ?, traffic_expires_at = ? WHERE id = 1')
+    .run(987654321, '2026-09-01T00:00:00.000Z');
+  database.exec(migration);
+  assert.equal(
+    database.prepare('SELECT traffic_limit_bytes FROM admin_settings WHERE id = 1').get().traffic_limit_bytes,
+    987654321
+  );
+  assert.equal(
+    database.prepare('SELECT traffic_expires_at FROM admin_settings WHERE id = 1').get().traffic_expires_at,
+    '2026-09-01T00:00:00.000Z'
+  );
   database.close();
 });

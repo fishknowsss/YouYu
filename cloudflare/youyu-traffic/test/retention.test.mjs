@@ -93,23 +93,42 @@ test('scheduled handler defers cleanup with the scheduled timestamp', async () =
 
 test('scheduled cleanup remains failed when D1 maintenance rejects', async () => {
   let deferred;
-  worker.scheduled(
-    { scheduledTime: Date.now() },
-    {
-      DB: {
-        prepare() {
-          throw new Error('d1 unavailable');
+  const scheduledTime = Date.parse('2026-07-11T06:17:00.000Z');
+  const originalConsoleError = console.error;
+  const errors = [];
+  console.error = (...args) => errors.push(args);
+  try {
+    worker.scheduled(
+      { scheduledTime },
+      {
+        DB: {
+          prepare() {
+            throw new Error('d1 unavailable with secret-token and /private/path?userId=secret-user');
+          }
+        }
+      },
+      {
+        waitUntil(promise) {
+          deferred = promise;
         }
       }
-    },
-    {
-      waitUntil(promise) {
-        deferred = promise;
-      }
-    }
-  );
+    );
 
-  await assert.rejects(deferred, /d1 unavailable/);
+    await assert.rejects(deferred, /d1 unavailable/);
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.deepEqual(errors, [
+    [
+      {
+        event: 'retention_cleanup_error',
+        scheduledTime,
+        errorCode: 'D1_MAINTENANCE_FAILED'
+      }
+    ]
+  ]);
+  assert.doesNotMatch(JSON.stringify(errors), /secret-token|secret-user|private\/path|d1 unavailable/i);
 });
 
 test('manual maintenance endpoint remains admin-only', async () => {
@@ -119,5 +138,7 @@ test('manual maintenance endpoint remains admin-only', async () => {
   });
 
   assert.equal(response.status, 403);
-  assert.deepEqual(await response.json(), { error: 'admin disabled' });
+  const requestId = response.headers.get('x-request-id');
+  assert.match(requestId ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.deepEqual(await response.json(), { error: 'admin disabled', code: 'ADMIN_DISABLED', requestId });
 });

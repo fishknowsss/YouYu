@@ -47,6 +47,7 @@ export class TrafficTracker {
 
   async flush() {
     await this.sample();
+    await this.options.store.flush?.();
   }
 
   private async sample() {
@@ -105,10 +106,16 @@ export class TrafficTracker {
     let upload = 0;
     let download = 0;
 
-    for (const connection of connections) {
-      if (!isExcludedConnection(connection)) continue;
+    const excluded = connections.filter(isExcludedConnection);
+    const ordered = [
+      ...excluded.filter((connection) => this.excludedConnections.has(getConnectionKey(connection))),
+      ...excluded.filter((connection) => !this.excludedConnections.has(getConnectionKey(connection)))
+    ];
+    for (const connection of ordered) {
+      if (nextConnections.size >= maxTrackedExcludedConnections) break;
 
       const key = getConnectionKey(connection);
+      if (nextConnections.has(key)) continue;
       const currentUpload = normalizeBytes(connection.upload);
       const currentDownload = normalizeBytes(connection.download);
       const previous = this.excludedConnections.get(key);
@@ -126,6 +133,7 @@ export class TrafficTracker {
 }
 
 const excludedProcessNames = new Set(remoteDesktopProcessNames.map((name) => name.toLowerCase()));
+const maxTrackedExcludedConnections = 4096;
 
 function isExcludedConnection(connection: RuntimeConnectionStats): boolean {
   return [connection.metadata?.process, connection.metadata?.processPath]

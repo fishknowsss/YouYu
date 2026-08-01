@@ -46,6 +46,16 @@ function activationPayload(userId: string, deviceId: string, name: string) {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('TrafficReporter', () => {
   it('marks traffic reporting as not configured when the endpoint is missing', async () => {
     const store = new TrafficStore(dir);
@@ -102,6 +112,52 @@ describe('TrafficReporter', () => {
         userId: 'user_1',
         deviceId: 'device_1',
         name: 'Alice'
+      }
+    });
+  });
+
+  it('keeps the newest concurrent registration when activation responses finish out of order', async () => {
+    const firstResponse = deferred<Response>();
+    const secondResponse = deferred<Response>();
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(() => firstResponse.promise)
+      .mockImplementationOnce(() => secondResponse.promise);
+    const store = new TrafficStore(dir);
+    await store.addTraffic(100, 200);
+    const reporter = new TrafficReporter({
+      store,
+      endpoint: 'https://traffic.example.com',
+      appVersion: '1.6.9',
+      fetch
+    });
+    const reportPending = vi.spyOn(reporter, 'reportPending').mockResolvedValue();
+
+    const first = reporter.register({ name: 'Alice', passphrase: 'first-secret' });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    const second = reporter.register({ name: 'Bob', passphrase: 'second-secret' });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+
+    secondResponse.resolve(
+      new Response(JSON.stringify(activationPayload('shared-user', 'shared-device', 'Bob')), { status: 200 })
+    );
+    await expect(second).resolves.toMatchObject({
+      userId: 'shared-user',
+      deviceId: 'shared-device',
+      name: 'Bob'
+    });
+    expect(reportPending).toHaveBeenCalledTimes(1);
+
+    firstResponse.resolve(
+      new Response(JSON.stringify(activationPayload('shared-user', 'shared-device', 'Alice')), { status: 200 })
+    );
+    await expect(first).rejects.toThrow('本次流量登记已被较新的操作取代');
+    expect(reportPending).toHaveBeenCalledTimes(1);
+    await expect(store.getSnapshot()).resolves.toMatchObject({
+      identity: {
+        userId: 'shared-user',
+        deviceId: 'shared-device',
+        name: 'Bob'
       }
     });
   });
@@ -379,6 +435,29 @@ describe('TrafficReporter', () => {
     }
   });
 
+  it('rejects an oversized traffic response through an HTTPS CONNECT tunnel', async () => {
+    const origin = await startTruncatedTlsOrigin(64 * 1024 + 1, '{}');
+    const proxy = await startConnectProxy(origin.port);
+    const reporter = new TrafficReporter({
+      store: new TrafficStore(dir),
+      endpoint: `https://agent1:${origin.port}`,
+      appVersion: '1.6.8',
+      requestTimeoutMs: 1000,
+      fetch: rejectDirectFetch
+    });
+
+    try {
+      await expect(
+        within(
+          withTestCertificate(() => reporter.register({ name: 'Alice', passphrase: 'secret' }, { proxyUrl: proxy.url }))
+        )
+      ).rejects.toThrow('code=RESPONSE_BODY_TOO_LARGE');
+    } finally {
+      await proxy.close();
+      await origin.close();
+    }
+  });
+
   it('does not report traffic while the identity is still pending activation', async () => {
     let reportCount = 0;
     const endpoint = await startJsonServer(async () => {
@@ -467,6 +546,82 @@ describe('TrafficReporter', () => {
         totalSource: 'server',
         reportStatus: 'synced'
       }
+    });
+  });
+
+  it.each([
+    ['204 response', () => new Response(null, { status: 204 })],
+    ['empty object', () => new Response('{}', { status: 200 })],
+    ['negative acknowledgement', () => new Response('{"ok":false}', { status: 200 })],
+    ['missing traffic totals', () => new Response('{"ok":true}', { status: 200 })],
+    [
+      'negative total',
+      () => new Response('{"ok":true,"traffic":{"totalUpload":-1,"totalDownload":200}}', { status: 200 })
+    ],
+    [
+      'non-finite total',
+      () => new Response('{"ok":true,"traffic":{"totalUpload":1e999,"totalDownload":200}}', { status: 200 })
+    ]
+  ])('keeps pending traffic when a 2xx report result is an invalid %s', async (_label, createResponse) => {
+    const store = new TrafficStore(dir);
+    await store.createDeviceSeed();
+    await store.registerIdentity({ userId: 'user_1', deviceId: 'device_1', name: 'Alice', deviceName: 'DESKTOP' });
+    await store.addTraffic(100, 200);
+    const reporter = new TrafficReporter({
+      store,
+      endpoint: 'https://traffic.example.com',
+      appVersion: '1.6.5',
+      fetch: vi.fn(async () => createResponse())
+    });
+
+    await expect(reporter.reportPending()).rejects.toThrow('traffic report response invalid');
+
+    await expect(store.getSnapshot()).resolves.toMatchObject({
+      stats: {
+        pendingUpload: 100,
+        pendingDownload: 200,
+        reportStatus: 'failed'
+      }
+    });
+  });
+
+  it('rejects an oversized direct traffic response before parsing it', async () => {
+    const store = new TrafficStore(dir);
+    await store.createDeviceSeed();
+    await store.registerIdentity({ userId: 'user_1', deviceId: 'device_1', name: 'Alice', deviceName: 'DESKTOP' });
+    await store.addTraffic(100, 200);
+    const reporter = new TrafficReporter({
+      store,
+      endpoint: 'https://traffic.example.com',
+      appVersion: '1.6.5',
+      fetch: vi.fn(
+        async () => new Response('{}', { status: 200, headers: { 'content-length': String(64 * 1024 + 1) } })
+      )
+    });
+
+    await expect(reporter.reportPending()).rejects.toThrow('code=RESPONSE_BODY_TOO_LARGE');
+    await expect(store.getSnapshot()).resolves.toMatchObject({
+      stats: { pendingUpload: 100, pendingDownload: 200 }
+    });
+  });
+
+  it('rejects an oversized traffic response received through an HTTP proxy', async () => {
+    const proxyUrl = await startOversizedHttpProxy(64 * 1024 + 1);
+    const store = new TrafficStore(dir);
+    await store.createDeviceSeed();
+    await store.registerIdentity({ userId: 'user_1', deviceId: 'device_1', name: 'Alice', deviceName: 'DESKTOP' });
+    await store.addTraffic(100, 200);
+    const reporter = new TrafficReporter({
+      store,
+      endpoint: 'http://traffic.invalid',
+      appVersion: '1.6.5',
+      fetch: rejectDirectFetch,
+      getProxyUrl: () => proxyUrl
+    });
+
+    await expect(reporter.reportPending()).rejects.toThrow('code=RESPONSE_BODY_TOO_LARGE');
+    await expect(store.getSnapshot()).resolves.toMatchObject({
+      stats: { pendingUpload: 100, pendingDownload: 200 }
     });
   });
 
@@ -590,8 +745,9 @@ describe('TrafficReporter', () => {
 
     const firstReporter = new TrafficReporter({ store, endpoint, appVersion: '1.5.1' });
     await expect(firstReporter.reportPending()).rejects.toThrow('traffic report failed: 500');
+    const retryStore = new TrafficStore(dir);
     const retryReporter = new TrafficReporter({
-      store: new TrafficStore(dir),
+      store: retryStore,
       endpoint,
       appVersion: '1.5.1'
     });
@@ -599,7 +755,7 @@ describe('TrafficReporter', () => {
 
     expect(reportIds).toHaveLength(2);
     expect(reportIds[1]).toBe(reportIds[0]);
-    await expect(store.getSnapshot()).resolves.toMatchObject({
+    await expect(retryStore.getSnapshot()).resolves.toMatchObject({
       stats: { pendingUpload: 0, pendingDownload: 0, reportStatus: 'synced' }
     });
   });
@@ -739,8 +895,14 @@ describe('TrafficReporter', () => {
     expect(handler).toContain('trafficTracker.stop();');
     expect(handler).toContain('trafficReporter.stop();');
     expect(handler).toContain('stopNodeHealthMonitor();');
-    expect(handler).toContain('clearRuntimeRecoveryTimer();');
-    expect(handler).toContain('clearSubscriptionRefreshTimer();');
+    expect(handler).toContain('appRuntimeCoordinator.stopRecovery();');
+    expect(handler).toContain('stopRemoteConfigPolling();');
+    expect(
+      source.slice(
+        source.indexOf('function stopRemoteConfigPolling'),
+        source.indexOf('async function applyRemoteSubscription')
+      )
+    ).toContain('subscriptionCoordinator.stop();');
     expect(compactHandler.indexOf('lifecycle.stop()')).toBeGreaterThan(
       compactHandler.indexOf('runtimeIntent.cancel();')
     );
@@ -826,7 +988,24 @@ async function startTruncatedHttpProxy(): Promise<string> {
   return `http://127.0.0.1:${address.port}`;
 }
 
-async function startTruncatedTlsOrigin() {
+async function startOversizedHttpProxy(declaredLength: number): Promise<string> {
+  server = createServer((request, response) => {
+    request.resume();
+    request.once('end', () => {
+      response.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': String(declaredLength)
+      });
+      response.end('{}');
+    });
+  });
+  await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('test proxy failed to start');
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function startTruncatedTlsOrigin(declaredLength = 200, body = '{"userId":"partial"') {
   const sockets = new Set<Socket>();
   const tlsServer = createTlsServer({ key: testTlsKey, cert: testTlsCert }, (socket) => {
     sockets.add(socket);
@@ -842,10 +1021,10 @@ async function startTruncatedTlsOrigin() {
         [
           'HTTP/1.1 200 OK',
           'Content-Type: application/json; charset=utf-8',
-          'Content-Length: 200',
+          `Content-Length: ${declaredLength}`,
           'Connection: close',
           '',
-          '{"userId":"partial"'
+          body
         ].join('\r\n')
       );
     });

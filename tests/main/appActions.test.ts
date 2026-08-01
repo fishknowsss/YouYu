@@ -130,28 +130,53 @@ describe('app actions', () => {
     expect(updateProvider).not.toHaveBeenCalled();
   });
 
-  it('repairs and retries when starting for an update fails once', async () => {
+  it('fails directly without repairing or retrying an unknown startup failure', async () => {
     const signal = new AbortController().signal;
     const lifecycle = makeLifecycle({
       getStatus: vi.fn(() => 'stopped' as const),
       start: vi.fn().mockRejectedValueOnce(new Error('startup failed')).mockResolvedValueOnce(undefined)
     });
 
-    await updateSubscriptionNodes(
-      {
-        settingsStore: {
-          read: async () => makeSettings(),
-          update: vi.fn()
+    await expect(
+      updateSubscriptionNodes(
+        {
+          settingsStore: {
+            read: async () => makeSettings(),
+            update: vi.fn()
+          },
+          lifecycle,
+          createMihomoApi: () => makeMihomoApi(),
+          createSnapshot: async () => makeSnapshot()
         },
-        lifecycle,
-        createMihomoApi: () => makeMihomoApi(),
-        createSnapshot: async () => makeSnapshot()
+        { signal }
+      )
+    ).rejects.toThrow('startup failed');
+
+    expect(lifecycle.start).toHaveBeenCalledOnce();
+    expect(lifecycle.repair).not.toHaveBeenCalled();
+  });
+
+  it('retries a transient core startup failure without running a full repair', async () => {
+    const lifecycle = makeLifecycle({
+      getStatus: vi.fn(() => 'stopped' as const),
+      start: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('mihomo controller not ready on 127.0.0.1:9090'))
+        .mockResolvedValueOnce(undefined)
+    });
+
+    await updateSubscriptionNodes({
+      settingsStore: {
+        read: async () => makeSettings(),
+        update: vi.fn()
       },
-      { signal }
-    );
+      lifecycle,
+      createMihomoApi: () => makeMihomoApi(),
+      createSnapshot: async () => makeSnapshot()
+    });
 
     expect(lifecycle.start).toHaveBeenCalledTimes(2);
-    expect(lifecycle.repair).toHaveBeenCalledWith(signal);
+    expect(lifecycle.repair).not.toHaveBeenCalled();
   });
 
   it('does not restart after a running provider update is canceled', async () => {

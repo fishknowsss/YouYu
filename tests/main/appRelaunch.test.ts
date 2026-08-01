@@ -61,7 +61,7 @@ describe('application relaunch safety', () => {
   it('blocks competing core starts while repair owns the lifecycle queue', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
     const guardedStart = source.slice(
-      source.indexOf('async function startLifecycleWithRepairRetry'),
+      source.indexOf('async function startLifecycleWithSafeRetry'),
       source.indexOf('async function startLifecycleForUser')
     );
     const guardedRestart = source.slice(
@@ -78,6 +78,33 @@ describe('application relaunch safety', () => {
     expect(repair).toContain('allowDuringNetworkRepair: true');
     expect(repair).toContain('if (handingOffToRelaunch) lifecycle.suspendStarts()');
     expect(repair).toContain('scheduleSubscriptionRefresh()');
+  });
+
+  it('keeps automatic runtime recovery on the safe retry policy and reserves full repair for explicit repair', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const unexpectedExitRecovery = source.slice(
+      source.indexOf('async function performRuntimeRecovery'),
+      source.indexOf('function isExpectedAppRuntimeCancellation')
+    );
+    const guardedStart = source.slice(
+      source.indexOf('async function startLifecycleWithSafeRetry'),
+      source.indexOf('async function startLifecycleForUser')
+    );
+    const guardedRestart = source.slice(
+      source.indexOf('async function restartLifecycleForIntent'),
+      source.indexOf('function runtimeActionsForIntent')
+    );
+    const explicitRepair = source.slice(
+      source.indexOf('async function repairProxy'),
+      source.indexOf('async function registerTrafficIdentity')
+    );
+
+    expect(guardedStart).toContain('runRuntimeOperationWithSafeRetry');
+    expect(guardedRestart).toContain('runRuntimeOperationWithSafeRetry');
+    expect(unexpectedExitRecovery).not.toContain('lifecycle.repair');
+    expect(guardedStart).not.toContain('lifecycle.repair');
+    expect(guardedRestart).not.toContain('lifecycle.repair');
+    expect(explicitRepair).toContain('repairLifecycle: (repairSignal) => lifecycle.repair(repairSignal)');
   });
 
   it('selects a low-risk diagnostic repair before the complete repair chain', async () => {

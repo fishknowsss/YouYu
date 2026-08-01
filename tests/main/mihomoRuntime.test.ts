@@ -1,10 +1,15 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename as renameOnDisk, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parse } from 'yaml';
-import { createMihomoRuntime } from '../../src/main/mihomo/process';
+import {
+  createMihomoRuntime as createMihomoRuntimeProduction,
+  type MihomoRuntimeOptions
+} from '../../src/main/mihomo/process';
+import { spawnWindowsElevatedProcess } from '../../src/main/platform/elevatedProcess';
 import type { AppSettings } from '../../src/main/storage/settings';
 
 let tempDirs: string[] = [];
@@ -35,6 +40,24 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     subscriptionRefreshIntervalHours: 12,
     ...overrides
   };
+}
+
+function createSuccessfulValidationProcess() {
+  const child = new EventEmitter() as EventEmitter & { killed: boolean; kill: ReturnType<typeof vi.fn> };
+  child.killed = false;
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    return true;
+  });
+  queueMicrotask(() => child.emit('exit', 0, null));
+  return child as never;
+}
+
+function createMihomoRuntime(options: MihomoRuntimeOptions) {
+  return createMihomoRuntimeProduction({
+    ...options,
+    spawnValidationProcess: options.spawnValidationProcess ?? createSuccessfulValidationProcess
+  });
 }
 
 afterEach(async () => {
@@ -69,6 +92,542 @@ describe('createMihomoRuntime', () => {
       join(userDataDir, 'mihomo', 'config.yaml')
     ]);
     expect(waitForReady).toHaveBeenCalledWith('local-secret');
+  });
+
+  it('cancels an oversized subscription response and falls back to the remote provider URL', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    let canceledWith: unknown;
+    const yaml = `
+proxies:
+  - name: oversized-node
+    type: ss
+    server: 127.0.0.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode(yaml));
+                controller.close();
+              },
+              cancel(reason) {
+                canceledWith = reason;
+              }
+            }),
+            { status: 200, headers: { 'content-length': String(8 * 1024 * 1024 + 1) } }
+          )
+      )
+    );
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      spawnProcess: vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false })),
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await runtime.start();
+
+    const config = await readFile(join(userDataDir, 'mihomo', 'config.yaml'), 'utf8');
+    expect(config).toContain('https://example.com/sub');
+    expect(config).not.toContain('oversized-node');
+    expect(canceledWith).toMatchObject({ code: 'RESPONSE_BODY_TOO_LARGE' });
+  });
+
+  it('rejects an HTML subscription response without replacing the last-known-good config or cache', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    let responseText = `
+proxies:
+  - name: last-known-good-node
+    type: ss
+    server: 127.0.0.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(responseText, { status: 200 }))
+    );
+    const createRuntime = () =>
+      createMihomoRuntime({
+        binaryPath: 'C:/YouYu/mihomo.exe',
+        userDataDir,
+        readSettings: async () => makeSettings(),
+        spawnProcess: vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false })),
+        waitForReady: vi.fn(async () => undefined)
+      });
+
+    await createRuntime().start();
+    const configPath = join(userDataDir, 'mihomo', 'config.yaml');
+    const cachePath = subscriptionCachePath(userDataDir, 'https://example.com/sub');
+    const previousConfig = await readFile(configPath, 'utf8');
+    const previousCache = await readFile(cachePath, 'utf8');
+    responseText = '<!doctype html><html><body>upstream error</body></html>';
+
+    await createRuntime().start();
+
+    await expect(readFile(configPath, 'utf8')).resolves.toBe(previousConfig);
+    await expect(readFile(cachePath, 'utf8')).resolves.toBe(previousCache);
+  });
+
+  it('rejects an HTML content type even when its body resembles a usable subscription', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    let nodeName = 'last-known-good-node';
+    let contentType = 'text/yaml';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `proxies:\n  - name: ${nodeName}\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: pass\n`,
+            { status: 200, headers: { 'content-type': contentType } }
+          )
+      )
+    );
+    const createRuntime = () =>
+      createMihomoRuntime({
+        binaryPath: 'C:/YouYu/mihomo.exe',
+        userDataDir,
+        readSettings: async () => makeSettings(),
+        spawnProcess: vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false })),
+        waitForReady: vi.fn(async () => undefined)
+      });
+
+    await createRuntime().start();
+    const configPath = join(userDataDir, 'mihomo', 'config.yaml');
+    const cachePath = subscriptionCachePath(userDataDir, 'https://example.com/sub');
+    const previousConfig = await readFile(configPath, 'utf8');
+    const previousCache = await readFile(cachePath, 'utf8');
+    nodeName = 'must-not-be-accepted';
+    contentType = 'text/html; charset=utf-8';
+
+    await createRuntime().start();
+
+    await expect(readFile(configPath, 'utf8')).resolves.toBe(previousConfig);
+    await expect(readFile(cachePath, 'utf8')).resolves.toBe(previousCache);
+  });
+
+  it('validates a complete temporary config with the same Mihomo binary before promoting it', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            'proxies:\n  - name: validated-node\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: pass\n'
+          )
+      )
+    );
+    const configPath = join(userDataDir, 'mihomo', 'config.yaml');
+    const cachePath = subscriptionCachePath(userDataDir, 'https://example.com/sub');
+    let candidatePath = '';
+    let validationWorkDir = '';
+    let candidateText = '';
+    let filesIsolatedDuringValidation = false;
+    const spawnValidationProcess = vi.fn((_binaryPath: string, args: string[]) => {
+      candidatePath = args[args.indexOf('-f') + 1] ?? '';
+      validationWorkDir = args[args.indexOf('-d') + 1] ?? '';
+      const child = new EventEmitter() as EventEmitter & { killed: boolean; kill: ReturnType<typeof vi.fn> };
+      child.killed = false;
+      child.kill = vi.fn(() => {
+        child.killed = true;
+        return true;
+      });
+      queueMicrotask(() => {
+        void Promise.all([
+          readFile(candidatePath, 'utf8'),
+          readFile(configPath, 'utf8').then(
+            () => false,
+            (error: NodeJS.ErrnoException) => error.code === 'ENOENT'
+          ),
+          readFile(cachePath, 'utf8').then(
+            () => false,
+            (error: NodeJS.ErrnoException) => error.code === 'ENOENT'
+          ),
+          readdir(validationWorkDir).then(() => true)
+        ]).then(
+          ([text, configMissing, cacheMissing, validationDirectoryExists]) => {
+            candidateText = text;
+            filesIsolatedDuringValidation =
+              configMissing &&
+              cacheMissing &&
+              validationDirectoryExists &&
+              validationWorkDir !== join(userDataDir, 'mihomo');
+            child.emit('exit', 0, null);
+          },
+          (error) => child.emit('error', error)
+        );
+      });
+      return child as never;
+    });
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      spawnValidationProcess,
+      spawnProcess: vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false })),
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await runtime.start();
+
+    expect(spawnValidationProcess).toHaveBeenCalledWith(
+      'C:/YouYu/mihomo.exe',
+      expect.arrayContaining(['-t', '-d', validationWorkDir, '-f', candidatePath])
+    );
+    expect(candidatePath).not.toBe(configPath);
+    expect(validationWorkDir).toContain(join(userDataDir, 'mihomo', '.validation-'));
+    expect(candidateText).toContain('validated-node');
+    expect(candidateText).toContain('mixed-port: 7890');
+    expect(candidateText).toContain('secret: local-secret');
+    expect(filesIsolatedDuringValidation).toBe(true);
+    await expect(readFile(configPath, 'utf8')).resolves.toBe(candidateText);
+    await expect(readFile(cachePath, 'utf8')).resolves.toContain('validated-node');
+    await expect(readFile(candidatePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readdir(validationWorkDir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rebuilds current config from the cached subscription when a fetched candidate fails validation', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const workDir = join(userDataDir, 'mihomo');
+    const configPath = join(workDir, 'config.yaml');
+    const cachePath = subscriptionCachePath(userDataDir, 'https://example.com/sub');
+    const cachedSubscription =
+      'proxies:\n  - name: cached-last-known-good-node\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: pass\n';
+    await mkdir(workDir, { recursive: true });
+    await writeFile(configPath, 'stale-config-with-old-ports\n', 'utf8');
+    await writeFile(cachePath, cachedSubscription, 'utf8');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            'proxies:\n  - name: must-not-be-promoted\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: pass\n'
+          )
+      )
+    );
+    const spawnProcess = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const spawnValidationProcess = vi
+      .fn()
+      .mockImplementationOnce(() => createExitedValidationProcess(1))
+      .mockImplementationOnce(() => createExitedValidationProcess(0));
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ controllerSecret: 'current-secret', allowLan: true }),
+      getPorts: async () => ({ mixedPort: 7788, controllerPort: 9099, dnsPort: 1054 }),
+      spawnValidationProcess,
+      spawnProcess,
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await runtime.start();
+
+    const config = await readFile(configPath, 'utf8');
+    expect(config).toContain('cached-last-known-good-node');
+    expect(config).not.toContain('must-not-be-promoted');
+    expect(config).toContain('mixed-port: 7788');
+    expect(config).toContain('external-controller: 127.0.0.1:9099');
+    expect(config).toContain('secret: current-secret');
+    expect(config).toContain('listen: 127.0.0.1:1054');
+    await expect(readFile(cachePath, 'utf8')).resolves.toBe(cachedSubscription);
+    expect(spawnValidationProcess).toHaveBeenCalledTimes(2);
+    expect(spawnProcess).toHaveBeenCalledWith('C:/YouYu/mihomo.exe', ['-d', workDir, '-f', configPath]);
+    expect((await readdir(workDir)).filter(isMihomoPromotionTemporaryEntry)).toEqual([]);
+  });
+
+  it('rolls back the cache when final config promotion rename fails', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const workDir = join(userDataDir, 'mihomo');
+    const configPath = join(workDir, 'config.yaml');
+    const cachePath = subscriptionCachePath(userDataDir, 'https://example.com/sub');
+    await mkdir(workDir, { recursive: true });
+    await writeFile(configPath, 'last-known-good-config\n', 'utf8');
+    await writeFile(cachePath, 'last-known-good-cache\n', 'utf8');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            'proxies:\n  - name: must-be-rolled-back\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: pass\n'
+          )
+      )
+    );
+    let failedFinalRename = false;
+    const renameFile = vi.fn(async (source: string, target: string) => {
+      if (target === configPath && !failedFinalRename) {
+        failedFinalRename = true;
+        throw new Error('injected config rename failure');
+      }
+      await renameOnDisk(source, target);
+    });
+    const spawnProcess = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      renameFile,
+      spawnProcess,
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await expect(runtime.start()).rejects.toThrow('injected config rename failure');
+
+    await expect(readFile(configPath, 'utf8')).resolves.toBe('last-known-good-config\n');
+    await expect(readFile(cachePath, 'utf8')).resolves.toBe('last-known-good-cache\n');
+    expect(spawnProcess).not.toHaveBeenCalled();
+    expect((await readdir(workDir)).filter(isMihomoPromotionTemporaryEntry)).toEqual([]);
+  });
+
+  it('kills a timed-out validator and rebuilds from the cached subscription on current ports', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const workDir = join(userDataDir, 'mihomo');
+    const configPath = join(workDir, 'config.yaml');
+    const cachePath = subscriptionCachePath(userDataDir, 'https://example.com/sub');
+    await mkdir(workDir, { recursive: true });
+    const cachedSubscription =
+      'proxies:\n  - name: timeout-fallback-node\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: pass\n';
+    await writeFile(configPath, 'stale-config-with-old-ports\n', 'utf8');
+    await writeFile(cachePath, cachedSubscription, 'utf8');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            'proxies:\n  - name: validator-times-out\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: pass\n'
+          )
+      )
+    );
+    const validationChild = createStalledValidationProcess();
+    const spawnValidationProcess = vi
+      .fn()
+      .mockImplementationOnce(() => validationChild.process)
+      .mockImplementationOnce(() => createExitedValidationProcess(0));
+    const spawnProcess = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ controllerSecret: 'current-secret' }),
+      getPorts: async () => ({ mixedPort: 7788, controllerPort: 9099, dnsPort: 1054 }),
+      spawnValidationProcess,
+      configValidationTimeoutMs: 5,
+      spawnProcess,
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await runtime.start();
+
+    expect(validationChild.kill).toHaveBeenCalledOnce();
+    const config = await readFile(configPath, 'utf8');
+    expect(config).toContain('timeout-fallback-node');
+    expect(config).toContain('mixed-port: 7788');
+    expect(config).toContain('external-controller: 127.0.0.1:9099');
+    expect(config).toContain('secret: current-secret');
+    await expect(readFile(cachePath, 'utf8')).resolves.toBe(cachedSubscription);
+    expect(spawnValidationProcess).toHaveBeenCalledTimes(2);
+    expect(spawnProcess).toHaveBeenCalledOnce();
+    expect((await readdir(workDir)).filter(isMihomoPromotionTemporaryEntry)).toEqual([]);
+  });
+
+  it('aborts validation, kills its process, and leaves the last-known-good files untouched', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const workDir = join(userDataDir, 'mihomo');
+    const configPath = join(workDir, 'config.yaml');
+    const cachePath = subscriptionCachePath(userDataDir, 'https://example.com/sub');
+    await mkdir(workDir, { recursive: true });
+    await writeFile(configPath, 'last-known-good-config\n', 'utf8');
+    await writeFile(cachePath, 'last-known-good-cache\n', 'utf8');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            'proxies:\n  - name: aborted-candidate\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: pass\n'
+          )
+      )
+    );
+    const validationChild = createStalledValidationProcess();
+    let validationStartedResolve: (() => void) | undefined;
+    const validationStarted = new Promise<void>((resolve) => {
+      validationStartedResolve = resolve;
+    });
+    const spawnProcess = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      spawnValidationProcess: () => {
+        validationStartedResolve?.();
+        return validationChild.process;
+      },
+      spawnProcess,
+      waitForReady: vi.fn(async () => undefined)
+    });
+    const controller = new AbortController();
+    const abortReason = new Error('test validation abort');
+
+    const start = runtime.start(controller.signal);
+    await validationStarted;
+    controller.abort(abortReason);
+
+    await expect(start).rejects.toBe(abortReason);
+    expect(validationChild.kill).toHaveBeenCalledOnce();
+    await expect(readFile(configPath, 'utf8')).resolves.toBe('last-known-good-config\n');
+    await expect(readFile(cachePath, 'utf8')).resolves.toBe('last-known-good-cache\n');
+    expect(spawnProcess).not.toHaveBeenCalled();
+    expect((await readdir(workDir)).filter(isMihomoPromotionTemporaryEntry)).toEqual([]);
+  });
+
+  it('rejects a stale remote revision immediately before promotion without changing live files', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const workDir = join(userDataDir, 'mihomo');
+    const configPath = join(workDir, 'config.yaml');
+    const remoteSubscriptionUrl = 'https://identity-a.example/sub';
+    const cachePath = subscriptionCachePath(userDataDir, remoteSubscriptionUrl);
+    await mkdir(workDir, { recursive: true });
+    await writeFile(configPath, 'last-known-good-config\n', 'utf8');
+    await writeFile(cachePath, 'last-known-good-cache\n', 'utf8');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            'proxies:\n  - name: stale-revision-candidate\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: pass\n'
+          )
+      )
+    );
+    const snapshot = {
+      binding: 'identity-a',
+      revision: 'revision-a',
+      config: {
+        version: 1,
+        enabled: true,
+        subscriptionUrl: remoteSubscriptionUrl,
+        directRules: [],
+        proxyRules: []
+      }
+    };
+    const isRemoteConfigSnapshotCurrent = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const spawnProcess = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      readRemoteConfigSnapshot: async () => snapshot,
+      isRemoteConfigSnapshotCurrent,
+      spawnProcess,
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await expect(runtime.start()).rejects.toThrow('remote config changed during mihomo start');
+
+    expect(isRemoteConfigSnapshotCurrent).toHaveBeenCalledTimes(3);
+    await expect(readFile(configPath, 'utf8')).resolves.toBe('last-known-good-config\n');
+    await expect(readFile(cachePath, 'utf8')).resolves.toBe('last-known-good-cache\n');
+    expect(spawnProcess).not.toHaveBeenCalled();
+    expect((await readdir(workDir)).filter(isMihomoPromotionTemporaryEntry)).toEqual([]);
+  });
+
+  it('rebuilds a validated current-port provider config when no inline subscription is usable', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const workDir = join(userDataDir, 'mihomo');
+    const configPath = join(workDir, 'config.yaml');
+    const cachePath = subscriptionCachePath(userDataDir, 'https://example.com/sub');
+    await mkdir(workDir, { recursive: true });
+    await writeFile(configPath, 'last-known-good-config\n', 'utf8');
+    await writeFile(cachePath, 'last-known-good-cache\n', 'utf8');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(undefined, { status: 503 }))
+    );
+    const spawnValidationProcess = vi.fn(() => createExitedValidationProcess(0));
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ controllerSecret: 'current-secret' }),
+      getPorts: async () => ({ mixedPort: 7788, controllerPort: 9099, dnsPort: 1054 }),
+      spawnValidationProcess,
+      spawnProcess: vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false })),
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await runtime.start();
+
+    expect(spawnValidationProcess).toHaveBeenCalledOnce();
+    const config = await readFile(configPath, 'utf8');
+    expect(config).toContain('mixed-port: 7788');
+    expect(config).toContain('external-controller: 127.0.0.1:9099');
+    expect(config).toContain('secret: current-secret');
+    expect(config).toContain('url: https://example.com/sub');
+    expect(config).not.toContain('last-known-good-config');
+    await expect(readFile(cachePath, 'utf8')).resolves.toBe('last-known-good-cache\n');
+  });
+
+  it.each([
+    ['an empty no-node YAML payload', 'proxies: []\n'],
+    ['a proxy-shaped payload without a node type', 'proxies:\n  - name: not-a-real-node\n'],
+    [
+      'a payload containing forbidden control characters',
+      'proxies:\n  - name: control-character-node\u0000\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n'
+    ]
+  ])('rejects %s and rebuilds from the cached subscription on current ports', async (_label, responseText) => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const workDir = join(userDataDir, 'mihomo');
+    const configPath = join(workDir, 'config.yaml');
+    const cachePath = subscriptionCachePath(userDataDir, 'https://example.com/sub');
+    const cachedSubscription =
+      'proxies:\n  - name: preflight-fallback-node\n    type: ss\n    server: 127.0.0.1\n    port: 8388\n    cipher: aes-128-gcm\n    password: pass\n';
+    await mkdir(workDir, { recursive: true });
+    await writeFile(configPath, 'stale-config-with-old-ports\n', 'utf8');
+    await writeFile(cachePath, cachedSubscription, 'utf8');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(responseText))
+    );
+    const spawnValidationProcess = vi.fn(() => createExitedValidationProcess(0));
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ controllerSecret: 'current-secret' }),
+      getPorts: async () => ({ mixedPort: 7788, controllerPort: 9099, dnsPort: 1054 }),
+      spawnValidationProcess,
+      spawnProcess: vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false })),
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await runtime.start();
+
+    expect(spawnValidationProcess).toHaveBeenCalledOnce();
+    const config = await readFile(configPath, 'utf8');
+    expect(config).toContain('preflight-fallback-node');
+    expect(config).toContain('mixed-port: 7788');
+    expect(config).toContain('external-controller: 127.0.0.1:9099');
+    expect(config).toContain('secret: current-secret');
+    expect(config).not.toContain('not-a-real-node');
+    expect(config).not.toContain('control-character-node');
+    await expect(readFile(cachePath, 'utf8')).resolves.toBe(cachedSubscription);
   });
 
   it('falls back to the cached subscription config when the subscription endpoint is unavailable', async () => {
@@ -125,7 +684,13 @@ rules:
     const secondRuntime = createMihomoRuntime({
       binaryPath: 'C:/YouYu/mihomo.exe',
       userDataDir,
-      readSettings: async () => makeSettings(),
+      readSettings: async () =>
+        makeSettings({
+          controllerSecret: 'current-secret',
+          mode: 'global',
+          allowLan: true
+        }),
+      getPorts: async () => ({ mixedPort: 7788, controllerPort: 9099, dnsPort: 1054 }),
       spawnProcess: spawn,
       waitForReady: vi.fn(async () => undefined)
     });
@@ -134,6 +699,14 @@ rules:
 
     const config = parse(await readFile(join(userDataDir, 'mihomo', 'config.yaml'), 'utf8'));
     expect(config.proxies).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'cached-node' })]));
+    expect(config).toMatchObject({
+      'mixed-port': 7788,
+      'external-controller': '127.0.0.1:9099',
+      secret: 'current-secret',
+      mode: 'global',
+      'allow-lan': true
+    });
+    expect(config.dns.listen).toBe('127.0.0.1:1054');
     expect(config['proxy-groups'][0]).toMatchObject({
       name: 'PROXY',
       url: 'https://www.gstatic.com/generate_204',
@@ -862,6 +1435,68 @@ proxies:
     expect(runtime.isRunning?.()).toBe(false);
   });
 
+  it('does not wait for the shutdown timeout when a pre-connect elevated launch is cancelled', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const launcher = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    launcher.exitCode = null;
+    launcher.killed = false;
+    launcher.kill = vi.fn(() => {
+      launcher.killed = true;
+      return true;
+    });
+    const pipe = new EventEmitter() as EventEmitter & {
+      destroyed: boolean;
+      destroy: ReturnType<typeof vi.fn>;
+      write: ReturnType<typeof vi.fn>;
+    };
+    pipe.destroyed = false;
+    pipe.destroy = vi.fn(() => {
+      pipe.destroyed = true;
+      return pipe;
+    });
+    pipe.write = vi.fn(() => true);
+    const spawnLauncher = vi.fn(() => launcher as never);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ tunEnabled: true }),
+      spawnElevatedProcess: (binaryPath, args) =>
+        spawnWindowsElevatedProcess(binaryPath, args, {
+          resolveUserIdentity: async () => ({ userSid: 'S-1-5-21-1000-2000-3000-1001', sessionId: 3 }),
+          spawnLauncher,
+          createPipeConnection: () => pipe as never
+        }),
+      waitForReady: vi.fn(() => new Promise<void>(() => undefined))
+    });
+    const controller = new AbortController();
+    const reason = new Error('operation canceled');
+    const startup = runtime.start(controller.signal);
+    await vi.waitFor(() => expect(spawnLauncher).toHaveBeenCalledOnce());
+
+    controller.abort(reason);
+    let timeout: NodeJS.Timeout | undefined;
+    const outcome = await Promise.race([
+      startup.then(
+        () => ({ kind: 'resolved' as const }),
+        (error: unknown) => ({ kind: 'rejected' as const, error })
+      ),
+      new Promise<{ kind: 'timeout' }>((resolve) => {
+        timeout = setTimeout(() => resolve({ kind: 'timeout' }), 500);
+      })
+    ]);
+    if (timeout) clearTimeout(timeout);
+
+    expect(outcome).toEqual({ kind: 'rejected', error: reason });
+    expect(launcher.kill).toHaveBeenCalledOnce();
+    expect(pipe.destroy).toHaveBeenCalledOnce();
+    expect(runtime.isRunning?.()).toBe(false);
+  });
+
   it('waits for a killed startup process to exit before completing cancellation or allowing restart', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);
@@ -922,3 +1557,35 @@ proxies:
     expect(spawnProcess).toHaveBeenCalledTimes(2);
   });
 });
+
+function subscriptionCachePath(userDataDir: string, url: string): string {
+  const urlHash = createHash('sha256').update(url).digest('hex');
+  return join(userDataDir, 'mihomo', `subscription-cache-${urlHash}.yaml`);
+}
+
+function createExitedValidationProcess(code: number | null, signal: NodeJS.Signals | null = null) {
+  const child = new EventEmitter() as EventEmitter & { killed: boolean; kill: ReturnType<typeof vi.fn> };
+  child.killed = false;
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    return true;
+  });
+  queueMicrotask(() => child.emit('exit', code, signal));
+  return child as never;
+}
+
+function createStalledValidationProcess() {
+  const child = new EventEmitter() as EventEmitter & { killed: boolean; kill: ReturnType<typeof vi.fn> };
+  child.killed = false;
+  const kill = vi.fn(() => {
+    child.killed = true;
+    queueMicrotask(() => child.emit('exit', null, 'SIGTERM'));
+    return true;
+  });
+  child.kill = kill;
+  return { process: child as never, kill };
+}
+
+function isMihomoPromotionTemporaryEntry(name: string): boolean {
+  return name.includes('.candidate-') || name.includes('.rollback-') || name.startsWith('.validation-');
+}

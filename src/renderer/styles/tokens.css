@@ -1,0 +1,56 @@
+:root {
+  --font-sans: system-ui, sans-serif;
+  --font-size-caption: 12px;
+  --line-height-caption: 16px;
+  --font-size-body-small: 13px;
+  --line-height-body-small: 18px;
+  --font-size-body: 15px;
+  --line-height-body: 20px;
+  --font-size-action: 15px;
+  --line-height-action: 20px;
+  --font-size-title-small: 17px;
+  --line-height-title-small: 22px;
+  --font-weight-bold: 700;
+  --ink: #20192a;
+  --ink-soft: #4a4255;
+  --muted: #70677a;
+  --accent: #8558c9;
+  --accent-strong: #6f45ad;
+  --accent-soft: #efe9fa;
+  --accent-tint: #faf7ff;
+  --interactive-hover: #efe4fb;
+  --interactive-hover-strong: #e7d8f7;
+  --panel: #ffffff;
+  --surface: #f6f2fb;
+  --surface-raised: #fbf9fe;
+  --line: #ddd4e8;
+  --line-strong: #c8bad9;
+  --success: #3b8d75;
+  --warning: #98722d;
+  --danger: #b64e74;
+  --danger-soft: #fbe8ef;
+  --danger-soft-hover: #f6d5e1;
+  --accent-secondary: #e5d4f3;
+  --accent-secondary-hover: #d8c4ef;
+  --workspace-header-height: 56px;
+  --workspace-content-gap: 12px;
+  --header-action-height: 40px;
+  --header-action-width: 112px;
+  --header-action-gap: 8px;
+  --dashboard-panel-padding-x: 14px;
+  --dashboard-panel-padding-y: 12px;
+  --route-test-scrollbar-gutter: 10px;
+  color: var(--ink);
+  background: var(--surface);
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+@property --ring-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}

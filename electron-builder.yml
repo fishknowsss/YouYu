@@ -1,6 +1,7 @@
 appId: studio.youyu.proxy
 productName: YouYu
 compression: normal
+afterPack: scripts/electron-builder-after-pack.mjs
 publish:
   provider: github
   owner: fishknowsss
@@ -42,6 +43,9 @@ win:
       arch:
         - x64
   artifactName: YouYu-${version}-${arch}.${ext}
+  signtoolOptions:
+    timeStampServer: http://timestamp.digicert.com
+    rfc3161TimeStampServer: http://timestamp.digicert.com
 nsis:
   oneClick: false
   perMachine: true

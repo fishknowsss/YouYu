@@ -110,10 +110,14 @@ describe('update and exit lifecycle safety', () => {
     expect(recovery).toContain('lifecycle.resumeStarts()');
     expect(recovery).toContain('scheduleUpdateCheck(updatePeriodicIntervalMs)');
     expect(recovery).toContain('runtimeIntent.requestStart()');
-    expect(recovery).toContain('startLifecycleWithRepairRetry(undefined, restoredIntentGeneration)');
-    expect(recovery).toContain('scheduleRuntimeRecovery(0)');
-    expect(recovery.indexOf('lifecycle.resumeStarts()')).toBeLessThan(recovery.indexOf('scheduleRuntimeRecovery(0)'));
-    expect(recovery.indexOf('isQuitting = false')).toBeLessThan(recovery.indexOf('scheduleRuntimeRecovery(0)'));
+    expect(recovery).toContain('startLifecycleWithSafeRetry(undefined, restoredIntentGeneration)');
+    expect(recovery).toContain('appRuntimeCoordinator.scheduleRecovery(0)');
+    expect(recovery.indexOf('lifecycle.resumeStarts()')).toBeLessThan(
+      recovery.indexOf('appRuntimeCoordinator.scheduleRecovery(0)')
+    );
+    expect(recovery.indexOf('isQuitting = false')).toBeLessThan(
+      recovery.indexOf('appRuntimeCoordinator.scheduleRecovery(0)')
+    );
   });
 
   it('stops the fullscreen helper for an update and restarts it if installation is interrupted', async () => {

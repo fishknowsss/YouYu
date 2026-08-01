@@ -1,6 +1,7 @@
 import { access, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  assertPackagedMihomoMatchesSource,
   mihomoResourceRelativePath,
   resolveMihomoSourceReleaseAssetName,
   validateMihomoDistribution,
@@ -61,9 +62,7 @@ if (await exists(unpackedDir)) {
   }
 
   const packagedMihomo = await validateMihomoDistribution(join(unpackedDir, 'resources', 'mihomo', 'win-x64'));
-  if (JSON.stringify(packagedMihomo.manifest) !== JSON.stringify(sourceMihomo.manifest)) {
-    throw new Error('Packaged Mihomo manifest does not match the repository manifest');
-  }
+  assertPackagedMihomoMatchesSource(sourceMihomo.manifest, packagedMihomo.manifest);
 }
 
 const publicChannelMetadata = ['latest.yml', 'latest-in.yml', 'latest-no.yml'].map((name) =>

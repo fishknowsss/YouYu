@@ -38,6 +38,7 @@ repairable columns only when an existing table is missing them, applies the idem
 and validates the complete Worker schema. It refuses to write when the base `users`, `devices`, or `traffic_daily`
 schema is incomplete or when a critical primary-key/unique constraint has drifted; initialize that database with
 `schema.sql` first. Re-running it preserves existing subscription values.
+It also preserves administrator-edited traffic limits and expiry times.
 It does not deploy the Worker.
 
 Use your own private value for `REGISTRATION_PASSPHRASE`.
@@ -63,6 +64,14 @@ Then rebuild the Windows installers.
 
 ## Admin APIs
 
+The browser admin keeps `ADMIN_TOKEN` only in the current page's JavaScript closure. It clears the password input
+before requests settle and never writes the token to web storage, URLs, rendered markup, or logs. The page loads its
+script as a same-origin static asset under a CSP that disallows inline scripts.
+
+All JSON write endpoints require an `application/json` media type, reject unknown fields, preflight declared body
+sizes, and enforce the same byte limit while streaming UTF-8. Error responses use the stable
+`{ error, code, requestId }` envelope and repeat `requestId` in `x-request-id`; JSON responses are non-cacheable.
+
 ```http
 GET /api/admin/users
 Authorization: Bearer <ADMIN_TOKEN>
@@ -72,6 +81,11 @@ Authorization: Bearer <ADMIN_TOKEN>
 GET /api/admin/users/<userId>/traffic
 Authorization: Bearer <ADMIN_TOKEN>
 ```
+
+`/api/admin/users`, `/api/admin/users/<userId>/traffic`, and `/api/admin/anomalies` accept `limit` (1–200) and
+`offset` (0–1,000,000). Each response includes `page.limit`, `page.offset`, `page.returned`, `page.hasMore`, and
+`page.nextOffset`. The admin page follows these bounded pages instead of relying on silently truncated SQL results;
+it fails explicitly if one view would exceed its 5,000-row in-memory safety limit.
 
 ```http
 GET /api/admin/config
@@ -84,6 +98,33 @@ profiles are `ruleset` (智能规则) and `subscription` (机场规则). Leave t
 subscription override. Config request bodies are limited to 64 KiB; removed controls are rejected instead of being
 silently stored. Built-in direct/proxy protections remain client-owned, and traffic anomaly detection uses the fixed
 1 GiB threshold. Compatibility responses still contain empty `directRules` / `proxyRules` arrays for older clients.
+
+The cumulative traffic limit is an admin-only dashboard setting and is never included in client or per-user remote
+configuration responses. It defaults to 3148 GiB (`3380139261952` bytes):
+
+```http
+GET /api/admin/traffic-limit
+POST /api/admin/traffic-limit
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+`POST /api/admin/traffic-limit` accepts `trafficLimitBytes`, `trafficExpiresAt`, or both. The limit must be a positive
+safe integer. The expiry must be a complete ISO 8601 timestamp with `Z` or an explicit offset and is stored in UTC.
+The default expiry is `2026-08-11T20:00:00.000Z`, which is `2026-08-12 04:00` in `Asia/Shanghai`. The response sums
+`upload_bytes + download_bytes` across all active, unmerged users and reports the configured limit, upload, download,
+used, remaining, exceeded, and usage percentage values. This is a cumulative historical total, not a monthly billing
+period. The expiry is informational and does not clear historical traffic.
+
+The overview traffic chart uses authenticated aggregate data:
+
+```http
+GET /api/admin/traffic-trend?range=hour|day|month
+Authorization: Bearer <ADMIN_TOKEN>
+```
+
+`hour` returns Shanghai-time hourly buckets for the current day from trusted server receipt times in
+`traffic_reports`; `day` returns the latest 30 calendar days and `month` returns the latest 12 calendar months from
+`traffic_daily`. Missing buckets are filled with zero and all ranges include only active, unmerged users.
 
 ```http
 GET /api/admin/users/<userId>/config
@@ -118,9 +159,24 @@ Authorization: Bearer <ADMIN_TOKEN>
 ## Data retention
 
 The Worker runs D1 maintenance every six hours through the Cron Trigger in `wrangler.toml`.
-It keeps `traffic_reports` for 90 days as the idempotency audit window and removes only expired
-`rate_limits` rows. Daily traffic totals in `traffic_daily` are not deleted. Report deletion is
-bounded to 20 batches of 500 rows per table and invocation so a backlog cannot monopolize one Worker run.
+It keeps the detailed `traffic_reports` audit rows for 90 days and removes only expired `rate_limits` rows.
+The compact `traffic_report_dedup` proof (report id, canonical traffic-mutation hash, traffic date, and anomaly bit)
+is retained permanently, so a response-lost retry cannot be counted again after the audit row expires. Reusing a
+report id with a different device, byte delta, or normalized report timestamp is rejected. Mergeable user aliases and
+`appVersion` metadata are deliberately excluded from the hash so a legitimate delayed retry remains compatible after
+a merge or app update. Daily traffic totals in `traffic_daily` are not deleted. Report
+deletion is bounded to 20 batches of 500 rows per table and invocation so a backlog cannot monopolize one Worker run.
+Because `traffic_daily` is retained, the admin traffic-limit calculation also remains cumulative until a future
+explicit billing-period model is introduced.
+
+Exact deduplication has a deliberate storage tradeoff: UUID v4 report ids are unordered, so one high-water mark cannot
+prove that an arbitrary old id was already accepted. Only reports with a non-zero traffic mutation receive a permanent
+proof; zero-traffic heartbeats update device presence and return current totals without reserving their report id. At
+the current two-minute client interval the theoretical worst case is still 720 proof rows per device per day (262,800
+per year) when every interval contains traffic, while an idle device adds none. New rows keep only the four proof fields
+above and use a `WITHOUT ROWID` table. Columns prefixed with `legacy_` exist only to backfill pre-migration audit rows
+and are cleared when such a row is first retried. Monitor D1 row/storage growth; a future protocol revision can add a
+monotonic per-device sequence and retire permanent UUID tombstones only after legacy clients have aged out.
 
 The authenticated `POST /api/admin/maintenance` endpoint runs the same bounded cleanup on demand.
 Use it after deploying the retention migration when an older database has a large backlog.

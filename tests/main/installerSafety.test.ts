@@ -2,75 +2,204 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 describe('Windows upgrade installer safety', () => {
-  it('uses a controlled shutdown before its ownership-guarded force-close fallback', async () => {
+  it('waits only on an authenticated SID/session handoff and never controls another user process', async () => {
     const installer = await readFile('build/installer.nsh', 'utf8');
-    const restoreScript = await readFile('build/restore-owned-proxy.ps1', 'utf8');
     const processScript = await readFile('build/manage-installed-process.ps1', 'utf8');
-    const controlledShutdown = installer.indexOf('--shutdown-for-install');
-    const restoreOwnedProxy = installer.indexOf('YouYuRestoreOwnedProxyBeforeForceClose');
-    const forceClose = installer.indexOf('-Action Force');
-    const restoreGuard = installer.slice(restoreOwnedProxy, forceClose);
-    const closeFunction = installer.slice(
-      installer.indexOf('Function YouYuCloseRunningAppBeforeInstall'),
-      installer.indexOf('Function YouYuRestoreOwnedProxyBeforeForceClose')
-    );
 
-    expect(controlledShutdown).toBeGreaterThan(-1);
-    expect(restoreOwnedProxy).toBeGreaterThan(controlledShutdown);
-    expect(forceClose).toBeGreaterThan(restoreOwnedProxy);
-    expect(restoreGuard).toContain('${If} $0 != 0');
-    expect(restoreGuard).toContain('Goto YouYuCloseFailed');
-    expect(restoreScript).toContain('system-proxy-ownership.json');
-    expect(installer).toContain('restore-owned-proxy.ps1');
+    expect(installer).toContain('!macro customCheckAppRunning');
+    expect(installer).toContain('!macro customInstall');
+    expect(installer).toContain('Call YouYuConsumeInstallHandoff');
     expect(installer).toContain('manage-installed-process.ps1');
+    expect(installer).toContain('-Action WaitForExit');
+    expect(installer).toContain('-Action Consume');
+    expect(installer).toContain('-RequireHandoff');
+    expect(installer).toContain('-AllowLegacyUpdateBridge');
+    expect(installer).toContain('-InstallerVersion "${VERSION}"');
+    expect(installer).toContain('IfSilent');
+    expect(installer).toMatch(/YouYuBoundaryFailedSilent:\r?\n\s+SetErrorLevel 2/);
     expect(installer).toContain('-ExecutionPolicy RemoteSigned');
-    expect(installer).toContain('-File "$PLUGINSDIR\\YouYuRestoreOwnedProxy.ps1"');
-    expect(restoreScript).toContain("Get-RequiredProperty $state 'appliedFields'");
-    expect(restoreScript).toContain('$serverWasReplaced');
-    expect(restoreScript).toContain('$currentValue -ne $appliedValue');
-    expect(restoreScript).toContain('InternetSetOption');
-    expect(restoreScript).toContain('if (-not $settingsChanged -or -not $settingsRefreshed)');
-    expect(restoreScript).not.toContain('if ($restoredAnyField)');
-    expect(restoreScript.lastIndexOf('Remove-Item -LiteralPath $statePath')).toBeGreaterThan(
-      restoreScript.indexOf('Add-Type -TypeDefinition')
-    );
-    expect(installer).toContain('IfSilent YouYuCloseFailedSilent');
-    expect(processScript).toContain("Get-Process -Name 'YouYu'");
-    expect(processScript).toContain('[IO.Path]::GetFullPath($_.Path) -ieq $expectedPath');
-    expect(processScript).toContain('$matches | Stop-Process -Force');
-    expect(processScript).toContain('[Console]::Error.WriteLine($_.Exception.Message)');
-    expect(processScript).toContain('exit 2');
-    expect(closeFunction).toContain('${If} $0 == 1');
-    expect(closeFunction).toContain('${ElseIf} $0 != 0');
-    expect(closeFunction).toContain('${ElseIf} $0 != 1');
-    expect(closeFunction).toContain('${If} $0 != 1');
-    expect(installer).not.toContain('Get-Process -Name YouYu');
     expect(installer).not.toContain('-ExecutionPolicy Bypass');
-    expect(restoreScript).not.toContain('-ExecutionPolicy Bypass');
+    expect(installer).not.toContain('--shutdown-for-install');
+    expect(installer).not.toContain('YouYuRestoreOwnedProxyBeforeForceClose');
+    expect(installer).not.toContain('restore-owned-proxy.ps1');
+    expect(installer).not.toContain('-Action CloseWindow');
+    expect(installer).not.toContain('-Action Force');
+
+    expect(processScript).toContain("[ValidateSet('WaitForExit', 'Verify', 'Consume')]");
+    expect(processScript).toContain("GetEnvironmentVariable('YOUYU_UPDATE_HANDOFF_PATH')");
+    expect(processScript).toContain("GetEnvironmentVariable('YOUYU_UPDATE_TARGET_USER_SID')");
+    expect(processScript).toContain("GetEnvironmentVariable('YOUYU_UPDATE_TARGET_SESSION_ID')");
+    expect(processScript).toContain('GetOwner([Security.Principal.SecurityIdentifier])');
+    expect(processScript).toContain('Get-CimInstance -ClassName Win32_Process');
+    expect(processScript).toContain('belongs to a different user SID');
+    expect(processScript).toContain('belongs to a different Windows session');
+    expect(processScript).toContain("$Action -ne 'Verify'");
+    expect(processScript).toContain("$legacyBridgeTargetVersion = '1.6.9'");
+    expect(processScript).toContain('$legacyBridgeMaximumSourceVersion = [Version]::new(1, 6, 8, 0)');
+    expect(processScript).toContain("$productName -cne 'YouYu'");
+    expect(processScript).toContain("$companyName -cne '118 Studio'");
+    expect(processScript).toContain('if ($legacyBridgeActive) { exit 10 }');
+    expect(processScript).toContain('[IO.File]::Move($Boundary.Path, $claimedPath)');
+    expect(processScript).toContain('Remove-Item -LiteralPath $claimedPath -Force -ErrorAction Stop');
+    expect(processScript).not.toContain('Remove-Item -LiteralPath $boundary.Path');
+    expect(processScript).not.toContain('Get-Process');
+    expect(processScript).not.toContain('CloseMainWindow');
+    expect(processScript).not.toContain('Stop-Process');
+    expect(processScript).not.toMatch(/HKCU|APPDATA|LOCALAPPDATA/i);
+    expect(installer).not.toMatch(/HKCU|APPDATA|LOCALAPPDATA/i);
   });
 
-  it('removes the app startup task during uninstall', async () => {
+  it('limits the no-handoff bridge to a stock updater launch and skips consumption only for that mode', async () => {
     const installer = await readFile('build/installer.nsh', 'utf8');
+    const updater = await readFile('node_modules/electron-updater/out/NsisUpdater.js', 'utf8');
+    const customInit = installer.slice(
+      installer.indexOf('!macro customInit'),
+      installer.indexOf('!macroend', installer.indexOf('!macro customInit'))
+    );
+    const validate = installer.slice(
+      installer.indexOf('Function YouYuValidateInstallBoundary'),
+      installer.indexOf('FunctionEnd', installer.indexOf('Function YouYuValidateInstallBoundary'))
+    );
+    const customInstall = installer.slice(
+      installer.indexOf('!macro customInstall'),
+      installer.indexOf('!macroend', installer.indexOf('!macro customInstall'))
+    );
+
+    expect(updater).toContain('const args = ["--updated"]');
+    expect(updater).toContain('args.push("/S")');
+    expect(customInit).toContain('${If} ${isUpdated}');
+    expect(customInit).toContain('StrCpy $YouYuIsUpdaterLaunch "1"');
+    expect(validate).toContain('$YouYuIsUpdaterLaunch == "1"');
+    expect(validate.indexOf('YouYuOptionalHandoff:')).toBeLessThan(validate.indexOf('YouYuRequireHandoff:'));
+    expect(
+      validate.slice(validate.indexOf('YouYuOptionalHandoff:'), validate.indexOf('YouYuRequireHandoff:'))
+    ).not.toContain('-AllowLegacyUpdateBridge');
+    expect(
+      validate.slice(validate.indexOf('YouYuRequireHandoff:'), validate.indexOf('YouYuCheckBoundaryResult:'))
+    ).toContain('-AllowLegacyUpdateBridge');
+    expect(customInstall).toContain('$YouYuLegacyUpdateBridge != "1"');
+    expect(customInstall).toContain('Call YouYuConsumeInstallHandoff');
+  });
+
+  it('keeps every pre-install boundary check non-consuming and consumes only from the post-write hook', async () => {
+    const installer = await readFile('build/installer.nsh', 'utf8');
+    const template = await readFile('node_modules/app-builder-lib/templates/nsis/installer.nsi', 'utf8');
+    const installSection = await readFile('node_modules/app-builder-lib/templates/nsis/installSection.nsh', 'utf8');
+    const config = await readFile('electron-builder.yml', 'utf8');
+    const customInit = installer.slice(
+      installer.indexOf('!macro customInit'),
+      installer.indexOf('!macroend', installer.indexOf('!macro customInit'))
+    );
+    const customCheck = installer.slice(
+      installer.indexOf('!macro customCheckAppRunning'),
+      installer.indexOf('!macroend', installer.indexOf('!macro customCheckAppRunning'))
+    );
+    const customInstall = installer.slice(
+      installer.indexOf('!macro customInstall'),
+      installer.indexOf('!macroend', installer.indexOf('!macro customInstall'))
+    );
+
+    expect(config).toMatch(/nsis:[\s\S]*?perMachine:\s*true/);
+    expect(customInit).toContain('Call YouYuValidateInstallBoundary');
+    expect(customCheck).toContain('Call YouYuValidateInstallBoundary');
+    expect(customInit).not.toContain('Consume');
+    expect(customCheck).not.toContain('Consume');
+    expect(customInstall).toContain('Call YouYuConsumeInstallHandoff');
+    expect(customInstall).not.toContain('YouYuValidateInstallBoundary');
+    expect(template.indexOf('!insertmacro customInit')).toBeLessThan(template.indexOf('!include "installSection.nsh"'));
+    expect(installSection.indexOf('!insertmacro CHECK_APP_RUNNING')).toBeLessThan(
+      installSection.indexOf('!insertmacro customInstall')
+    );
+    expect(installSection.indexOf('!insertmacro installApplicationFiles')).toBeLessThan(
+      installSection.indexOf('!insertmacro customInstall')
+    );
+    expect(installSection.indexOf('!insertmacro registryAddInstallInfo')).toBeLessThan(
+      installSection.indexOf('!insertmacro customInstall')
+    );
+  });
+
+  it('cleans only fully verified app-owned startup tasks during a real uninstall', async () => {
+    const installer = await readFile('build/installer.nsh', 'utf8');
+    const cleanupScript = await readFile('build/cleanup-startup-tasks.ps1', 'utf8');
     const uninstallMacro = installer.slice(
       installer.indexOf('!macro customUnInstall'),
       installer.indexOf('!macroend', installer.indexOf('!macro customUnInstall'))
     );
 
     expect(uninstallMacro).toContain('${IfNot} ${isUpdated}');
-    expect(uninstallMacro).toContain('schtasks.exe');
-    expect(uninstallMacro).toContain('/Delete /TN "YouYu" /F');
+    expect(uninstallMacro).toContain('cleanup-startup-tasks.ps1');
+    expect(uninstallMacro).toContain('-Action Cleanup');
+    expect(uninstallMacro).toContain(String.raw`-ExecutablePath "$INSTDIR\YouYu.exe"`);
+    expect(installer).not.toContain('/Delete /TN "YouYu"');
+    expect(installer).not.toContain('schtasks.exe');
+    expect(cleanupScript).toContain('GetTasks(1) # TASK_ENUM_HIDDEN');
+    expect(cleanupScript).toContain('$settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit');
+    expect(cleanupScript).toContain('$settings.XmlResolver = $null');
+    expect(cleanupScript).toContain('if (([string] $Entry.Path) -ine "\\$name")');
+    expect(cleanupScript).toContain("'^YouYu-Startup-(S-1-");
+    expect(cleanupScript).toContain("if ($Name -ieq 'YouYu')");
+    expect(cleanupScript).toContain('$principalSid -cne $candidateSid');
+    expect(cleanupScript).toContain('$triggers.Count -ne 1');
+    expect(cleanupScript).toContain('$actions.Count -ne 1');
+    expect(cleanupScript).toContain('$command -ine $ExpectedExecutablePath');
+    expect(cleanupScript).toContain("$arguments[0].InnerText.Trim() -cne '--hidden'");
+    expect(cleanupScript).toContain('Re-read and re-validate immediately before deletion');
+    expect(cleanupScript).toContain('$folder.DeleteTask($candidate.Name, 0)');
   });
 
-  it('lets the running application restore its proxy before exiting for an install', async () => {
-    const main = await readFile('src/main/index.ts', 'utf8');
-    const shutdownHandlerStart = main.indexOf("commandLine.includes('--shutdown-for-install')");
-    const shutdownHandler = main.slice(shutdownHandlerStart, shutdownHandlerStart + 320);
+  it('launches the installed app through the original non-elevated shell identity', async () => {
+    const installer = await readFile('build/installer.nsh', 'utf8');
+    const finishFunction = installer.slice(
+      installer.indexOf('Function YouYuFinishPageLeave'),
+      installer.indexOf('FunctionEnd', installer.indexOf('Function YouYuFinishPageLeave'))
+    );
 
-    expect(main).toContain("process.argv.includes('--shutdown-for-install')");
-    expect(shutdownHandlerStart).toBeGreaterThan(-1);
-    expect(shutdownHandler).toContain('void cleanupBeforeExit();');
-    expect(shutdownHandler.indexOf('void cleanupBeforeExit();')).toBeLessThan(
-      shutdownHandler.indexOf('showMainWindow();')
+    expect(finishFunction).toContain('${StdUtils.ExecShellAsUser}');
+    expect(finishFunction).not.toContain('ExecShell "open"');
+    expect(installer.indexOf('!macro customHeader')).toBeLessThan(installer.indexOf('Function YouYuFinishPageLeave'));
+  });
+
+  it('ships an isolated compile-and-run smoke for the exact production handoff macros', async () => {
+    const smoke = await readFile('scripts/smoke-installer-handoff.ps1', 'utf8');
+    const init = smoke.indexOf('!insertmacro customInit');
+    const check = smoke.indexOf('!insertmacro customCheckAppRunning');
+    const marker = smoke.indexOf('FileWrite $0 "installed"');
+    const install = smoke.indexOf('!insertmacro customInstall');
+
+    expect(smoke).toContain('build/installer.nsh');
+    expect(smoke).toContain("[Environment]::SetEnvironmentVariable('NSISDIR', $nsisRoot, 'Process')");
+    expect(smoke).toContain('RequestExecutionLevel user');
+    expect(smoke).toContain('!macro _isUpdated _a _b _t _f');
+    expect(smoke).toContain('VIProductVersion "1.6.8.0"');
+    expect(smoke).toContain('installed:1');
+    expect(smoke).toContain('runningTarget');
+    expect(smoke).toContain('partialHandoff');
+    expect(smoke).toContain('fresh');
+    expect(init).toBeGreaterThan(-1);
+    expect(init).toBeLessThan(check);
+    expect(check).toBeLessThan(marker);
+    expect(marker).toBeLessThan(install);
+    expect(smoke).not.toMatch(/WriteReg|DeleteReg|schtasks\.exe|restore-owned-proxy|system proxy/i);
+  });
+
+  it('keeps the standalone proxy restore script ownership-guarded without invoking it as the elevated installer user', async () => {
+    const installer = await readFile('build/installer.nsh', 'utf8');
+    const restoreScript = await readFile('build/restore-owned-proxy.ps1', 'utf8');
+
+    expect(installer).not.toContain('restore-owned-proxy.ps1');
+    expect(restoreScript).toContain('system-proxy-ownership.json');
+    expect(restoreScript).toContain("Get-RequiredProperty $state 'appliedFields'");
+    expect(restoreScript).toContain('$serverWasReplaced');
+    expect(restoreScript).toContain('$restoreTargets = @{}');
+    expect(restoreScript).toContain("$field -eq 'enabled' -and $serverWasReplaced");
+    expect(restoreScript).toContain('$postRestore = Get-CurrentProxySettings');
+    expect(restoreScript).toContain('Failed to verify current-user proxy after restore');
+    expect(restoreScript).toContain('InternetSetOption');
+    expect(restoreScript).toContain('if (-not $settingsChanged -or -not $settingsRefreshed)');
+    expect(restoreScript).not.toContain('if ($restoredAnyField)');
+    expect(restoreScript.match(/Remove-Item -LiteralPath \$statePath -Force/g)).toHaveLength(1);
+    expect(restoreScript.indexOf('Remove-Item -LiteralPath $statePath')).toBeGreaterThan(
+      restoreScript.indexOf('$postRestore = Get-CurrentProxySettings')
     );
   });
 });

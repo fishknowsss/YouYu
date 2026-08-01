@@ -23,20 +23,59 @@
 BrandingText " "
 
 Var YouYuDialog
+Var YouYuHandoffValidated
 !ifndef BUILD_UNINSTALLER
   Var YouYuRunCheckbox
   Var YouYuClosedRunningApp
   Var YouYuIsUpdateInstall
+  Var YouYuIsUpdaterLaunch
+  Var YouYuLegacyUpdateBridge
 !endif
 
 !macro customInit
   InitPluginsDir
+  StrCpy $YouYuHandoffValidated "0"
   !ifndef BUILD_UNINSTALLER
-    Call YouYuCloseRunningAppBeforeInstall
-    Call YouYuDetectUpdateInstall
+    StrCpy $YouYuIsUpdateInstall "0"
+    StrCpy $YouYuIsUpdaterLaunch "0"
+    StrCpy $YouYuLegacyUpdateBridge "0"
+    IfFileExists "$INSTDIR\YouYu.exe" 0 +2
+      StrCpy $YouYuIsUpdateInstall "1"
+    ${If} ${isUpdated}
+      StrCpy $YouYuIsUpdaterLaunch "1"
+      StrCpy $YouYuIsUpdateInstall "1"
+    ${EndIf}
+    Call YouYuValidateInstallBoundary
   !endif
   Call YouYuHideTitleIcon
 !macroend
+
+!macro customCheckAppRunning
+  !ifdef BUILD_UNINSTALLER
+    Call un.YouYuValidateInstallBoundary
+  !else
+    Call YouYuValidateInstallBoundary
+  !endif
+!macroend
+
+!ifndef BUILD_UNINSTALLER
+  !macro customInstall
+    ${If} $YouYuLegacyUpdateBridge != "1"
+      Call YouYuConsumeInstallHandoff
+    ${EndIf}
+  !macroend
+
+  # electron-builder adds its StdUtils plug-in directory after loading this
+  # include. Delay this callback definition until the template's header hook.
+  !macro customHeader
+    Function YouYuFinishPageLeave
+      ${NSD_GetState} $YouYuRunCheckbox $0
+      ${If} $0 == ${BST_CHECKED}
+        ${StdUtils.ExecShellAsUser} $0 "$INSTDIR\YouYu.exe" "open" ""
+      ${EndIf}
+    FunctionEnd
+  !macroend
+!endif
 
 !macro customWelcomePage
   Page custom YouYuWelcomePageCreate
@@ -50,16 +89,20 @@ Var YouYuDialog
   Page custom YouYuFinishPageCreate YouYuFinishPageLeave
 !macroend
 
-!macro customUnInstall
-  ${IfNot} ${isUpdated}
-    nsExec::Exec `"$SYSDIR\schtasks.exe" /Delete /TN "YouYu" /F`
-    Pop $0
-  ${EndIf}
-!macroend
-
 !ifdef BUILD_UNINSTALLER
   !macro customUnWelcomePage
     Page custom YouYuUninstallPageCreate
+  !macroend
+
+  !macro customUnInstall
+    ${IfNot} ${isUpdated}
+      File /oname=$PLUGINSDIR\YouYuCleanupStartupTasks.ps1 "${BUILD_RESOURCES_DIR}\cleanup-startup-tasks.ps1"
+      nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuCleanupStartupTasks.ps1" -Action Cleanup -ExecutablePath "$INSTDIR\YouYu.exe"`
+      Pop $0
+      ${If} $0 != 0
+        DetailPrint "未能清理全部 YouYu 开机启动任务。"
+      ${EndIf}
+    ${EndIf}
   !macroend
 !endif
 
@@ -84,86 +127,82 @@ Function YouYuHideTitleIcon
   System::Call 'user32::SetClassLongPtr(p$HWNDPARENT, i${GCLP_HICONSM}, p0)'
 FunctionEnd
 
-!ifndef BUILD_UNINSTALLER
-Function YouYuCloseRunningAppBeforeInstall
-  StrCpy $YouYuClosedRunningApp "0"
+!ifdef BUILD_UNINSTALLER
+Function un.YouYuValidateInstallBoundary
+!else
+Function YouYuValidateInstallBoundary
+!endif
+  !ifndef BUILD_UNINSTALLER
+    StrCpy $YouYuClosedRunningApp "0"
+  !endif
   File /oname=$PLUGINSDIR\YouYuManageProcess.ps1 "${BUILD_RESOURCES_DIR}\manage-installed-process.ps1"
 
-  RetryCloseYouYu:
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action Exists -ExecutablePath "$INSTDIR\YouYu.exe"`
-    Pop $0
-    ${If} $0 == 1
-      Return
-    ${ElseIf} $0 != 0
-      Goto YouYuCloseFailed
-    ${EndIf}
+  RetryValidateYouYu:
+    !ifndef BUILD_UNINSTALLER
+      ${If} $YouYuIsUpdaterLaunch == "1"
+        IfSilent YouYuRequireHandoff YouYuOptionalHandoff
+      ${EndIf}
+    YouYuOptionalHandoff:
+    !endif
 
-    StrCpy $YouYuClosedRunningApp "1"
-    DetailPrint "Closing running YouYu before update."
-    IfFileExists "$INSTDIR\YouYu.exe" 0 +4
-      nsExec::Exec `"$INSTDIR\YouYu.exe" --shutdown-for-install`
-      Pop $0
-      Sleep 4500
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action WaitForExit -ExecutablePath "$INSTDIR\YouYu.exe"`
+    !ifndef BUILD_UNINSTALLER
+      Goto YouYuCheckBoundaryResult
 
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action Exists -ExecutablePath "$INSTDIR\YouYu.exe"`
-    Pop $0
-    ${If} $0 == 1
-      Goto YouYuCloseFinished
-    ${ElseIf} $0 != 0
-      Goto YouYuCloseFailed
-    ${EndIf}
+    YouYuRequireHandoff:
+      nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action WaitForExit -ExecutablePath "$INSTDIR\YouYu.exe" -RequireHandoff -AllowLegacyUpdateBridge -InstallerVersion "${VERSION}"`
 
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action CloseWindow -ExecutablePath "$INSTDIR\YouYu.exe"`
-    Pop $0
-    ${If} $0 != 0
-      Goto YouYuCloseFailed
-    ${EndIf}
-    Sleep 1000
-
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action Exists -ExecutablePath "$INSTDIR\YouYu.exe"`
+    YouYuCheckBoundaryResult:
+    !endif
     Pop $0
     ${If} $0 == 0
-      Call YouYuRestoreOwnedProxyBeforeForceClose
-      ${If} $0 != 0
-        Goto YouYuCloseFailed
-      ${EndIf}
-      nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action Force -ExecutablePath "$INSTDIR\YouYu.exe"`
-      Pop $0
-      ${If} $0 != 0
-        Goto YouYuCloseFailed
-      ${EndIf}
-      Sleep 1200
-    ${ElseIf} $0 != 1
-      Goto YouYuCloseFailed
+      StrCpy $YouYuHandoffValidated "1"
+      Return
     ${EndIf}
+    !ifndef BUILD_UNINSTALLER
+      ${If} $0 == 10
+        StrCpy $YouYuHandoffValidated "1"
+        StrCpy $YouYuLegacyUpdateBridge "1"
+        Return
+      ${EndIf}
+    !endif
 
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action Exists -ExecutablePath "$INSTDIR\YouYu.exe"`
+    IfSilent YouYuBoundaryFailedSilent
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "YouYu 仍在运行，或安装身份校验未通过。请在启动它的原用户会话中退出 YouYu 后重试。" /SD IDRETRY IDRETRY RetryValidateYouYu
+    Quit
+  YouYuBoundaryFailedSilent:
+    SetErrorLevel 2
+    Quit
+FunctionEnd
+
+!ifndef BUILD_UNINSTALLER
+Function YouYuConsumeInstallHandoff
+  ${If} $YouYuHandoffValidated != "1"
+    Goto YouYuConsumeHandoffFailed
+  ${EndIf}
+  ${If} $YouYuIsUpdaterLaunch == "1"
+    IfSilent YouYuConsumeRequiredHandoff YouYuConsumeOptionalHandoff
+  ${EndIf}
+
+  YouYuConsumeOptionalHandoff:
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action Consume -ExecutablePath "$INSTDIR\YouYu.exe"`
+    Goto YouYuCheckConsumeHandoffResult
+
+  YouYuConsumeRequiredHandoff:
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action Consume -ExecutablePath "$INSTDIR\YouYu.exe" -RequireHandoff`
+
+  YouYuCheckConsumeHandoffResult:
     Pop $0
-    ${If} $0 != 1
-      Goto YouYuCloseFailed
+    ${If} $0 == 0
+      Return
     ${EndIf}
-    Goto YouYuCloseFinished
-  YouYuCloseFailed:
-    IfSilent YouYuCloseFailedSilent
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "YouYu 正在运行，安装程序无法关闭它。请手动退出后重试。" /SD IDRETRY IDRETRY RetryCloseYouYu
+
+  YouYuConsumeHandoffFailed:
+    DetailPrint "The authenticated update handoff could not be consumed after installation."
+    SetErrorLevel 2
     Quit
-  YouYuCloseFailedSilent:
-    Quit
-  YouYuCloseFinished:
 FunctionEnd
 
-Function YouYuRestoreOwnedProxyBeforeForceClose
-  DetailPrint "Restoring YouYu-managed system proxy before force close."
-  File /oname=$PLUGINSDIR\YouYuRestoreOwnedProxy.ps1 "${BUILD_RESOURCES_DIR}\restore-owned-proxy.ps1"
-  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuRestoreOwnedProxy.ps1"`
-  Pop $0
-FunctionEnd
-
-Function YouYuDetectUpdateInstall
-  StrCpy $YouYuIsUpdateInstall "0"
-  IfFileExists "$INSTDIR\YouYu.exe" 0 +2
-    StrCpy $YouYuIsUpdateInstall "1"
-FunctionEnd
 !endif
 
 Function YouYuHideDefaultChrome
@@ -306,12 +345,6 @@ Function YouYuFinishPageCreate
   nsDialogs::Show
 FunctionEnd
 
-Function YouYuFinishPageLeave
-  ${NSD_GetState} $YouYuRunCheckbox $0
-  ${If} $0 == ${BST_CHECKED}
-    ExecShell "open" "$INSTDIR\YouYu.exe"
-  ${EndIf}
-FunctionEnd
 !endif
 
 !ifdef BUILD_UNINSTALLER

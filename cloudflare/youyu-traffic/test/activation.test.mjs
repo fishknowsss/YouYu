@@ -5,9 +5,13 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
 
-import worker from '../src/index.ts';
+import worker, { cleanupExpiredData } from '../src/index.ts';
 
 const schema = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
+const trafficDedupMigration = readFileSync(
+  new URL('../migrations/2026-08-01-persist-traffic-report-dedup.sql', import.meta.url),
+  'utf8'
+);
 const registrationPassphrase = 'shared-registration-secret';
 const adminToken = 'admin-secret';
 const maxRequestBodyBytes = 16 * 1024;
@@ -19,6 +23,19 @@ async function waitFor(predicate, timeoutMs = 1000) {
     if (Date.now() >= deadline) throw new Error('timed out waiting for condition');
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+async function assertWorkerError(response, status, message, code) {
+  assert.equal(response.status, status);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  const requestId = response.headers.get('x-request-id');
+  assert.match(requestId ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.deepEqual(await response.json(), {
+    error: message,
+    code: code ?? message.toUpperCase().replace(/[^A-Z0-9]+/g, '_'),
+    requestId
+  });
 }
 
 test('an existing name attaches another device to the same user data', async (context) => {
@@ -148,6 +165,71 @@ test('admin device totals count logical machines while retaining legacy installa
   assert.equal(users[0].deviceRecords, 2);
 });
 
+test('admin collection routes use bounded pages and disclose whether more rows exist', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  for (let index = 0; index < 5; index += 1) {
+    await addKnownUser(database, `user-${index}`);
+  }
+  await database
+    .prepare(
+      `INSERT INTO devices
+         (id, user_id, device_seed, device_name, platform, first_seen_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind('device-0', 'user-0', 'seed-0', 'Primary PC', 'win32', '2026-07-10T00:00:00.000Z', '2026-07-13T00:00:00.000Z')
+    .run();
+  for (let index = 1; index <= 3; index += 1) {
+    const day = `2026-07-${String(index).padStart(2, '0')}`;
+    await database
+      .prepare(
+        `INSERT INTO traffic_daily
+           (user_id, device_id, date, upload_bytes, download_bytes, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .bind('user-0', 'device-0', day, index, index * 2, `${day}T00:00:00.000Z`)
+      .run();
+    await database
+      .prepare(
+        `INSERT INTO traffic_anomalies
+           (id, user_id, device_id, date, upload_delta, download_delta, reason, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(`anomaly-${index}`, 'user-0', 'device-0', day, index, index * 2, 'traffic_spike', `${day}T00:00:00.000Z`)
+      .run();
+  }
+
+  const users = await (await requestAdmin(database, '/api/admin/users?limit=2&offset=1')).json();
+  assert.equal(users.users.length, 2);
+  assert.deepEqual(users.page, { limit: 2, offset: 1, returned: 2, hasMore: true, nextOffset: 3 });
+
+  const traffic = await (await requestAdmin(database, '/api/admin/users/user-0/traffic?limit=1&offset=1')).json();
+  assert.equal(traffic.rows.length, 1);
+  assert.deepEqual(traffic.page, { limit: 1, offset: 1, returned: 1, hasMore: true, nextOffset: 2 });
+
+  const anomalies = await (await requestAdmin(database, '/api/admin/anomalies?limit=2&offset=1')).json();
+  assert.equal(anomalies.anomalies.length, 2);
+  assert.deepEqual(anomalies.page, { limit: 2, offset: 1, returned: 2, hasMore: false, nextOffset: null });
+});
+
+test('admin collection routes reject ambiguous, unsupported, or excessive pagination', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+
+  for (const query of [
+    'limit=0',
+    'limit=201',
+    'limit=1.5',
+    'offset=-1',
+    'offset=1000001',
+    'limit=1&limit=2',
+    'unknown=1'
+  ]) {
+    const response = await requestAdmin(database, `/api/admin/users?${query}`);
+    await assertWorkerError(response, 400, 'invalid pagination', 'INVALID_PAGINATION');
+  }
+});
+
 test('admin can merge user aliases without breaking an already registered source device', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
@@ -186,7 +268,7 @@ test('admin can merge user aliases without breaking an already registered source
     body: JSON.stringify({ targetUserId: target.userId })
   });
   assert.equal(unresolved.status, 409);
-  assert.deepEqual(await unresolved.json(), { error: 'config conflict' });
+  await assertWorkerError(unresolved, 409, 'config conflict');
 
   const merge = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(source.userId)}/merge`, {
     method: 'POST',
@@ -326,7 +408,7 @@ test('merge request ids cannot report success for a different active source user
     body: JSON.stringify({ targetUserId: target.userId, requestId })
   });
   assert.equal(collision.status, 409);
-  assert.deepEqual(await collision.json(), { error: 'merge request conflict' });
+  await assertWorkerError(collision, 409, 'merge request conflict');
   const secondUser = database.queryAll('SELECT status, merged_into_user_id FROM users WHERE id = ?', second.userId)[0];
   assert.equal(secondUser.status, 'active');
   assert.equal(secondUser.merged_into_user_id, null);
@@ -366,7 +448,7 @@ test('merge batch rejects a target that became an alias after the preview read',
     body: JSON.stringify({ targetUserId: target.userId })
   });
   assert.equal(racedMerge.status, 409);
-  assert.deepEqual(await racedMerge.json(), { error: 'merge state changed' });
+  await assertWorkerError(racedMerge, 409, 'merge state changed');
   const sourceUser = database.queryAll('SELECT status, merged_into_user_id FROM users WHERE id = ?', source.userId)[0];
   assert.equal(sourceUser.status, 'active');
   assert.equal(sourceUser.merged_into_user_id, null);
@@ -408,7 +490,7 @@ test('merge batch rejects a target config created after conflict evaluation', as
     body: JSON.stringify({ targetUserId: target.userId })
   });
   assert.equal(racedMerge.status, 409);
-  assert.deepEqual(await racedMerge.json(), { error: 'merge state changed' });
+  await assertWorkerError(racedMerge, 409, 'merge state changed');
   const targetConfig = database.queryAll(
     'SELECT subscription_url FROM user_remote_config WHERE user_id = ?',
     target.userId
@@ -463,6 +545,239 @@ test('traffic reports use the device owner committed by a concurrent user merge'
   assert.equal(body.traffic.totalDownload, 5678);
 });
 
+test('traffic report deduplication survives audit cleanup and rejects a reused id with a changed payload', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const identity = await (await activate(database, { name: 'Alice', deviceSeed })).json();
+  const input = {
+    reportId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    uploadDelta: 1234,
+    downloadDelta: 5678,
+    reportedAt: '2026-08-01T01:02:03.000Z',
+    appVersion: '1.6.6'
+  };
+
+  const accepted = await reportTraffic(database, identity, deviceSeed, input);
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).duplicate, undefined);
+  assert.equal(database.queryAll('SELECT COUNT(*) AS count FROM traffic_reports')[0].count, 1);
+  const [proof] = database.queryAll(
+    `SELECT
+       payload_hash,
+       legacy_device_id,
+       legacy_upload_delta,
+       legacy_download_delta,
+       legacy_reported_at
+     FROM traffic_report_dedup
+     WHERE id = ?`,
+    input.reportId
+  );
+  assert.match(proof.payload_hash, /^[0-9a-f]{64}$/);
+  assert.equal(proof.legacy_device_id, null);
+  assert.equal(proof.legacy_upload_delta, null);
+  assert.equal(proof.legacy_download_delta, null);
+  assert.equal(proof.legacy_reported_at, null);
+
+  const cleanup = await cleanupExpiredData({ DB: database }, Date.now() + 91 * 24 * 60 * 60 * 1000);
+  assert.equal(cleanup.deletedReportRows, 1);
+  assert.deepEqual(database.queryAll('SELECT id FROM traffic_reports'), []);
+  assert.deepEqual(
+    database.queryAll('SELECT id FROM traffic_report_dedup').map((row) => ({ ...row })),
+    [{ id: input.reportId }]
+  );
+
+  const retry = await reportTraffic(database, identity, deviceSeed, input);
+  assert.equal(retry.status, 200);
+  const retried = await retry.json();
+  assert.equal(retried.duplicate, true);
+  assert.equal(retried.anomaly, false);
+
+  for (const changedInput of [
+    { ...input, downloadDelta: input.downloadDelta + 1 },
+    { ...input, reportedAt: '2026-08-01T01:02:04.000Z' }
+  ]) {
+    const conflict = await reportTraffic(database, identity, deviceSeed, changedInput);
+    await assertWorkerError(conflict, 409, 'report id conflict', 'REPORT_ID_CONFLICT');
+  }
+
+  const [daily] = database.queryAll(
+    'SELECT upload_bytes, download_bytes FROM traffic_daily WHERE device_id = ?',
+    identity.deviceId
+  );
+  assert.deepEqual({ ...daily }, { upload_bytes: input.uploadDelta, download_bytes: input.downloadDelta });
+
+  const upgradedAppRetry = await reportTraffic(database, identity, deviceSeed, { ...input, appVersion: '1.6.7' });
+  assert.equal(upgradedAppRetry.status, 200);
+  assert.equal((await upgradedAppRetry.json()).duplicate, true);
+});
+
+test('zero-traffic heartbeats stay idempotent without permanent proofs and do not reserve report ids', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const identity = await (await activate(database, { name: 'Alice', deviceSeed })).json();
+  const input = {
+    reportId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    uploadDelta: 0,
+    downloadDelta: 0,
+    reportedAt: '2026-08-01T01:02:03.000Z',
+    appVersion: '1.6.6'
+  };
+
+  assert.equal((await reportTraffic(database, identity, deviceSeed, input)).status, 200);
+  const retry = await reportTraffic(database, identity, deviceSeed, input);
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).duplicate, undefined);
+  assert.equal(database.queryAll('SELECT COUNT(*) AS count FROM traffic_report_dedup')[0].count, 0);
+  assert.equal(database.queryAll('SELECT COUNT(*) AS count FROM traffic_reports')[0].count, 0);
+  assert.equal(database.queryAll('SELECT COUNT(*) AS count FROM traffic_daily')[0].count, 0);
+
+  const counted = await reportTraffic(database, identity, deviceSeed, { ...input, uploadDelta: 1 });
+  assert.equal(counted.status, 200);
+  assert.equal((await counted.json()).duplicate, undefined);
+  const duplicate = await reportTraffic(database, identity, deviceSeed, { ...input, uploadDelta: 1 });
+  assert.equal(duplicate.status, 200);
+  assert.equal((await duplicate.json()).duplicate, true);
+  assert.equal(database.queryAll('SELECT COUNT(*) AS count FROM traffic_report_dedup')[0].count, 1);
+  assert.equal(database.queryAll('SELECT COUNT(*) AS count FROM traffic_reports')[0].count, 1);
+  assert.equal(database.queryAll('SELECT upload_bytes FROM traffic_daily')[0].upload_bytes, 1);
+});
+
+test('the first retry of a migrated audit row seals its exact payload without recounting traffic', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const identity = await (await activate(database, { name: 'Alice', deviceSeed })).json();
+  const receivedAt = new Date();
+  const trafficDate = toTrafficDateKey(receivedAt);
+  const input = {
+    reportId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    uploadDelta: 321,
+    downloadDelta: 654,
+    reportedAt: '2026-08-01T02:03:04.000Z',
+    appVersion: '1.6.6'
+  };
+
+  database.exec('DROP TABLE traffic_report_dedup');
+  await database
+    .prepare(
+      `INSERT INTO traffic_reports
+         (id, user_id, device_id, upload_delta, download_delta, reported_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      input.reportId,
+      identity.userId,
+      identity.deviceId,
+      input.uploadDelta,
+      input.downloadDelta,
+      input.reportedAt,
+      receivedAt.toISOString()
+    )
+    .run();
+  await database
+    .prepare(
+      `INSERT INTO traffic_daily
+         (user_id, device_id, date, upload_bytes, download_bytes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      identity.userId,
+      identity.deviceId,
+      trafficDate,
+      input.uploadDelta,
+      input.downloadDelta,
+      receivedAt.toISOString()
+    )
+    .run();
+  database.exec(trafficDedupMigration);
+
+  const retry = await reportTraffic(database, identity, deviceSeed, input);
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).duplicate, true);
+  const [proof] = database.queryAll(
+    `SELECT payload_hash, legacy_device_id, legacy_upload_delta, legacy_download_delta, legacy_reported_at
+     FROM traffic_report_dedup WHERE id = ?`,
+    input.reportId
+  );
+  assert.match(proof.payload_hash, /^[0-9a-f]{64}$/);
+  assert.equal(proof.legacy_device_id, null);
+  assert.equal(proof.legacy_upload_delta, null);
+  assert.equal(proof.legacy_download_delta, null);
+  assert.equal(proof.legacy_reported_at, null);
+  const [daily] = database.queryAll(
+    'SELECT upload_bytes, download_bytes FROM traffic_daily WHERE device_id = ?',
+    identity.deviceId
+  );
+  assert.deepEqual({ ...daily }, { upload_bytes: input.uploadDelta, download_bytes: input.downloadDelta });
+
+  const conflict = await reportTraffic(database, identity, deviceSeed, {
+    ...input,
+    reportedAt: '2026-08-01T02:03:05.000Z'
+  });
+  await assertWorkerError(conflict, 409, 'report id conflict', 'REPORT_ID_CONFLICT');
+});
+
+test('a report accepted between schema migration and Worker rollout self-heals its missing proof', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const identity = await (await activate(database, { name: 'Alice', deviceSeed })).json();
+  const receivedAt = new Date();
+  const input = {
+    reportId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    uploadDelta: 111,
+    downloadDelta: 222,
+    reportedAt: '2026-08-01T03:04:05.000Z',
+    appVersion: '1.6.6'
+  };
+  await database
+    .prepare(
+      `INSERT INTO traffic_reports
+         (id, user_id, device_id, upload_delta, download_delta, reported_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      input.reportId,
+      identity.userId,
+      identity.deviceId,
+      input.uploadDelta,
+      input.downloadDelta,
+      input.reportedAt,
+      receivedAt.toISOString()
+    )
+    .run();
+  await database
+    .prepare(
+      `INSERT INTO traffic_daily
+         (user_id, device_id, date, upload_bytes, download_bytes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      identity.userId,
+      identity.deviceId,
+      toTrafficDateKey(receivedAt),
+      input.uploadDelta,
+      input.downloadDelta,
+      receivedAt.toISOString()
+    )
+    .run();
+
+  const retry = await reportTraffic(database, identity, deviceSeed, input);
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).duplicate, true);
+  assert.match(
+    database.queryAll('SELECT payload_hash FROM traffic_report_dedup WHERE id = ?', input.reportId)[0].payload_hash,
+    /^[0-9a-f]{64}$/
+  );
+  const [daily] = database.queryAll(
+    'SELECT upload_bytes, download_bytes FROM traffic_daily WHERE device_id = ?',
+    identity.deviceId
+  );
+  assert.deepEqual({ ...daily }, { upload_bytes: input.uploadDelta, download_bytes: input.downloadDelta });
+});
+
 test('a concurrent merge cannot recreate a source user config override', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
@@ -506,7 +821,7 @@ test('a concurrent merge cannot recreate a source user config override', async (
     subscriptionUrl: 'https://example.com/stale-source'
   });
   assert.equal(response.status, 404);
-  assert.deepEqual(await response.json(), { error: 'unknown user' });
+  await assertWorkerError(response, 404, 'unknown user');
   assert.equal(database.queryAll('SELECT user_id FROM user_remote_config WHERE user_id = ?', source.userId).length, 0);
   const [targetConfig] = database.queryAll(
     'SELECT subscription_url FROM user_remote_config WHERE user_id = ?',
@@ -694,7 +1009,40 @@ test('activation rejects malformed JSON as a bad request', async (context) => {
   );
 
   assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), { error: 'invalid json' });
+  const requestId = response.headers.get('x-request-id');
+  assert.match(requestId ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.deepEqual(await response.json(), {
+    error: 'invalid json',
+    code: 'INVALID_JSON',
+    requestId
+  });
+});
+
+test('JSON write routes reject unsupported media types and invalid declared lengths before reading', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const env = {
+    DB: database,
+    REGISTRATION_PASSPHRASE: registrationPassphrase
+  };
+
+  const wrongType = await worker.fetch(
+    new Request('https://worker.example/api/activate', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: '{}'
+    }),
+    env
+  );
+  await assertWorkerError(wrongType, 415, 'unsupported media type', 'UNSUPPORTED_MEDIA_TYPE');
+
+  for (const declaredLength of ['-1', '1.5', 'not-a-number']) {
+    const request = createStreamRequest('/api/activate', [new TextEncoder().encode('{}')], {
+      'content-length': declaredLength
+    });
+    const response = await worker.fetch(request, env);
+    await assertWorkerError(response, 400, 'invalid content length', 'INVALID_CONTENT_LENGTH');
+  }
 });
 
 test('a whitespace-only admin token keeps the admin API disabled', async (context) => {
@@ -708,10 +1056,103 @@ test('a whitespace-only admin token keeps the admin API disabled', async (contex
   });
 
   assert.equal(response.status, 403);
-  assert.deepEqual(await response.json(), { error: 'admin disabled' });
+  await assertWorkerError(response, 403, 'admin disabled');
 });
 
-test('admin page exposes the redesigned two-profile workspace without removed controls', async (context) => {
+test('a valid admin token bypasses rate-limit storage entirely', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const rateLimitStatements = [];
+  const observedDatabase = {
+    ...database,
+    prepare(sql) {
+      if (/\brate_limits\b/i.test(sql)) rateLimitStatements.push(sql);
+      return database.prepare(sql);
+    }
+  };
+
+  const response = await worker.fetch(
+    new Request('https://worker.example/api/admin/users', {
+      headers: { authorization: `Bearer ${adminToken}`, 'cf-connecting-ip': '203.0.113.10' }
+    }),
+    {
+      DB: observedDatabase,
+      REGISTRATION_PASSPHRASE: registrationPassphrase,
+      ADMIN_TOKEN: adminToken
+    }
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(rateLimitStatements, []);
+});
+
+test('invalid admin tokens consume the failure window and return 429 only after the threshold', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const requestInvalidAdmin = () =>
+    worker.fetch(
+      new Request('https://worker.example/api/admin/users', {
+        headers: { authorization: 'Bearer invalid-admin-token', 'cf-connecting-ip': '203.0.113.11' }
+      }),
+      {
+        DB: database,
+        REGISTRATION_PASSPHRASE: registrationPassphrase,
+        ADMIN_TOKEN: adminToken
+      }
+    );
+
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    await assertWorkerError(await requestInvalidAdmin(), 403, 'forbidden', 'FORBIDDEN');
+  }
+  await assertWorkerError(await requestInvalidAdmin(), 429, 'too many attempts', 'TOO_MANY_ATTEMPTS');
+
+  assert.deepEqual(
+    database
+      .queryAll('SELECT attempts FROM rate_limits WHERE key = ?', 'admin:203.0.113.11')
+      .map((row) => row.attempts),
+    [11]
+  );
+});
+
+test('prior admin failures never block or clear a valid token and expire naturally', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const clientIp = '203.0.113.12';
+  const requestAdminToken = (token) =>
+    worker.fetch(
+      new Request('https://worker.example/api/admin/users', {
+        headers: { authorization: `Bearer ${token}`, 'cf-connecting-ip': clientIp }
+      }),
+      {
+        DB: database,
+        REGISTRATION_PASSPHRASE: registrationPassphrase,
+        ADMIN_TOKEN: adminToken
+      }
+    );
+
+  for (let attempt = 1; attempt <= 11; attempt += 1) {
+    await requestAdminToken('invalid-admin-token');
+  }
+
+  const validResponse = await requestAdminToken(adminToken);
+  assert.equal(validResponse.status, 200);
+  assert.deepEqual(
+    database.queryAll('SELECT attempts FROM rate_limits WHERE key = ?', `admin:${clientIp}`).map((row) => row.attempts),
+    [11]
+  );
+
+  database
+    .prepare('UPDATE rate_limits SET reset_at = ? WHERE key = ?')
+    .bind(Date.now() - 1, `admin:${clientIp}`)
+    .run();
+  await assertWorkerError(await requestAdminToken('invalid-admin-token'), 403, 'forbidden', 'FORBIDDEN');
+  assert.deepEqual(
+    database.queryAll('SELECT attempts FROM rate_limits WHERE key = ?', `admin:${clientIp}`).map((row) => row.attempts),
+    [1]
+  );
+});
+
+test('admin page exposes the fixed-viewport management workspace without removed controls', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
   const response = await worker.fetch(new Request('https://worker.example/admin'), {
@@ -724,29 +1165,68 @@ test('admin page exposes the redesigned two-profile workspace without removed co
   assert.equal(response.headers.get('cache-control'), 'no-store, no-transform');
   const contentSecurityPolicy = response.headers.get('content-security-policy') ?? '';
   assert.match(contentSecurityPolicy, /frame-ancestors 'none'/);
-  assert.match(contentSecurityPolicy, /script-src 'unsafe-inline';/);
+  assert.match(contentSecurityPolicy, /script-src 'self'/);
+  assert.doesNotMatch(contentSecurityPolicy, /script-src[^;]*'unsafe-inline'/);
+  assert.match(contentSecurityPolicy, /(?:^|; )style-src 'self'(?:;|$)/);
+  assert.match(contentSecurityPolicy, /style-src-attr 'unsafe-inline'/);
   assert.doesNotMatch(contentSecurityPolicy, /static\.cloudflareinsights\.com/);
   assert.match(contentSecurityPolicy, /connect-src 'self'/);
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   const page = await response.text();
-  const script = page.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-  assert.ok(script);
+  assert.match(page, /<link rel="stylesheet" href="\/admin\/assets\/app\.css" \/>/);
+  assert.match(page, /<script src="\/admin\/assets\/app\.js" defer><\/script>/);
+  assert.doesNotMatch(page, /<script>([\s\S]*?)<\/script>/);
+  assert.doesNotMatch(page, /<style>([\s\S]*?)<\/style>/);
+
+  const scriptResponse = await worker.fetch(new Request('https://worker.example/admin/assets/app.js'), {
+    DB: database,
+    REGISTRATION_PASSPHRASE: registrationPassphrase,
+    ADMIN_TOKEN: adminToken
+  });
+  assert.equal(scriptResponse.status, 200);
+  assert.equal(scriptResponse.headers.get('content-type'), 'text/javascript; charset=utf-8');
+  assert.equal(scriptResponse.headers.get('x-content-type-options'), 'nosniff');
+  const script = await scriptResponse.text();
   assert.doesNotThrow(() => new Function(script));
+  assert.doesNotMatch(script, /localStorage|sessionStorage|\.innerHTML|\.outerHTML|insertAdjacentHTML/);
+
+  const styleResponse = await worker.fetch(new Request('https://worker.example/admin/assets/app.css'), {
+    DB: database,
+    REGISTRATION_PASSPHRASE: registrationPassphrase,
+    ADMIN_TOKEN: adminToken
+  });
+  assert.equal(styleResponse.status, 200);
+  assert.equal(styleResponse.headers.get('content-type'), 'text/css; charset=utf-8');
+  const styles = await styleResponse.text();
   assert.match(page, /class="admin-workspace"/);
   assert.match(page, /id="changeToken"[^>]*aria-expanded="true"/);
   assert.match(page, /class="management-grid"/);
   assert.match(page, /<table class="users-table">\s*<colgroup>/);
-  assert.match(page, /html\s*\{[^}]*overflow-y:\s*scroll;[^}]*scrollbar-gutter:\s*stable both-edges;/);
-  assert.match(page, /table\s*\{[^}]*table-layout:\s*fixed;/);
-  assert.match(page, /\.sort-mark\s*\{[^}]*width:\s*16px;/);
-  assert.doesNotMatch(page, /scrollIntoView\(/);
-  assert.doesNotMatch(page, /button\[aria-busy="true"\]\s*\{[^}]*padding-right:/);
-  assert.match(page, /let committedToken = sessionToken \|\| legacyToken;/);
-  assert.match(page, /const token = tokenOverride \|\| committedToken;/);
-  assert.doesNotMatch(page, /tokenInput\.value\.trim\(\) \|\| sessionStorage/);
+  assert.match(styles, /html,\s*body\s*\{[^}]*height:\s*100%;[^}]*overflow:\s*hidden;/);
+  assert.match(styles, /\.view-panel:not\(\[hidden\]\)\s*\{[^}]*height:\s*100%;[^}]*overflow:\s*hidden;/);
+  assert.match(page, /id="trafficPagination"/);
+  assert.match(page, /data-section-switcher="overview"/);
+  assert.match(page, /data-overview-pane="trend"/);
+  assert.match(page, /data-trend-range="hour">分时/);
+  assert.match(page, /data-trend-range="day">日/);
+  assert.match(page, /data-trend-range="month">月/);
+  assert.match(page, /data-stat="todayReported"/);
+  assert.match(page, /class="metric-pair"/);
+  assert.match(page, /<th class="num">上传<\/th><th class="num">下载<\/th>/);
+  assert.match(page, /id="trafficExpiresAt" type="datetime-local"/);
+  assert.match(styles, /grid-template-areas:\s*"trend quota"\s*"users ranking"\s*"users anomalies"/);
+  assert.doesNotMatch(page, /实时在线|当日在线/);
+  assert.match(styles, /table\s*\{[^}]*table-layout:\s*fixed;/);
+  assert.match(styles, /\.sort-mark\s*\{[^}]*width:\s*16px;/);
+  assert.doesNotMatch(script, /scrollIntoView\(/);
+  assert.doesNotMatch(styles, /button\[aria-busy="true"\]\s*\{[^}]*padding-right:/);
+  assert.match(script, /let committedToken = '';/);
+  assert.match(script, /const token = tokenOverride \|\| committedToken;/);
   assert.match(page, /value="ruleset">智能规则/);
   assert.match(page, /value="subscription">机场规则/);
-  assert.match(page, /id="mergeTitle">合并用户/);
+  assert.match(page, /data-drawer-tab="merge">合并用户/);
+  assert.match(page, /id="previewMerge"[^>]*>预览合并/);
+  assert.doesNotMatch(page, /查看、筛选和配置(?:登记)?用户/);
   for (const removed of [
     '兼容机场',
     '本地规则',
@@ -774,58 +1254,83 @@ test('admin page never uses an unsubmitted token draft for API requests', async 
     ADMIN_TOKEN: adminToken
   });
   const page = await response.text();
+  const script = await (
+    await worker.fetch(new Request('https://worker.example/admin/assets/app.js'), {
+      DB: database,
+      REGISTRATION_PASSPHRASE: registrationPassphrase,
+      ADMIN_TOKEN: adminToken
+    })
+  ).text();
   const requests = [];
   const dom = new JSDOM(page, {
-    beforeParse(window) {
-      window.sessionStorage.setItem('youyu_admin_token', 'committed-token');
-      window.fetch = async (input, init = {}) => {
-        const path = String(input);
-        requests.push({ path, authorization: init.headers?.authorization });
-        const body = path.endsWith('/config')
-          ? { config: {} }
-          : path.endsWith('/users')
-            ? { users: [] }
-            : { anomalies: [] };
-        return new Response(JSON.stringify(body), {
-          headers: { 'content-type': 'application/json' },
-          status: 200
-        });
-      };
-    },
-    runScripts: 'dangerously',
+    runScripts: 'outside-only',
     url: 'https://worker.example/admin'
   });
   context.after(() => dom.window.close());
 
   const document = dom.window.document;
+  dom.window.fetch = async (input, init = {}) => {
+    const path = String(input);
+    const url = new URL(path, 'https://worker.example');
+    const headers = new Headers(init.headers);
+    requests.push({ path, authorization: headers.get('authorization') });
+    const body = url.pathname.endsWith('/config')
+      ? { config: {} }
+      : url.pathname === '/api/admin/users'
+        ? url.searchParams.get('offset') === '1'
+          ? { users: [], page: { limit: 200, offset: 1, returned: 0, hasMore: false, nextOffset: null } }
+          : {
+              users: [{ id: 'user-1', name: 'Paged User' }],
+              page: { limit: 200, offset: 0, returned: 1, hasMore: true, nextOffset: 1 }
+            }
+        : url.pathname.includes('/traffic-limit')
+          ? { trafficLimitBytes: 3380139261952, trafficExpiresAt: '2026-08-11T20:00:00.000Z' }
+          : url.pathname.includes('/traffic-trend')
+            ? { points: [] }
+            : { anomalies: [], page: { limit: 100, offset: 0, returned: 0, hasMore: false, nextOffset: null } };
+    return new Response(JSON.stringify(body), {
+      headers: { 'content-type': 'application/json' },
+      status: 200
+    });
+  };
+  dom.window.eval(script);
+  const tokenInput = document.getElementById('token');
+  tokenInput.value = 'committed-token';
+  document
+    .getElementById('authPanel')
+    .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  assert.equal(tokenInput.value, '', 'the submitted token must leave the DOM before network requests settle');
   await waitFor(() => document.getElementById('adminWorkspace').hidden === false);
   assert.equal(document.getElementById('changeToken').getAttribute('aria-expanded'), 'false');
-  assert.ok(requests.length >= 3);
+  assert.equal(tokenInput.value, '');
+  assert.equal(dom.window.localStorage.length, 0);
+  assert.equal(dom.window.sessionStorage.length, 0);
+  assert.ok(requests.length >= 5);
   assert.ok(requests.every((request) => request.authorization === 'Bearer committed-token'));
+  assert.ok(requests.some((request) => request.path.includes('/api/admin/users?limit=200&offset=1')));
 
   document.getElementById('changeToken').click();
-  const tokenInput = document.getElementById('token');
   tokenInput.value = 'unsaved-token';
   const refreshButton = document.getElementById('refresh');
   const requestCount = requests.length;
   refreshButton.dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true }));
   refreshButton.click();
 
-  await waitFor(() => requests.length >= requestCount + 3);
-  assert.equal(tokenInput.value, 'committed-token');
+  await waitFor(() => requests.length >= requestCount + 5);
+  assert.equal(tokenInput.value, '');
   assert.equal(document.getElementById('changeToken').getAttribute('aria-expanded'), 'false');
   assert.ok(requests.slice(requestCount).every((request) => request.authorization === 'Bearer committed-token'));
 });
 
-test('admin config writes reject non-object JSON and bodies larger than 64 KiB', async (context) => {
+test('admin writes reject non-object JSON and bodies larger than 64 KiB', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
   await addKnownUser(database);
 
-  for (const path of ['/api/admin/config', '/api/admin/users/user-1/config']) {
+  for (const path of ['/api/admin/config', '/api/admin/traffic-limit', '/api/admin/users/user-1/config']) {
     const nonObject = await requestAdminConfig(database, path, '[]');
     assert.equal(nonObject.status, 400, path);
-    assert.deepEqual(await nonObject.json(), { error: 'invalid json' });
+    await assertWorkerError(nonObject, 400, 'invalid json');
 
     const oversized = await requestAdminConfig(
       database,
@@ -833,8 +1338,269 @@ test('admin config writes reject non-object JSON and bodies larger than 64 KiB',
       JSON.stringify({ padding: 'x'.repeat(maxAdminConfigBodyBytes) })
     );
     assert.equal(oversized.status, 413, path);
-    assert.deepEqual(await oversized.json(), { error: 'request too large' });
+    await assertWorkerError(oversized, 413, 'request too large');
   }
+});
+
+test('admin traffic limit reports cumulative usage for active canonical users', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  await database.batch([
+    database.prepare(`
+      INSERT INTO users (id, name, normalized_name, status, created_at, merged_into_user_id) VALUES
+        ('user-1', 'Alice', 'alice', 'active', '2026-07-19T00:00:00.000Z', NULL),
+        ('user-2', 'Bob', 'bob', 'active', '2026-07-19T00:00:00.000Z', NULL),
+        ('user-merged', 'Merged', 'merged', 'merged', '2026-07-19T00:00:00.000Z', 'user-1'),
+        ('user-disabled', 'Disabled', 'disabled', 'disabled', '2026-07-19T00:00:00.000Z', NULL)`),
+    database.prepare(`
+      INSERT INTO devices (id, user_id, device_seed, first_seen_at, last_seen_at) VALUES
+        ('device-1', 'user-1', 'seed-1', '2026-07-19T00:00:00.000Z', '2026-07-19T00:00:00.000Z'),
+        ('device-2', 'user-2', 'seed-2', '2026-07-19T00:00:00.000Z', '2026-07-19T00:00:00.000Z'),
+        ('device-merged', 'user-merged', 'seed-merged', '2026-07-19T00:00:00.000Z', '2026-07-19T00:00:00.000Z'),
+        ('device-disabled', 'user-disabled', 'seed-disabled', '2026-07-19T00:00:00.000Z', '2026-07-19T00:00:00.000Z')`),
+    database.prepare(`
+      INSERT INTO traffic_daily (user_id, device_id, date, upload_bytes, download_bytes, updated_at) VALUES
+        ('user-1', 'device-1', '2026-07-18', 100, 200, '2026-07-19T00:00:00.000Z'),
+        ('user-1', 'device-1', '2026-07-19', 50, 75, '2026-07-19T00:00:00.000Z'),
+        ('user-2', 'device-2', '2026-07-19', 25, 50, '2026-07-19T00:00:00.000Z'),
+        ('user-merged', 'device-merged', '2026-07-19', 1000, 2000, '2026-07-19T00:00:00.000Z'),
+        ('user-disabled', 'device-disabled', '2026-07-19', 1000, 2000, '2026-07-19T00:00:00.000Z')`)
+  ]);
+
+  const defaultResponse = await getAdminTrafficLimit(database);
+  assert.equal(defaultResponse.status, 200);
+  assert.deepEqual(await defaultResponse.json(), {
+    trafficLimitBytes: 3380139261952,
+    trafficExpiresAt: '2026-08-11T20:00:00.000Z',
+    uploadBytes: 175,
+    downloadBytes: 325,
+    usedBytes: 500,
+    remainingBytes: 3380139261452,
+    exceededBytes: 0,
+    usagePercent: (500 / 3380139261952) * 100
+  });
+
+  const updatedResponse = await updateAdminTrafficLimit(database, { trafficLimitBytes: 400 });
+  assert.equal(updatedResponse.status, 200);
+  assert.deepEqual(await updatedResponse.json(), {
+    trafficLimitBytes: 400,
+    trafficExpiresAt: '2026-08-11T20:00:00.000Z',
+    uploadBytes: 175,
+    downloadBytes: 325,
+    usedBytes: 500,
+    remainingBytes: 0,
+    exceededBytes: 100,
+    usagePercent: 125
+  });
+});
+
+test('admin traffic limit strictly validates input and leaves the stored value unchanged', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+
+  const baseline = await updateAdminTrafficLimit(database, { trafficLimitBytes: 1000 });
+  assert.equal(baseline.status, 200);
+
+  for (const input of [
+    {},
+    { trafficLimitBytes: null },
+    { trafficLimitBytes: '1000' },
+    { trafficLimitBytes: 0 },
+    { trafficLimitBytes: -1 },
+    { trafficLimitBytes: 1.5 },
+    { trafficLimitBytes: Number.MAX_SAFE_INTEGER + 1 }
+  ]) {
+    const response = await updateAdminTrafficLimit(database, input);
+    assert.equal(response.status, 400, JSON.stringify(input));
+    await assertWorkerError(response, 400, 'invalid traffic limit');
+  }
+
+  const unsupported = await updateAdminTrafficLimit(database, { trafficLimitBytes: 1000, enabled: true });
+  assert.equal(unsupported.status, 400);
+  await assertWorkerError(unsupported, 400, 'unsupported traffic limit field');
+
+  const current = await getAdminTrafficLimit(database);
+  assert.equal(current.status, 200);
+  assert.equal((await current.json()).trafficLimitBytes, 1000);
+
+  const expiryOnly = await updateAdminTrafficLimit(database, {
+    trafficExpiresAt: '2026-08-12T04:00:00+08:00'
+  });
+  assert.equal(expiryOnly.status, 200);
+  const expiryPayload = await expiryOnly.json();
+  assert.equal(expiryPayload.trafficLimitBytes, 1000);
+  assert.equal(expiryPayload.trafficExpiresAt, '2026-08-11T20:00:00.000Z');
+
+  for (const trafficExpiresAt of [
+    null,
+    '2026-08-12',
+    '2026-08-12T04:00:00',
+    '2026-02-30T04:00:00+08:00',
+    'not-a-date'
+  ]) {
+    const invalidExpiry = await updateAdminTrafficLimit(database, { trafficExpiresAt });
+    assert.equal(invalidExpiry.status, 400, String(trafficExpiresAt));
+    await assertWorkerError(invalidExpiry, 400, 'invalid traffic expiry');
+  }
+
+  const existingConfig = await updateAdminConfig(database, { trafficLimitBytes: 1000 });
+  assert.equal(existingConfig.status, 400);
+  await assertWorkerError(existingConfig, 400, 'unsupported config field');
+});
+
+test('admin traffic trend aggregates trusted active canonical data and fills each range', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const now = new Date();
+  const shiftedNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const today = shiftedNow.toISOString().slice(0, 10);
+  const yesterday = new Date(shiftedNow.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const olderDate = new Date(Date.UTC(shiftedNow.getUTCFullYear(), shiftedNow.getUTCMonth() - 3, 15))
+    .toISOString()
+    .slice(0, 10);
+  await database.batch([
+    database
+      .prepare(
+        `
+      INSERT INTO users (id, name, normalized_name, status, created_at, merged_into_user_id) VALUES
+        ('user-1', 'Alice', 'alice', 'active', ?, NULL),
+        ('user-2', 'Bob', 'bob', 'active', ?, NULL),
+        ('user-merged', 'Merged', 'merged', 'merged', ?, 'user-1'),
+        ('user-disabled', 'Disabled', 'disabled', 'disabled', ?, NULL)`
+      )
+      .bind(now.toISOString(), now.toISOString(), now.toISOString(), now.toISOString()),
+    database
+      .prepare(
+        `
+      INSERT INTO devices (id, user_id, device_seed, first_seen_at, last_seen_at) VALUES
+        ('device-1', 'user-1', 'seed-1', ?, ?),
+        ('device-2', 'user-2', 'seed-2', ?, ?),
+        ('device-merged', 'user-merged', 'seed-merged', ?, ?),
+        ('device-disabled', 'user-disabled', 'seed-disabled', ?, ?)`
+      )
+      .bind(
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString()
+      ),
+    database
+      .prepare(
+        `
+      INSERT INTO traffic_reports (id, user_id, device_id, upload_delta, download_delta, reported_at, created_at) VALUES
+        ('report-1', 'user-1', 'device-1', 100, 200, '2001-01-01T00:00:00.000Z', ?),
+        ('report-2', 'user-2', 'device-2', 25, 50, '2099-01-01T00:00:00.000Z', ?),
+        ('report-merged', 'user-merged', 'device-merged', 1000, 2000, ?, ?),
+        ('report-disabled', 'user-disabled', 'device-disabled', 1000, 2000, ?, ?)`
+      )
+      .bind(
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString(),
+        now.toISOString()
+      ),
+    database
+      .prepare(
+        `
+      INSERT INTO traffic_daily (user_id, device_id, date, upload_bytes, download_bytes, updated_at) VALUES
+        ('user-1', 'device-1', ?, 100, 200, ?),
+        ('user-2', 'device-2', ?, 25, 50, ?),
+        ('user-1', 'device-1', ?, 10, 20, ?),
+        ('user-1', 'device-1', ?, 400, 600, ?),
+        ('user-merged', 'device-merged', ?, 1000, 2000, ?),
+        ('user-disabled', 'device-disabled', ?, 1000, 2000, ?)`
+      )
+      .bind(
+        today,
+        now.toISOString(),
+        today,
+        now.toISOString(),
+        yesterday,
+        now.toISOString(),
+        olderDate,
+        now.toISOString(),
+        today,
+        now.toISOString(),
+        today,
+        now.toISOString()
+      )
+  ]);
+
+  const unauthorized = await worker.fetch(new Request('https://worker.example/api/admin/traffic-trend?range=day'), {
+    DB: database,
+    REGISTRATION_PASSPHRASE: registrationPassphrase,
+    ADMIN_TOKEN: adminToken
+  });
+  assert.equal(unauthorized.status, 403);
+
+  const invalid = await getAdminTrafficTrend(database, 'week');
+  assert.equal(invalid.status, 400);
+  await assertWorkerError(invalid, 400, 'invalid traffic trend range');
+
+  const hour = await (await getAdminTrafficTrend(database, 'hour')).json();
+  assert.equal(hour.range, 'hour');
+  assert.equal(hour.timeZone, 'Asia/Shanghai');
+  assert.ok(hour.points.length >= 1 && hour.points.length <= 24);
+  assert.equal(
+    hour.points.reduce((sum, point) => sum + point.uploadBytes, 0),
+    125
+  );
+  assert.equal(
+    hour.points.reduce((sum, point) => sum + point.downloadBytes, 0),
+    250
+  );
+
+  const day = await (await getAdminTrafficTrend(database, 'day')).json();
+  assert.equal(day.points.length, 30);
+  assert.equal(
+    day.points.reduce((sum, point) => sum + point.uploadBytes, 0),
+    135
+  );
+  assert.equal(
+    day.points.reduce((sum, point) => sum + point.downloadBytes, 0),
+    270
+  );
+
+  const month = await (await getAdminTrafficTrend(database, 'month')).json();
+  assert.equal(month.points.length, 12);
+  assert.equal(
+    month.points.reduce((sum, point) => sum + point.uploadBytes, 0),
+    535
+  );
+  assert.equal(
+    month.points.reduce((sum, point) => sum + point.downloadBytes, 0),
+    870
+  );
+});
+
+test('admin traffic limit stays out of client and per-user remote config responses', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const activation = await activate(database, { name: 'Alice', deviceSeed });
+  assert.equal(activation.status, 200);
+  const identity = await activation.json();
+
+  const updated = await updateAdminTrafficLimit(database, { trafficLimitBytes: 1000 });
+  assert.equal(updated.status, 200);
+
+  const clientConfig = (await (await getClientConfig(database, identity, deviceSeed)).json()).config;
+  assert.equal(Object.hasOwn(clientConfig, 'trafficLimitBytes'), false);
+  assert.equal(Object.hasOwn(clientConfig, 'trafficExpiresAt'), false);
+
+  const userConfig = await getAdminUserConfig(database, identity.userId);
+  assert.equal(userConfig.status, 200);
+  const userConfigBody = await userConfig.json();
+  assert.equal(Object.hasOwn(userConfigBody.effective, 'trafficLimitBytes'), false);
+  assert.equal(Object.hasOwn(userConfigBody.effective, 'trafficExpiresAt'), false);
+  assert.equal(Object.hasOwn(userConfigBody.override ?? {}, 'trafficLimitBytes'), false);
+  assert.equal(Object.hasOwn(userConfigBody.override ?? {}, 'trafficExpiresAt'), false);
 });
 
 test('admin config exposes only status, subscription, and the two supported rule profiles', async (context) => {
@@ -851,7 +1617,7 @@ test('admin config exposes only status, subscription, and the two supported rule
   for (const ruleProfile of ['smart', 'global']) {
     const response = await updateAdminConfig(database, { ruleProfile });
     assert.equal(response.status, 400, ruleProfile);
-    assert.deepEqual(await response.json(), { error: 'invalid rule profile' });
+    await assertWorkerError(response, 400, 'invalid rule profile');
   }
 
   for (const field of [
@@ -863,7 +1629,7 @@ test('admin config exposes only status, subscription, and the two supported rule
   ]) {
     const response = await updateAdminConfig(database, field);
     assert.equal(response.status, 400, JSON.stringify(field));
-    assert.deepEqual(await response.json(), { error: 'unsupported config field' });
+    await assertWorkerError(response, 400, 'unsupported config field');
   }
 
   const config = (await (await getAdminConfig(database)).json()).config;
@@ -899,7 +1665,7 @@ test('global config rejects invalid recognized fields without changing stored co
   for (const item of cases) {
     const response = await updateAdminConfig(database, item.input);
     assert.equal(response.status, 400, item.error);
-    assert.deepEqual(await response.json(), { error: item.error });
+    await assertWorkerError(response, 400, item.error);
     const current = await getAdminConfig(database);
     assert.equal(current.status, 200);
     assert.deepEqual((await current.json()).config, baseline, item.error);
@@ -936,11 +1702,11 @@ test('per-user config patches preserve omitted fields and only explicit null cle
     ruleProfile: 'unsupported'
   });
   assert.equal(invalidResponse.status, 400);
-  assert.deepEqual(await invalidResponse.json(), { error: 'invalid rule profile' });
+  await assertWorkerError(invalidResponse, 400, 'invalid rule profile');
 
   const unsupportedThreshold = await updateAdminUserConfig(database, 'user-1', { anomalyThresholdBytes: 1024 });
   assert.equal(unsupportedThreshold.status, 400);
-  assert.deepEqual(await unsupportedThreshold.json(), { error: 'unsupported config field' });
+  await assertWorkerError(unsupportedThreshold, 400, 'unsupported config field');
 
   const currentResponse = await getAdminUserConfig(database, 'user-1');
   assert.equal(currentResponse.status, 200);
@@ -960,15 +1726,22 @@ test('activation rejects request bodies larger than 16 KiB', async (context) => 
   });
 
   assert.equal(response.status, 413);
-  assert.deepEqual(await response.json(), { error: 'request too large' });
+  await assertWorkerError(response, 413, 'request too large');
 });
 
-test('activation accepts an exact-limit UTF-8 stream split inside a multibyte character', async (context) => {
+test('activation accepts a bounded UTF-8 stream split inside a multibyte character', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
-  const body = createExactLimitActivationBody();
+  const body = JSON.stringify({
+    name: '张三',
+    passphrase: registrationPassphrase,
+    deviceSeed: '11111111-1111-4111-8111-111111111111',
+    deviceName: '测试电脑',
+    platform: 'win32',
+    appVersion: '1.6.8'
+  });
   const encoded = new TextEncoder().encode(body);
-  assert.equal(encoded.byteLength, maxRequestBodyBytes);
+  assert.ok(encoded.byteLength < maxRequestBodyBytes);
   const firstMultibyteByte = encoded.findIndex((byte) => byte >= 0x80);
   assert.ok(firstMultibyteByte >= 0);
 
@@ -1003,10 +1776,106 @@ test('bounded JSON routes cancel oversized chunked bodies without trusting Conte
     });
 
     assert.equal(response.status, 413, path);
-    assert.deepEqual(await response.json(), { error: 'request too large' });
+    await assertWorkerError(response, 413, 'request too large');
     assert.equal(streamed.state.cancelled, true, `${path} should cancel its reader`);
     assert.equal(streamed.state.pulls, 2, `${path} should stop before requesting another chunk`);
   }
+});
+
+test('activation and traffic reports enforce exact schemas instead of ignoring or coercing fields', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+
+  const unsupportedActivation = await activate(database, {
+    name: 'Alice',
+    deviceSeed: '11111111-1111-4111-8111-111111111111',
+    ignored: true
+  });
+  await assertWorkerError(unsupportedActivation, 400, 'unsupported activation field', 'UNSUPPORTED_ACTIVATION_FIELD');
+  assert.deepEqual(database.queryAll('SELECT id FROM users'), []);
+
+  const identityResponse = await activate(database, {
+    name: 'Alice',
+    deviceSeed: '11111111-1111-4111-8111-111111111111'
+  });
+  assert.equal(identityResponse.status, 200);
+  const identity = await identityResponse.json();
+
+  for (const input of [
+    {
+      reportId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      uploadDelta: -1,
+      downloadDelta: 0
+    },
+    {
+      reportId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      uploadDelta: 1.5,
+      downloadDelta: 0
+    },
+    {
+      reportId: 'a'.repeat(121),
+      uploadDelta: 1,
+      downloadDelta: 0
+    },
+    {
+      reportId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      uploadDelta: 1,
+      downloadDelta: 0,
+      ignored: true
+    },
+    {
+      reportId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      uploadDelta: 1,
+      downloadDelta: 0,
+      reportedAt: '2026-02-30T00:00:00Z'
+    }
+  ]) {
+    const response = await reportTraffic(database, identity, '11111111-1111-4111-8111-111111111111', input);
+    assert.equal(response.status, 400, JSON.stringify(input));
+    const error = await response.json();
+    assert.match(
+      error.code,
+      /^(?:INVALID_UPLOAD_DELTA|INVALID_REPORT_ID|INVALID_REPORTED_AT|UNSUPPORTED_TRAFFIC_REPORT_FIELD)$/
+    );
+    assert.equal(error.requestId, response.headers.get('x-request-id'));
+  }
+  assert.deepEqual(database.queryAll('SELECT id FROM traffic_reports'), []);
+});
+
+test('every bodyless admin write rejects a supplied request body', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  await addKnownUser(database);
+
+  for (const path of [
+    '/api/admin/config/sync-users',
+    '/api/admin/maintenance',
+    '/api/admin/users/user-1/config/reset'
+  ]) {
+    const response = await requestAdmin(database, path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}'
+    });
+    await assertWorkerError(response, 400, 'unexpected request body', 'UNEXPECTED_REQUEST_BODY');
+  }
+});
+
+test('traffic reports require a JSON media type before signature or database work', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const response = await worker.fetch(
+    new Request('https://worker.example/api/traffic/report', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: '{}'
+    }),
+    {
+      DB: database,
+      REGISTRATION_PASSPHRASE: registrationPassphrase
+    }
+  );
+  await assertWorkerError(response, 415, 'unsupported media type', 'UNSUPPORTED_MEDIA_TYPE');
 });
 
 test('activation rejects malformed or oversized identity metadata', async () => {
@@ -1051,7 +1920,7 @@ test('activation rejects malformed or oversized identity metadata', async () => 
     try {
       const response = await activate(database, item.input);
       assert.equal(response.status, 400, item.error);
-      assert.deepEqual(await response.json(), { error: item.error });
+      await assertWorkerError(response, 400, item.error);
       if (item.error === 'invalid name') {
         assert.deepEqual(database.queryAll('SELECT key FROM rate_limits'), []);
       }
@@ -1194,11 +2063,9 @@ async function getClientConfig(database, identity, deviceSeed) {
 async function reportTraffic(database, identity, deviceSeed, input) {
   const url = new URL('https://worker.example/api/traffic/report');
   const body = JSON.stringify({
-    reportId: input.reportId,
+    ...input,
     userId: identity.userId,
     deviceId: identity.deviceId,
-    uploadDelta: input.uploadDelta,
-    downloadDelta: input.downloadDelta,
     reportedAt: input.reportedAt ?? new Date().toISOString(),
     appVersion: input.appVersion ?? '1.6.6'
   });
@@ -1235,6 +2102,18 @@ function toTrafficDateKey(date) {
 
 async function updateAdminConfig(database, input) {
   return requestAdminConfig(database, '/api/admin/config', JSON.stringify(input));
+}
+
+async function getAdminTrafficLimit(database) {
+  return requestAdmin(database, '/api/admin/traffic-limit');
+}
+
+async function updateAdminTrafficLimit(database, input) {
+  return requestAdminConfig(database, '/api/admin/traffic-limit', JSON.stringify(input));
+}
+
+async function getAdminTrafficTrend(database, range) {
+  return requestAdmin(database, `/api/admin/traffic-trend?range=${encodeURIComponent(range)}`);
 }
 
 async function updateAdminUserConfig(database, userId, input) {
@@ -1294,25 +2173,6 @@ async function getAdminUserConfig(database, userId) {
       ADMIN_TOKEN: adminToken
     }
   );
-}
-
-function createExactLimitActivationBody() {
-  const input = {
-    name: '张三',
-    passphrase: registrationPassphrase,
-    deviceSeed: '11111111-1111-4111-8111-111111111111',
-    deviceName: '测试电脑',
-    platform: 'win32',
-    appVersion: '1.5.8',
-    padding: ''
-  };
-  const encoder = new TextEncoder();
-  const baseBytes = encoder.encode(JSON.stringify(input)).byteLength;
-  const remainingBytes = maxRequestBodyBytes - baseBytes;
-  const multibyteCharacters = Math.floor(remainingBytes / 3);
-  const asciiCharacters = remainingBytes - multibyteCharacters * 3;
-  input.padding = `${'界'.repeat(multibyteCharacters)}${'a'.repeat(asciiCharacters)}`;
-  return JSON.stringify(input);
 }
 
 function createStreamRequest(path, chunks, headers = {}) {
@@ -1377,6 +2237,9 @@ function createD1Database() {
   sqlite.exec(schema);
 
   return {
+    exec(sql) {
+      sqlite.exec(sql);
+    },
     prepare(sql) {
       return new D1Statement(sqlite, sql);
     },

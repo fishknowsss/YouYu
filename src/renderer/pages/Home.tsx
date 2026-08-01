@@ -91,7 +91,12 @@ function EasyHome(props: HomeProps) {
             </button>
           </aside>
         )}
-        <EasyUpdateNotice snapshot={props.snapshot} busy={props.busy} onInstallUpdate={props.onInstallUpdate} />
+        <EasyUpdateNotice
+          snapshot={props.snapshot}
+          busy={props.busy}
+          busyLabel={props.busyLabel}
+          onInstallUpdate={props.onInstallUpdate}
+        />
       </section>
     </div>
   );
@@ -100,10 +105,12 @@ function EasyHome(props: HomeProps) {
 function EasyUpdateNotice({
   snapshot,
   busy,
+  busyLabel,
   onInstallUpdate
 }: {
   snapshot: AppSnapshot;
   busy: boolean;
+  busyLabel: string;
   onInstallUpdate: () => void;
 }) {
   const update = snapshot.update;
@@ -114,9 +121,10 @@ function EasyUpdateNotice({
     update.status === 'installing';
   if (!visible) return null;
 
-  const downloaded = update.status === 'downloaded';
+  const installing =
+    update.status === 'installing' || (busy && busyLabel === '安装中' && update.status === 'downloaded');
+  const downloaded = update.status === 'downloaded' && !installing;
   const downloading = update.status === 'downloading';
-  const installing = update.status === 'installing';
   const version = update.downloadedVersion || update.availableVersion;
   const verifying = update.downloadPhase === 'verifying';
   const downloadingFullPackage = update.downloadPhase === 'full-download';
@@ -174,7 +182,10 @@ function EasyUpdateNotice({
           安装
         </button>
       ) : (
-        <span className="easy-update-state">{stateLabel}</span>
+        <span className="easy-update-state">
+          {installing && <span className="update-install-spinner" aria-hidden="true" />}
+          {stateLabel}
+        </span>
       )}
     </aside>
   );

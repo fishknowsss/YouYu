@@ -1,4 +1,5 @@
 import type { SystemProxyAdapter } from '../lifecycle';
+import { RuntimeOperationError } from '../runtimeRecoveryPolicy';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -148,11 +149,20 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
     });
   }
 
+  async function queryOptionalStringValue(valueName: 'ProxyServer' | 'ProxyOverride'): Promise<string> {
+    try {
+      return await reg(['query', internetSettingsKey, '/v', valueName]);
+    } catch (error) {
+      if (isMissingRegistryValueError(error)) return '';
+      throw error;
+    }
+  }
+
   async function queryPrevious(): Promise<PreviousProxyState> {
     const [enabledOutput, serverOutput, overrideOutput] = await Promise.all([
       reg(['query', internetSettingsKey, '/v', 'ProxyEnable']),
-      reg(['query', internetSettingsKey, '/v', 'ProxyServer']).catch(() => ''),
-      reg(['query', internetSettingsKey, '/v', 'ProxyOverride']).catch(() => '')
+      queryOptionalStringValue('ProxyServer'),
+      queryOptionalStringValue('ProxyOverride')
     ]);
 
     return {
@@ -194,7 +204,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
 
   async function setProxyServer(server: string) {
     if (!server) {
-      await reg(['delete', internetSettingsKey, '/v', 'ProxyServer', '/f']).catch(() => '');
+      await reg(['delete', internetSettingsKey, '/v', 'ProxyServer', '/f']);
       return;
     }
 
@@ -203,7 +213,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
 
   async function setProxyOverride(override: string) {
     if (!override) {
-      await reg(['delete', internetSettingsKey, '/v', 'ProxyOverride', '/f']).catch(() => '');
+      await reg(['delete', internetSettingsKey, '/v', 'ProxyOverride', '/f']);
       return;
     }
 
@@ -364,10 +374,19 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
     const result = await readJsonFile<unknown>(ownershipFilePath, {
       validate: (value) => normalizeOwnershipState(value) !== null
     });
-    if (result.status !== 'found') return null;
+    if (result.status === 'missing') return null;
+    if (result.status === 'invalid') {
+      throw new RuntimeOperationError(
+        'PROXY_RESTORE_REQUIRED',
+        'Invalid system proxy ownership state; automatic proxy changes are blocked'
+      );
+    }
     const ownership = normalizeOwnershipState(result.value);
     if (!ownership) {
-      await clearOwnershipState();
+      throw new RuntimeOperationError(
+        'PROXY_RESTORE_REQUIRED',
+        'Invalid system proxy ownership state; automatic proxy changes are blocked'
+      );
     }
     return ownership;
   }
@@ -393,28 +412,42 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
     const appliedFieldNames = (['enabled', 'server', 'override'] as const).filter(
       (field) => ownership.appliedFields[field]
     );
-    const serverWasReplacedByUser =
-      ownership.appliedFields.server &&
-      current.server !== ownership.applied.server &&
-      current.server !== ownership.previous.server;
-    if (appliedFieldNames.length === 0 || serverWasReplacedByUser) {
+    if (appliedFieldNames.length === 0) {
       await clearOwnershipState();
       clearInMemoryOwnership();
       return;
     }
 
-    const restorableFields = appliedFieldNames.filter((field) => current[field] === ownership.applied[field]);
+    const serverWasReplacedByUser =
+      ownership.appliedFields.server &&
+      current.server !== ownership.applied.server &&
+      current.server !== ownership.previous.server;
+    const restorableFields = appliedFieldNames.filter(
+      (field) => current[field] === ownership.applied[field] && !(field === 'enabled' && serverWasReplacedByUser)
+    );
     if (restorableFields.includes('server')) await setProxyServer(ownership.previous.server);
     if (restorableFields.includes('override')) await setProxyOverride(ownership.previous.override);
     if (restorableFields.includes('enabled')) await setProxyEnabled(ownership.previous.enabled);
     await notifySettingsChanged();
+    const restored = await queryPrevious();
+    const unverifiedFields = restorableFields.filter((field) => restored[field] !== ownership.previous[field]);
+    if (unverifiedFields.length > 0) {
+      throw new RuntimeOperationError(
+        'PROXY_RESTORE_REQUIRED',
+        `Failed to verify current-user proxy after restore: ${unverifiedFields.join(', ')}`
+      );
+    }
     await clearOwnershipState();
     clearInMemoryOwnership();
   }
 
   async function reconcilePersistedOwnership(): Promise<void> {
-    const ownership = await readOwnershipState();
-    if (ownership) await restoreOwnership(ownership);
+    try {
+      const ownership = await readOwnershipState();
+      if (ownership) await restoreOwnership(ownership);
+    } catch (error) {
+      throw asProxyRestoreError(error);
+    }
   }
 
   async function disableForRepair(signal?: AbortSignal): Promise<void> {
@@ -479,24 +512,31 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
         await verifyAppliedProxy(applied);
         await ensureMicrosoftStoreLoopbackExemptions({ strict: Boolean(runElevatedCommand), signal });
       } catch (error) {
-        const restored = await restoreOwnership(ownership).then(
-          () => true,
-          () => false
-        );
-        if (!restored) {
-          clearInMemoryOwnership();
+        try {
+          await restoreOwnership(ownership);
+        } catch (restoreError) {
+          const proxyRestoreError = asProxyRestoreError(restoreError);
+          throw new AggregateError(
+            [error, proxyRestoreError],
+            'system proxy enable and proxy ownership recovery failed',
+            { cause: restoreError }
+          );
         }
         throw error;
       }
     },
     async restore() {
       if (platform !== 'win32') return;
-      if (!enabledByApp) {
-        await reconcilePersistedOwnership();
-        return;
+      try {
+        if (!enabledByApp) {
+          await reconcilePersistedOwnership();
+          return;
+        }
+        const ownership = activeOwnership ?? (await readOwnershipState());
+        if (ownership) await restoreOwnership(ownership);
+      } catch (error) {
+        throw asProxyRestoreError(error);
       }
-      const ownership = activeOwnership ?? (await readOwnershipState());
-      if (ownership) await restoreOwnership(ownership);
     },
     disableForRepair,
     flushDnsForRepair: flushDnsCache,
@@ -506,6 +546,27 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
       await repairSystemNetwork(signal);
     }
   };
+}
+
+function isMissingRegistryValueError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { message?: unknown; stderr?: unknown; stdout?: unknown };
+  const detail = [candidate.message, candidate.stderr, candidate.stdout]
+    .filter((value): value is string => typeof value === 'string')
+    .join('\n');
+  return /unable to find the specified registry (?:key or )?value|cannot find the file specified|找不到指定的注册表(?:项或值|值)|系统找不到指定的文件/i.test(
+    detail
+  );
+}
+
+function asProxyRestoreError(error: unknown): RuntimeOperationError {
+  if (error instanceof RuntimeOperationError && error.code === 'PROXY_RESTORE_REQUIRED') return error;
+  const detail = error instanceof Error ? error.message : String(error);
+  return new RuntimeOperationError(
+    'PROXY_RESTORE_REQUIRED',
+    `Failed to restore current-user proxy ownership safely: ${detail}`,
+    { cause: error }
+  );
 }
 
 function normalizeOwnershipState(value: unknown): ProxyOwnershipState | null {

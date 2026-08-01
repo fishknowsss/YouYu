@@ -8,6 +8,7 @@ import type {
   ConnectivityStatus,
   ConnectivityTimings
 } from '../shared/ipc';
+import { EXTERNAL_RESPONSE_BODY_LIMITS, readFetchTextBounded } from './http/boundedBody';
 
 const execFileAsync = promisify(execFile);
 
@@ -221,11 +222,20 @@ export async function testConnectivity(
   const checkedAt = new Date().toISOString();
   try {
     const probe = await runServiceProbe(service, deps.getMixedPort(), options);
-    const route = await findRecentConnection(deps, service.host).catch(() => undefined);
+    const route = await findRecentConnection(deps, service.host, options.signal).catch(() => {
+      throwIfConnectivityTestAborted(options.signal);
+      return undefined;
+    });
     const status = getServiceStatus(service.key, probe);
     const reachability = getReachability(service.key, probe);
     const trace = service.kind === 'trace' ? parseTraceData(probe.body) : {};
-    const region = trace.ip ? await lookupIpCountry(trace.ip).catch(() => formatTraceRegion(trace)) : undefined;
+    const region = trace.ip
+      ? await lookupIpCountry(trace.ip, options.signal).catch(() => {
+          throwIfConnectivityTestAborted(options.signal);
+          return formatTraceRegion(trace);
+        })
+      : undefined;
+    throwIfConnectivityTestAborted(options.signal);
 
     return {
       key: service.key,
@@ -296,18 +306,24 @@ function isTransientProbeFailure(error: unknown): boolean {
   );
 }
 
-export async function testAllConnectivity(deps: ConnectivityDeps): Promise<ConnectivityResult[]> {
+export async function testAllConnectivity(
+  deps: ConnectivityDeps,
+  options: ConnectivityTestOptions = {}
+): Promise<ConnectivityResult[]> {
+  throwIfConnectivityTestAborted(options.signal);
   const results: ConnectivityResult[] = [];
   const queue = [...connectivityServices];
   const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
     while (queue.length) {
+      throwIfConnectivityTestAborted(options.signal);
       const service = queue.shift();
       if (service) {
-        results.push(await testConnectivity(deps, service.key));
+        results.push(await testConnectivity(deps, service.key, options));
       }
     }
   });
   await Promise.all(workers);
+  throwIfConnectivityTestAborted(options.signal);
   return sortResults(results);
 }
 
@@ -401,10 +417,17 @@ export function parseTraceData(body?: string): TraceData {
   return data;
 }
 
-async function lookupIpCountry(ip: string): Promise<string | undefined> {
-  const response = await fetch(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,query`);
+async function lookupIpCountry(ip: string, signal?: AbortSignal): Promise<string | undefined> {
+  const response = await fetch(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,query`, {
+    signal
+  });
+  const body = await readFetchTextBounded(response, {
+    maxBytes: EXTERNAL_RESPONSE_BODY_LIMITS.ipLookupJson,
+    scope: 'IP lookup',
+    signal
+  });
   if (!response.ok) return undefined;
-  const data = (await response.json()) as {
+  const data = JSON.parse(body) as {
     status?: string;
     country?: string;
   };
@@ -416,12 +439,17 @@ function formatTraceRegion(trace: TraceData): string | undefined {
   return trace.loc;
 }
 
-async function findRecentConnection(deps: ConnectivityDeps, host: string): Promise<MihomoConnection | undefined> {
+async function findRecentConnection(
+  deps: ConnectivityDeps,
+  host: string,
+  signal?: AbortSignal
+): Promise<MihomoConnection | undefined> {
   const secret = await deps.getControllerSecret();
   const response = await fetch(`http://127.0.0.1:${deps.getControllerPort()}/connections`, {
     headers: {
       Authorization: `Bearer ${secret}`
-    }
+    },
+    signal
   });
   if (!response.ok) return undefined;
 

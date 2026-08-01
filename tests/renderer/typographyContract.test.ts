@@ -1,9 +1,9 @@
-import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import { readRendererStyles } from './helpers/rendererStyles';
 
 describe('renderer typography contract', () => {
   it('uses only the platform system font and supported font weights', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     const formControls = getCssRule(styles, 'button,\ninput,\nselect,\ntextarea,\na');
 
     expect(styles).toContain('--font-sans: system-ui, sans-serif;');
@@ -13,8 +13,26 @@ describe('renderer typography contract', () => {
     expect(formControls).toContain('font: inherit;');
   });
 
+  it('keeps dense action labels away from the 16px Windows CJK rasterization boundary', async () => {
+    const styles = await readRendererStyles();
+    const root = getCssRule(styles, ':root');
+    const headerActions = getCssRule(styles, '.header-actions > button,\n.header-actions > .status-badge');
+    const nodeTest = getCssRule(styles, '.node-test');
+
+    expect(root).toContain('--font-size-action: 15px;');
+    expect(root).toContain('--line-height-action: 20px;');
+    expect(headerActions).toContain('font-size: var(--font-size-action);');
+    expect(headerActions).toContain('line-height: var(--line-height-action);');
+    expect(nodeTest).toContain('font-size: var(--font-size-action);');
+    expect(nodeTest).toContain('line-height: var(--line-height-action);');
+    expect(nodeTest).toContain('display: inline-flex;');
+    expect(nodeTest).toContain('align-items: center;');
+    expect(nodeTest).toContain('justify-content: center;');
+    expect(nodeTest).toContain('padding: 0;');
+  });
+
   it('uses readable caption sizing and keeps unit line-height only for decorative sleep glyphs', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     const decorativeSleepGlyphs = [
       getCssRule(styles, '.pet-side-sleep-z'),
       getCssRule(styles, '.pet-sprite-topSleep::before,\n.pet-sprite-bottomSleep::before')
@@ -30,7 +48,7 @@ describe('renderer typography contract', () => {
   });
 
   it('keeps test-page labels on explicit readable typography tokens', async () => {
-    const styles = await readFile('src/renderer/styles.css', 'utf8');
+    const styles = await readRendererStyles();
     const testHead = getCssRule(styles, '.route-test-head');
     const testCells = getCssRule(styles, '.test-service-name,\n.test-number,\n.test-ip,\n.test-region,\n.test-chain');
     const serviceName = getCssRule(styles, '.test-service-name');
@@ -45,12 +63,19 @@ describe('renderer typography contract', () => {
     expect(serviceName).toContain('font-size: var(--font-size-body-small);');
     expect(serviceName).toContain('line-height: var(--line-height-body-small);');
 
-    for (const rule of [category, status, retry]) {
+    for (const rule of [category, status]) {
       expect(rule).toContain('font-size: var(--font-size-caption);');
       expect(rule).toContain('font-weight: var(--font-weight-bold);');
       expect(rule).toContain('line-height: var(--line-height-caption);');
     }
+    expect(retry).toContain('font-size: var(--font-size-body-small);');
+    expect(retry).toContain('font-weight: var(--font-weight-bold);');
+    expect(retry).toContain('line-height: var(--line-height-body-small);');
     expect(retry).toContain('height: 24px;');
+    expect(retry).toContain('display: inline-flex;');
+    expect(retry).toContain('align-items: center;');
+    expect(retry).toContain('justify-content: center;');
+    expect(retry).toContain('padding: 0;');
   });
 });
 

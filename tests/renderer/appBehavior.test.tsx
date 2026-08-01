@@ -15,6 +15,7 @@ import {
 } from '../../src/renderer/App';
 import type { AppSnapshot } from '../../src/shared/ipc';
 import { AppShell } from '../../src/renderer/components/AppShell';
+import { type AppController, useAppController } from '../../src/renderer/hooks/useAppController';
 import { Home } from '../../src/renderer/pages/Home';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -83,6 +84,59 @@ describe('renderer action behavior', () => {
 
     await expect(running).rejects.toThrow('operation canceled');
     expect(start).not.toHaveBeenCalled();
+  });
+
+  it('keeps registration single-flight across rapid duplicate submissions', async () => {
+    const snapshot = createRegisteredRendererSnapshot();
+    const firstRegistration = deferred<AppSnapshot>();
+    const registerTrafficIdentity = vi
+      .fn()
+      .mockImplementationOnce(() => firstRegistration.promise)
+      .mockResolvedValueOnce(snapshot);
+    const api = {
+      getSnapshot: vi.fn(async () => snapshot),
+      registerTrafficIdentity,
+      onSnapshotUpdated: vi.fn(() => () => undefined),
+      cancelOperation: vi.fn(async () => undefined)
+    } as unknown as NonNullable<Window['youyu']>;
+    Object.defineProperty(window, 'youyu', { configurable: true, value: api });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    let controller: AppController | undefined;
+
+    function RegistrationControllerProbe() {
+      controller = useAppController();
+      return <output data-busy={String(controller.busy)}>{controller.busyLabel}</output>;
+    }
+
+    await act(async () => root?.render(<RegistrationControllerProbe />));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    let firstSubmission: Promise<void> | undefined;
+    await act(async () => {
+      firstSubmission = controller?.registerTrafficIdentity({ name: 'Alice', passphrase: 'secret' });
+      await controller?.registerTrafficIdentity({ name: 'Alice', passphrase: 'secret' });
+      await Promise.resolve();
+    });
+
+    expect(registerTrafficIdentity).toHaveBeenCalledOnce();
+    expect(container.querySelector('output')?.getAttribute('data-busy')).toBe('true');
+    expect(container.querySelector('output')?.textContent).toBe('登记中');
+
+    await act(async () => {
+      firstRegistration.resolve(snapshot);
+      await firstSubmission;
+    });
+    expect(container.querySelector('output')?.getAttribute('data-busy')).toBe('false');
+
+    await act(async () => {
+      await controller?.registerTrafficIdentity({ name: 'Alice', passphrase: 'secret' });
+    });
+    expect(registerTrafficIdentity).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the successful sync message out of the home diagnostics panel', async () => {
@@ -368,6 +422,16 @@ function createRegisteredRendererSnapshot(): AppSnapshot {
     },
     diagnostics: { logs: ['运行正常'], logCount: 12 }
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function setControlledInputValue(input: HTMLInputElement, value: string): void {

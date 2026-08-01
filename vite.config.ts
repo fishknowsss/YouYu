@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { createRendererCspPlugin } from './scripts/renderer-csp';
 
 const disablePet = process.env.YOUYU_DISABLE_PET === '1';
 const packageJson = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as {
@@ -10,7 +11,7 @@ const packageJson = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 
 const buildChannel = process.env.YOUYU_BUILD_CHANNEL ?? (disablePet ? 'no' : 'standard');
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [createRendererCspPlugin(), react()],
   define: {
     __YOUYU_APP_VERSION__: JSON.stringify(packageJson.version ?? '0.0.0'),
     __YOUYU_BUILD_CHANNEL__: JSON.stringify(buildChannel),

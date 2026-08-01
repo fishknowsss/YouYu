@@ -2,6 +2,7 @@ import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { createRendererCspPlugin } from './scripts/renderer-csp';
 
 const disablePet = process.env.YOUYU_DISABLE_PET === '1';
 const packageJson = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as {
@@ -50,7 +51,7 @@ export default defineConfig({
           ]
         : []
     },
-    plugins: [react()],
+    plugins: [createRendererCspPlugin(), react()],
     root: '.',
     build: {
       minify: 'esbuild',

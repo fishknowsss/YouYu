@@ -103,26 +103,21 @@ describe('update network fallback', () => {
 
   it('wires metadata checks to a guarded non-blocking explicit download', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
-    const checkStart = source.indexOf('async function checkForUpdatesNow');
-    const checkEnd = source.indexOf('\nfunction setUpdateFailure', checkStart);
-    const checkHandler = source.slice(checkStart, checkEnd);
-    const downloadStart = source.indexOf('async function downloadUpdateInBackground');
-    const downloadHandler = source.slice(downloadStart, checkEnd).replace(/\s/g, '');
+    const coordinator = await readFile('src/main/updateCoordinator.ts', 'utf8');
+    const checkStart = coordinator.indexOf('async function runCheck');
+    const checkEnd = coordinator.indexOf('\n  function download()', checkStart);
+    const checkHandler = coordinator.slice(checkStart, checkEnd);
 
     expect(source).toContain('autoUpdater.autoDownload = false;');
-    expect(source).toContain('let updateDownloadRunning = false;');
+    expect(source).toContain('createUpdateCoordinator({');
+    expect(source).toContain('executeCheck: () =>');
+    expect(source).toContain('executeDownload: () =>');
+    expect(source).toContain('runUpdateCheckWithNetworkFallback');
     expect(source).toContain('runUpdateDownloadWithNetworkFallback');
-    expect(source).toContain('if (suppressedUpdateNetworkFailureCount > 0) return;');
-    expect(checkHandler).toContain('void downloadUpdateInBackground();');
-    expect(checkHandler).not.toContain('await downloadUpdateInBackground()');
-    expect(checkHandler).toContain('updateDownloadRunning');
-    expect(downloadHandler).toContain("if(updateDownloadRunning||updateSnapshot.status==='downloaded')return;");
-    expect(downloadHandler.indexOf('suppressedUpdateNetworkFailureCount+=1')).toBeLessThan(
-      downloadHandler.indexOf('runUpdateDownloadWithNetworkFallback')
-    );
-    expect(downloadHandler.indexOf('suppressedUpdateNetworkFailureCount=Math.max')).toBeLessThan(
-      downloadHandler.indexOf("setUpdateFailure(downloadFailure,'更新下载')")
-    );
+    expect(checkHandler).toContain('void download();');
+    expect(checkHandler).not.toContain('await download()');
+    expect(coordinator).toContain('if (checkFlight) return checkFlight.promise;');
+    expect(coordinator).toContain('if (downloadFlight) return downloadFlight.promise;');
   });
 
   it('refreshes the direct connection and DNS cache once when no local proxy is available', async () => {

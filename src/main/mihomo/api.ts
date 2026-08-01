@@ -57,6 +57,11 @@ const delayTestTimeoutMs = 2000;
 const delayTestConcurrency = 6;
 const nodeDelayCache = new Map<string, number>();
 const nodeTestStateCache = new Map<string, ProxyNode['testState']>();
+type NodeTestOwner = {
+  token: symbol;
+  baselineState: ProxyNode['testState'];
+};
+const nodeTestOwners = new Map<string, NodeTestOwner>();
 const nodeProviderCache = new Map<string, string>();
 const builtInProxyNames = new Set(['COMPATIBLE', 'DIRECT', 'PASS', 'REJECT', 'REJECT-DROP']);
 const effectiveCurrentGroupNames = ['Final', 'GLOBAL', 'MESL'];
@@ -189,12 +194,29 @@ export function createMihomoApiClient(options: {
     return nodeTestStateCache.get(name);
   }
 
-  function restoreTestState(name: string, previous: ProxyNode['testState']): void {
-    if (previous) {
-      nodeTestStateCache.set(name, previous);
+  function beginNodeTest(name: string): NodeTestOwner {
+    const current = nodeTestOwners.get(name);
+    const owner = {
+      token: Symbol(name),
+      baselineState: current?.baselineState ?? nodeTestStateCache.get(name)
+    };
+    nodeTestOwners.set(name, owner);
+    nodeTestStateCache.set(name, 'testing');
+    return owner;
+  }
+
+  function ownsNodeTest(name: string, owner: NodeTestOwner): boolean {
+    return nodeTestOwners.get(name)?.token === owner.token;
+  }
+
+  function restoreOwnedTestState(name: string, owner: NodeTestOwner): void {
+    if (!ownsNodeTest(name, owner)) return;
+    if (owner.baselineState) {
+      nodeTestStateCache.set(name, owner.baselineState);
     } else {
       nodeTestStateCache.delete(name);
     }
+    nodeTestOwners.delete(name);
   }
 
   function normalizeDelay(delay: unknown): number | undefined {
@@ -517,6 +539,57 @@ export function createMihomoApiClient(options: {
     return normalizeDelay(data.delay);
   }
 
+  async function runOwnedNodeDelay(
+    name: string,
+    owner: NodeTestOwner,
+    signal?: AbortSignal
+  ): Promise<{ delay: number | undefined; committed: boolean }> {
+    try {
+      const provider = nodeProviderCache.get(name);
+      const results = await Promise.all(
+        delayTestUrls.map(async (url) => {
+          try {
+            return await requestNodeDelay(name, url, signal);
+          } catch (error) {
+            if (isAbortError(error, signal)) throw error;
+            if (provider) {
+              return requestProviderNodeDelay(provider, name, url, signal).catch((providerError) => {
+                if (isAbortError(providerError, signal)) throw providerError;
+                return undefined;
+              });
+            }
+            return undefined;
+          }
+        })
+      );
+
+      const delays = results.filter((delay): delay is number => typeof delay === 'number');
+      const delay = delays.length
+        ? Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length)
+        : undefined;
+      if (!ownsNodeTest(name, owner)) return { delay, committed: false };
+
+      if (typeof delay === 'number') {
+        nodeDelayCache.set(name, delay);
+        nodeTestStateCache.set(name, 'tested');
+      } else {
+        nodeDelayCache.delete(name);
+        nodeTestStateCache.set(name, 'failed');
+      }
+      nodeTestOwners.delete(name);
+      return { delay, committed: true };
+    } catch (error) {
+      if (isAbortError(error, signal)) {
+        restoreOwnedTestState(name, owner);
+      } else if (ownsNodeTest(name, owner)) {
+        nodeDelayCache.delete(name);
+        nodeTestStateCache.set(name, 'failed');
+        nodeTestOwners.delete(name);
+      }
+      throw error;
+    }
+  }
+
   return {
     async listNodes() {
       const [data, providers] = await Promise.all([
@@ -659,56 +732,14 @@ export function createMihomoApiClient(options: {
     async testNodeDelay(name: string, options = {}) {
       assertNotAborted(options.signal);
       if (isBlockedSelectableNodeName(name)) {
+        nodeTestOwners.delete(name);
         nodeDelayCache.delete(name);
         nodeTestStateCache.set(name, 'failed');
         return undefined;
       }
 
-      const previousTestState = nodeTestStateCache.get(name);
-      nodeTestStateCache.set(name, 'testing');
-      try {
-        const provider = nodeProviderCache.get(name);
-        const results = await Promise.all(
-          delayTestUrls.map(async (url) => {
-            try {
-              return await requestNodeDelay(name, url, options.signal);
-            } catch (error) {
-              if (isAbortError(error, options.signal)) {
-                throw error;
-              }
-              if (provider) {
-                return requestProviderNodeDelay(provider, name, url, options.signal).catch((providerError) => {
-                  if (isAbortError(providerError, options.signal)) {
-                    throw providerError;
-                  }
-                  return undefined;
-                });
-              }
-              return undefined;
-            }
-          })
-        );
-
-        const delays = results.filter((delay): delay is number => typeof delay === 'number');
-        if (!delays.length) {
-          nodeDelayCache.delete(name);
-          nodeTestStateCache.set(name, 'failed');
-          return undefined;
-        }
-
-        const delay = Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length);
-        nodeDelayCache.set(name, delay);
-        nodeTestStateCache.set(name, 'tested');
-        return delay;
-      } catch (error) {
-        if (isAbortError(error, options.signal)) {
-          restoreTestState(name, previousTestState);
-        } else {
-          nodeDelayCache.delete(name);
-          nodeTestStateCache.set(name, 'failed');
-        }
-        throw error;
-      }
+      const owner = beginNodeTest(name);
+      return (await runOwnedNodeDelay(name, owner, options.signal)).delay;
     },
     async testAllNodes(options = {}) {
       const nodes = await this.listNodes();
@@ -717,26 +748,26 @@ export function createMihomoApiClient(options: {
         while (queue.length && !options.signal?.aborted) {
           const node = queue.shift();
           if (node) {
-            let delay: number | undefined;
-            const previousTestState = nodeTestStateCache.get(node.name);
+            const owner = beginNodeTest(node.name);
             try {
-              nodeTestStateCache.set(node.name, 'testing');
               await options.onNodeTested?.({ ...node, testState: 'testing' });
-              delay = await this.testNodeDelay(node.name, { signal: options.signal });
-            } catch (error) {
-              if (isAbortError(error, options.signal)) {
-                restoreTestState(node.name, previousTestState);
-                throw error;
-              }
-            } finally {
-              if (options.signal?.aborted) {
-                restoreTestState(node.name, previousTestState);
-              } else {
+              const result = await runOwnedNodeDelay(node.name, owner, options.signal);
+              if (result.committed) {
                 await options.onNodeTested?.({
                   ...node,
-                  delay,
-                  testState: typeof delay === 'number' ? 'tested' : 'failed'
+                  delay: result.delay,
+                  testState: typeof result.delay === 'number' ? 'tested' : 'failed'
                 });
+              }
+            } catch (error) {
+              if (isAbortError(error, options.signal)) {
+                restoreOwnedTestState(node.name, owner);
+                throw error;
+              }
+              if (ownsNodeTest(node.name, owner)) {
+                nodeDelayCache.delete(node.name);
+                nodeTestStateCache.set(node.name, 'failed');
+                nodeTestOwners.delete(node.name);
               }
             }
           }
@@ -789,6 +820,7 @@ export function createMihomoApiClient(options: {
 
       nodeDelayCache.clear();
       nodeTestStateCache.clear();
+      nodeTestOwners.clear();
       nodeProviderCache.clear();
       await Promise.all(
         providerNames.map((name) =>

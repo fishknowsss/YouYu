@@ -8,14 +8,14 @@
 
 YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新和桌宠交互。
 
-当前源码版本为 [`1.6.8`](https://github.com/fishknowsss/YouYu/releases/tag/v1.6.8)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)，本版完整说明见 [v1.6.8 迭代说明](docs/releases/v1.6.8.md)。
+当前源码版本为 [`1.6.9`](https://github.com/fishknowsss/YouYu/releases/tag/v1.6.9)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)，本版完整说明见 [v1.6.9 迭代说明](docs/releases/v1.6.9.md)。
 
-## 1.6.8 迭代重点
+## 1.6.9 迭代重点
 
-- 渲染器统一使用 Windows 系统字体，表单控件继承同一字体；诊断日志、地址、耗时和中文状态不再切换到等宽或后备字体，字重收敛为系统实际支持的 700。
-- 专业模式页头按钮与运行状态统一字号、行高和字重；测试表表头与数据行共享八列网格，小号状态与“重测”使用明确的排版规格和不低于 24px 的操作高度。
-- Electron 更新至 `43.2.0`，纳入当前稳定版运行时的安全修复与兼容性更新。
-- 内置 Mihomo 更新至官方 `v1.19.28` Windows amd64 `with_gvisor` 构建，并保留来源、版本和摘要校验信息。
+- 全部界面统一使用系统 UI 字体，并校正“测速”“测全部”“重测”等中文操作文字的基线；专业模式状态、完整版本号、定制下拉框与按钮悬停状态共用一致的排版和几何规则。
+- 小白与专业模式点击“安装”后立即显示进度圆环和明确状态；主进程中的更新、订阅、节点健康、应用启停与最新操作改为可收敛的协调器，减少重复任务、竞态与未处理异步异常。
+- 更新安装交接绑定当前 Windows 用户与会话，并采用短时一次性凭据；`1.6.9` 只为已发布的 `1.6.8` 静默更新提供受约束的单次兼容桥，普通静默安装和未来版本不能进入该路径。
+- 收紧订阅与 Provider 输入边界、网络响应体上限及运行时恢复策略；Worker 增加流量上报去重迁移，发布链增加签名配置防误用、11 资产摘要清单和版本化本地归档。
 
 ## 1.6.4 迭代重点
 
@@ -40,7 +40,7 @@ YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启�
 
 ## 界面预览
 
-全部截图对应 `1.6.8` 的安全演示模式与 `900×600` 默认窗口。订阅使用 `example.com`，出口 IP 使用 RFC 文档保留地址，节点、流量、测速、策略链和诊断内容均为虚构演示数据。
+全部截图对应 `1.6.9` 的安全演示模式与 `900×600` 默认窗口。订阅使用 `example.com`，出口 IP 使用 RFC 文档保留地址，节点、流量、测速、策略链和诊断内容均为虚构演示数据。
 
 ### 小白模式
 
@@ -147,9 +147,9 @@ YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启�
 - 更新元数据与安装包下载分别先尝试应用内直连；遇到可恢复的传输故障会刷新应用内 DNS，并在 Mihomo 正常运行时使用本地代理重试。
 - 使用 GitHub `releases/latest/download` 读取最新通道文件，减少对 GitHub Release API 和 Atom 的依赖。
 - 支持应用内检查更新、差分下载、完整包回退、下载进度、完整性校验和安装。
-- 点击“安装”后会先显示“已开始自动安装，无需操作”，并留出约 2 秒阅读时间；随后静默安装并自动启动新版本。
-- 安装前先完成主进程清理与 IPC 交接；安装器启动失败时保留已下载文件并恢复“安装”按钮，用户可以直接重试。
-- 发布时同时上传安装包、差分更新所需的 `.blockmap` 和对应 `latest*.yml`。
+- 点击“安装”后会立即显示进度圆环与“正在准备自动安装”，让用户明确知道应用仍在工作；约 2 秒后进入静默安装并自动启动新版本。
+- 安装前先完成主进程清理，并建立与当前 Windows 用户 SID、登录会话和目标安装路径绑定的一次性短时交接；安装器启动失败时保留已下载文件并恢复“安装”按钮，用户可以直接重试。
+- 发布时上传三个安装包、三个差分更新 `.blockmap`、三个 `latest*.yml`、源码归档和覆盖其余 10 项资产的 `SHA256SUMS.txt`，共 11 个资产。
 
 ## 安装与使用
 
@@ -180,11 +180,13 @@ NSIS 安装程序按计算机安装到受管理员权限保护的位置，并创
 - `resources/default-subscription.in.txt` 是本机私有订阅源，已被 Git 忽略，禁止提交或上传。
 - `resources/generated/default-subscription.txt` 仅在打包时生成，不提交。
 - 真实订阅、口令、设备密钥和后台凭据不能写入截图、测试数据、提交记录或 Release 说明。
+- 远端配置中的订阅地址只接受 HTTPS，订阅响应和配置响应都有明确的大小上限；HTTP Proxy Provider 上限为 8 MiB，HTTP Rule Provider 上限为 32 MiB，刷新周期、健康检查间隔和超时会在写入 Mihomo 配置前规范化到安全范围。
 - 诊断报告采用字段白名单并对日志文本脱敏，只导出当前会话最多 200 条记录，不包含完整订阅、凭据等敏感设置。
 - 应用内解析器使用 secure DNS，可能向 DNSPod、阿里云公共 DNS 或 Cloudflare DNS 发起解析请求；它不会修改 Windows 的 DNS 或 Hosts 设置。四个 DoH 都不可达时，后台与更新直连会失败并按既有规则尝试本地 Mihomo，而不会继续信任可能被污染的系统解析。
 - YouYu 不固定 GitHub 或 Cloudflare IP，也不绕过 TLS 证书校验。域名、SNI 或目标网络被整体阻断时，应用内连接保底仍可能失败。
 - 如果真实订阅 token 曾进入公开提交、Actions artifact 或 Release，应按已泄露处理并立即更换。
 - 流量登记使用设备身份与签名请求；远端同步失败时，本地统计与待上报增量仍会保留。
+- Windows 代码签名支持标准 `CSC_*`/`WIN_CSC_*` 材料；未配置时产物为未签名安装包，配置了任一签名材料却未显式启用强制签名时构建会直接失败，避免“以为已签名”的发布。
 
 安全问题请按 [安全策略](SECURITY.md) 私下报告，不要在公开 Issue 中提交订阅、令牌、设备密钥、日志或其他敏感信息。
 
@@ -226,6 +228,7 @@ npm run format:check
 npm run test:worker
 npm run typecheck:worker
 npm run build:worker
+npm run validate:mihomo
 npm run build
 ```
 
@@ -248,7 +251,7 @@ npm run smoke
 | `npm run dist:win:in` | 本地内部版安装包，可读取本机私有订阅 |
 | `npm run dist:win:no` | 本地无桌宠安装包，可读取本机私有订阅 |
 | `npm run dist:win:local` | 生成本地三包，并刷新 `team-builds/` 中可手动分发的两个私有 EXE |
-| `npm run dist:win:release` | 生成三通道公开更新资产，全部使用空内置订阅 |
+| `npm run dist:win:release` | 生成包含摘要清单在内的 11 个三通道公开更新资产和版本化本地归档，全部使用空内置订阅 |
 
 `dist:win`、`dist:win:in` 和 `dist:win:no` 都会先清空 `release/`。需要保留多个本地产物时，应按发布文档的顺序打包并暂存安装包与 `.blockmap`。
 
@@ -259,9 +262,11 @@ npm run smoke
 ## 项目结构
 
 ```text
+build/                       Windows NSIS 钩子、安装清理与提权辅助脚本
 src/main/                    Electron 主进程、Mihomo、系统代理与流量服务
 src/preload/                 受控 IPC 桥接
 src/renderer/                React 界面、开发模拟 API 与桌宠渲染
+src/renderer/styles/         渲染器设计令牌、布局、组件和动效样式
 src/shared/                  主进程与渲染进程共享类型
 resources/mihomo/win-x64/    内置 Mihomo Windows x64 运行时
 cloudflare/youyu-traffic/    流量登记、累计与远端配置 Worker
@@ -277,12 +282,12 @@ docs/screenshots/            900×600 演示截图
 `.github/workflows/build-windows.yml` 只在 `v*` 标签或手动触发时生成 Windows 安装包；标签构建会先校验标签名与 `package.json` 版本一致：
 
 1. 使用 Node.js 24 和 Python 3 安装依赖。
-2. 运行桌面端与 Worker 测试、类型检查、lint、格式和 Worker dry-run 构建。
-3. 生成三通道公开 Windows 更新资产，失败时最多重试三次。
-4. 对打包输出执行冒烟检查。
-5. 上传 9 个安装与更新资产，Actions artifact 保留 3 天。
+2. 运行桌面端与 Worker 测试、类型检查、lint、格式、Worker dry-run 构建和 Mihomo 运行时校验。
+3. 校验签名配置后生成三通道公开 Windows 更新资产，失败时最多重试三次。
+4. 对打包输出执行冒烟检查，并核对包含 `SHA256SUMS.txt` 在内的 11 个资产完整性。
+5. 上传这 11 个安装、更新、源码与摘要资产，Actions artifact 保留 3 天。
 
-正式发布还需要显式推送准确版本标签、创建 GitHub Release、上传 9 个资产，并远程核对 `latest.yml`、`latest-in.yml` 和 `latest-no.yml`。不要依赖未经审计的 `git push --follow-tags`。
+正式发布还需要显式推送准确版本标签、创建 GitHub Release、上传 11 个资产，并远程核对 `latest.yml`、`latest-in.yml`、`latest-no.yml` 与 `SHA256SUMS.txt`。不要依赖未经审计的 `git push --follow-tags`。
 
 ## 常见问题
 

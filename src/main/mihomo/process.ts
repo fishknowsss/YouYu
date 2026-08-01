@@ -1,11 +1,14 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import type { MihomoRuntime } from '../lifecycle';
 import type { ActiveRemoteConfigSnapshot } from '../remoteConfig';
 import type { AppSettings } from '../storage/settings';
 import type { RemoteControlConfig } from '../../shared/ipc';
+import { EXTERNAL_RESPONSE_BODY_LIMITS, readFetchTextBounded } from '../http/boundedBody';
+import { selectMihomoProcessSpawner, spawnWindowsJobProcess } from '../platform/windowsJobProcess';
 import { buildMihomoConfig, isBlockedSelectableNodeName, strategyTargets } from './config';
 
 type SpawnedProcess = {
@@ -51,7 +54,10 @@ export type MihomoRuntimeOptions = {
   readRemoteConfigSnapshot?: () => Promise<ActiveRemoteConfigSnapshot>;
   isRemoteConfigSnapshotCurrent?: (snapshot: ActiveRemoteConfigSnapshot) => Promise<boolean>;
   spawnProcess?: (binaryPath: string, args: string[]) => SpawnedProcess;
+  spawnValidationProcess?: (binaryPath: string, args: string[]) => SpawnedProcess;
   spawnElevatedProcess?: (binaryPath: string, args: string[]) => SpawnedProcess;
+  configValidationTimeoutMs?: number;
+  renameFile?: (source: string, target: string) => Promise<void>;
   waitForReady?: (secret: string) => Promise<void>;
   onUnexpectedExit?: (reason: string) => void;
 };
@@ -66,6 +72,46 @@ const preferredDefaultNodeKeywordSets = [
 ];
 const subscriptionUserAgent = 'Clash Verge/2.3.2';
 const subscriptionCacheFilePrefix = 'subscription-cache';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isUsableSubscriptionCandidate(text: string): boolean {
+  const value = text.trim();
+  const hasForbiddenControlCharacter = [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return (
+      codePoint === 0x7f ||
+      (codePoint >= 0x80 && codePoint <= 0x9f) ||
+      (codePoint < 0x20 && codePoint !== 0x09 && codePoint !== 0x0a && codePoint !== 0x0d)
+    );
+  });
+  if (!value || hasForbiddenControlCharacter) return false;
+  if (/^(?:<!doctype\s+html\b|<html\b|<head\b|<body\b)/i.test(value)) return false;
+
+  try {
+    const parsed = parseYaml(value);
+    if (!isRecord(parsed)) return false;
+    const proxies = Array.isArray(parsed.proxies) ? parsed.proxies : [];
+    const hasUsableInlineNode = proxies.some((proxy) => {
+      if (!isRecord(proxy)) return false;
+      const name = typeof proxy.name === 'string' ? proxy.name.trim() : '';
+      const type = typeof proxy.type === 'string' ? proxy.type.trim() : '';
+      return Boolean(name && type) && !isBlockedSelectableNodeName(name);
+    });
+    const providers = parsed['proxy-providers'];
+    const hasUsableProvider =
+      isRecord(providers) &&
+      Object.values(providers).some(
+        (provider) => isRecord(provider) && typeof provider.url === 'string' && Boolean(provider.url.trim())
+      );
+    const hasProviderRouting = Array.isArray(parsed.rules) || Array.isArray(parsed['proxy-groups']);
+    return hasUsableInlineNode || (hasUsableProvider && hasProviderRouting);
+  } catch {
+    return false;
+  }
+}
 
 function subscriptionCacheFileName(url: string): string {
   const urlHash = createHash('sha256').update(url).digest('hex');
@@ -382,7 +428,15 @@ async function fetchSubscriptionConfigText(url: string, operationSignal?: AbortS
     if (!response.ok) {
       return undefined;
     }
-    return await response.text();
+    if (/^(?:text\/html|application\/xhtml\+xml)\b/i.test(response.headers.get('content-type')?.trim() ?? '')) {
+      await response.body?.cancel().catch(() => undefined);
+      return undefined;
+    }
+    return await readFetchTextBounded(response, {
+      maxBytes: EXTERNAL_RESPONSE_BODY_LIMITS.subscription,
+      scope: 'subscription',
+      signal: controller.signal
+    });
   } catch {
     operationSignal?.throwIfAborted();
     return undefined;
@@ -392,38 +446,103 @@ async function fetchSubscriptionConfigText(url: string, operationSignal?: AbortS
   }
 }
 
-async function readCachedSubscriptionConfigText(
-  cachePath: string,
-  logLine?: (line: string) => void
-): Promise<string | undefined> {
+async function readFileIfPresent(filePath: string): Promise<Buffer | undefined> {
   try {
-    const cached = (await readFile(cachePath, 'utf8')).trim();
-    if (!cached) return undefined;
-    logLine?.('mihomo using cached subscription config');
-    return cached;
-  } catch {
-    return undefined;
-  }
-}
-
-async function cacheSubscriptionConfigText(
-  cachePath: string,
-  text: string | undefined,
-  logLine?: (line: string) => void
-): Promise<void> {
-  const value = text?.trim();
-  if (!value) return;
-
-  try {
-    await writeFile(cachePath, value, 'utf8');
+    return await readFile(filePath);
   } catch (error) {
-    logLine?.(`mihomo subscription cache write failed: ${error instanceof Error ? error.message : String(error)}`);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
   }
 }
 
 export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntime {
   let child: TrackedProcess | null = null;
   const stoppingChildren = new Set<TrackedProcess>();
+
+  const spawnNativeProcess = (binaryPath: string, args: string[]) =>
+    spawn(binaryPath, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+  const spawnDefaultProcess = selectMihomoProcessSpawner<SpawnedProcess, SpawnedProcess>({
+    spawnDirect: spawnNativeProcess,
+    spawnWindowsJob: spawnWindowsJobProcess
+  });
+  const spawnNormalProcess = options.spawnProcess ?? spawnDefaultProcess;
+  const renameFile = options.renameFile ?? rename;
+
+  async function writeSyncedCandidate(filePath: string, content: string | Uint8Array): Promise<void> {
+    const handle = await open(filePath, 'wx');
+    try {
+      await handle.writeFile(content, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async function validateConfigCandidate(candidatePath: string, workDir: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    const spawnValidationProcess = options.spawnValidationProcess ?? spawnDefaultProcess;
+    const validation = spawnValidationProcess(options.binaryPath, ['-t', '-d', workDir, '-f', candidatePath]);
+    validation.stdout?.resume();
+    validation.stderr?.resume();
+    const timeoutMs = Math.max(1, Math.floor(options.configValidationTimeoutMs ?? 10_000));
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let termination: { error: unknown } | undefined;
+      let timeout: NodeJS.Timeout | undefined;
+      let terminationTimeout: NodeJS.Timeout | undefined;
+      const cleanup = () => {
+        if (timeout) clearTimeout(timeout);
+        if (terminationTimeout) clearTimeout(terminationTimeout);
+        signal?.removeEventListener('abort', abort);
+      };
+      const finish = (error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error === undefined) resolve();
+        else reject(error);
+      };
+      const stopAndFail = (error: unknown) => {
+        if (settled || termination) return;
+        termination = { error };
+        if (timeout) clearTimeout(timeout);
+        try {
+          if (!validation.killed) validation.kill();
+        } catch {
+          finish(error);
+          return;
+        }
+        if (!settled) {
+          terminationTimeout = setTimeout(() => finish(error), 2_000);
+        }
+      };
+      const abort = () => stopAndFail(signal?.reason ?? new Error('operation canceled'));
+      timeout = setTimeout(
+        () => stopAndFail(new Error(`mihomo config validation timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      );
+
+      signal?.addEventListener('abort', abort, { once: true });
+      validation.once('error', (error) => finish(termination?.error ?? error));
+      validation.once('exit', (code, exitSignal) => {
+        if (termination) {
+          finish(termination.error);
+          return;
+        }
+        if (code === 0) {
+          finish();
+          return;
+        }
+        const reason = code == null ? `signal ${exitSignal ?? 'unknown'}` : `exit code ${code.toString()}`;
+        finish(new Error(`mihomo config validation failed: ${reason}`));
+      });
+      if (signal?.aborted) abort();
+    });
+  }
 
   async function clearGeoDataFiles(workDir: string) {
     await Promise.allSettled(
@@ -473,17 +592,29 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
     const ports = (await options.getPorts?.()) ?? { mixedPort: 7890, controllerPort: 9090 };
     const subscriptionCachePath = join(workDir, subscriptionCacheFileName(subscriptionUrl));
     await mkdir(workDir, { recursive: true });
+    const previousSubscriptionCache = await readFileIfPresent(subscriptionCachePath);
     await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
     const fetchedSubscriptionConfigText = await fetchSubscriptionConfigText(subscriptionUrl, signal);
     signal?.throwIfAborted();
     await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
-    await cacheSubscriptionConfigText(subscriptionCachePath, fetchedSubscriptionConfigText, options.logLine);
-    const subscriptionConfigText =
-      fetchedSubscriptionConfigText ?? (await readCachedSubscriptionConfigText(subscriptionCachePath, options.logLine));
-    await clearGeoDataFiles(workDir);
-    await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
-    await writeFile(
-      configPath,
+    const acceptedSubscriptionConfigText =
+      fetchedSubscriptionConfigText && isUsableSubscriptionCandidate(fetchedSubscriptionConfigText)
+        ? fetchedSubscriptionConfigText
+        : undefined;
+    if (fetchedSubscriptionConfigText && !acceptedSubscriptionConfigText) {
+      options.logLine?.('mihomo subscription candidate rejected by content preflight');
+    }
+    const cachedSubscriptionConfigText = previousSubscriptionCache?.toString('utf8').trim() || undefined;
+    const acceptedCachedSubscriptionConfigText =
+      cachedSubscriptionConfigText && isUsableSubscriptionCandidate(cachedSubscriptionConfigText)
+        ? cachedSubscriptionConfigText
+        : undefined;
+    if (acceptedCachedSubscriptionConfigText && !acceptedSubscriptionConfigText) {
+      options.logLine?.('mihomo using cached subscription config');
+    } else if (cachedSubscriptionConfigText && !acceptedCachedSubscriptionConfigText) {
+      options.logLine?.('mihomo cached subscription rejected by content preflight');
+    }
+    const buildCandidateConfig = (subscriptionConfigText?: string) =>
       buildMihomoConfig({
         subscriptionUrl,
         secret: settings.controllerSecret,
@@ -500,10 +631,94 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         mixedPort: ports.mixedPort,
         controllerPort: ports.controllerPort,
         dnsPort: ports.dnsPort
-      }),
-      'utf8'
+      });
+    let candidateConfigText = buildCandidateConfig(
+      acceptedSubscriptionConfigText ?? acceptedCachedSubscriptionConfigText
     );
-    await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
+    let subscriptionCacheToPromote = acceptedSubscriptionConfigText;
+    const candidateId = `${process.pid}-${randomUUID()}`;
+    const candidateConfigPath = `${configPath}.candidate-${candidateId}`;
+    const validationWorkDir = join(workDir, `.validation-${candidateId}`);
+    const candidateCachePath = acceptedSubscriptionConfigText
+      ? `${subscriptionCachePath}.candidate-${candidateId}`
+      : undefined;
+    const rollbackCachePath = `${subscriptionCachePath}.rollback-${candidateId}`;
+    try {
+      await mkdir(validationWorkDir);
+      await writeSyncedCandidate(candidateConfigPath, candidateConfigText);
+      try {
+        await validateConfigCandidate(candidateConfigPath, validationWorkDir, signal);
+      } catch (error) {
+        signal?.throwIfAborted();
+        const canRetryCachedSubscription =
+          Boolean(acceptedSubscriptionConfigText) &&
+          Boolean(acceptedCachedSubscriptionConfigText) &&
+          acceptedSubscriptionConfigText?.trim() !== acceptedCachedSubscriptionConfigText?.trim();
+        if (!canRetryCachedSubscription) throw error;
+
+        options.logLine?.(
+          `mihomo fetched subscription candidate failed validation, retrying cached subscription: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        await rm(candidateConfigPath, { force: true });
+        await rm(validationWorkDir, { recursive: true, force: true });
+        await mkdir(validationWorkDir);
+        candidateConfigText = buildCandidateConfig(acceptedCachedSubscriptionConfigText);
+        await writeSyncedCandidate(candidateConfigPath, candidateConfigText);
+        try {
+          await validateConfigCandidate(candidateConfigPath, validationWorkDir, signal);
+        } catch (fallbackError) {
+          signal?.throwIfAborted();
+          throw new AggregateError(
+            [error, fallbackError],
+            'mihomo fetched and cached subscription candidates both failed validation',
+            { cause: fallbackError }
+          );
+        }
+        subscriptionCacheToPromote = undefined;
+      }
+      if (candidateCachePath && subscriptionCacheToPromote) {
+        await writeSyncedCandidate(candidateCachePath, subscriptionCacheToPromote.trim());
+      }
+      await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
+      let cachePromoted = false;
+      if (candidateCachePath && subscriptionCacheToPromote) {
+        await renameFile(candidateCachePath, subscriptionCachePath);
+        cachePromoted = true;
+      }
+      try {
+        signal?.throwIfAborted();
+        await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
+        await renameFile(candidateConfigPath, configPath);
+      } catch (promotionError) {
+        if (cachePromoted) {
+          try {
+            if (previousSubscriptionCache === undefined) {
+              await rm(subscriptionCachePath, { force: true });
+            } else {
+              await writeSyncedCandidate(rollbackCachePath, previousSubscriptionCache);
+              await renameFile(rollbackCachePath, subscriptionCachePath);
+            }
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [promotionError, rollbackError],
+              'mihomo config promotion failed and subscription cache rollback also failed',
+              { cause: rollbackError }
+            );
+          }
+        }
+        throw promotionError;
+      }
+      await clearGeoDataFiles(workDir);
+    } finally {
+      await Promise.all([
+        rm(candidateConfigPath, { force: true }).catch(() => undefined),
+        candidateCachePath ? rm(candidateCachePath, { force: true }).catch(() => undefined) : Promise.resolve(),
+        rm(rollbackCachePath, { force: true }).catch(() => undefined),
+        rm(validationWorkDir, { recursive: true, force: true }).catch(() => undefined)
+      ]);
+    }
 
     return { workDir, configPath, settings, ports, remoteConfigSnapshot };
   }
@@ -559,13 +774,9 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         options.logLine?.(
           `mihomo starting: mixed-port=${ports.mixedPort}, controller=${ports.controllerPort}, dns=${ports.dnsPort ?? 1053}`
         );
-        const spawnProcess =
-          (settings.tunEnabled ? options.spawnElevatedProcess : options.spawnProcess) ??
-          ((binaryPath: string, args: string[]) =>
-            spawn(binaryPath, args, {
-              windowsHide: true,
-              stdio: ['ignore', 'pipe', 'pipe']
-            }));
+        const spawnProcess = settings.tunEnabled
+          ? (options.spawnElevatedProcess ?? spawnNormalProcess)
+          : spawnNormalProcess;
 
         await assertRemoteConfigSnapshotCurrent(remoteConfigSnapshot, signal);
         const spawned = spawnProcess(options.binaryPath, ['-d', workDir, '-f', configPath]);

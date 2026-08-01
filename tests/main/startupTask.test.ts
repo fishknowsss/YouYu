@@ -8,6 +8,7 @@ import {
 
 const executablePath = String.raw`C:\Program Files\You & Yu\YouYu.exe`;
 const interactiveUserSid = 'S-1-5-21-1000-1000-1000-1001';
+const sidBoundTaskName = 'YouYu-Startup-S-1-5-21-1000-1000-1000-1001';
 
 function taskXml(
   command: string,
@@ -25,6 +26,8 @@ function taskXml(
     triggerName?: 'LogonTrigger' | 'TimeTrigger';
     triggerEnabled?: boolean;
     additionalAction?: boolean;
+    additionalPrincipal?: boolean;
+    duplicateUserId?: boolean;
   } = {}
 ): string {
   const triggerName = options.triggerName ?? 'LogonTrigger';
@@ -38,10 +41,16 @@ function taskXml(
   <Principals>
     <Principal>
       ${options.groupId ? `<GroupId>${options.groupId}</GroupId>` : `<UserId>${options.principalUserId ?? interactiveUserSid}</UserId>`}
+      ${options.duplicateUserId ? `<UserId>${interactiveUserSid}</UserId>` : ''}
       <LogonType>${options.logonType ?? 'InteractiveToken'}</LogonType>
       ${options.omitRunLevel ? '' : `<RunLevel>${runLevel}</RunLevel>`}
       ${options.requiredPrivileges ? '<RequiredPrivileges><Privilege>SeDebugPrivilege</Privilege></RequiredPrivileges>' : ''}
     </Principal>
+    ${
+      options.additionalPrincipal
+        ? '<Principal><UserId>S-1-5-21-900-800-700-1002</UserId><LogonType>InteractiveToken</LogonType></Principal>'
+        : ''
+    }
   </Principals>
   <Actions Context="Author">
     <Exec>
@@ -80,6 +89,14 @@ function failed(stdout: string | Uint8Array = ''): StartupTaskRunResult {
   return { status: 'failed', stdout };
 }
 
+function createTestTask(runner: StartupTaskRunner) {
+  return createWindowsStartupTask({
+    executablePath,
+    runner,
+    resolveUserIdentity: async () => ({ userSid: interactiveUserSid, sessionId: 7 })
+  });
+}
+
 describe('Windows startup task', () => {
   it('reconciles startup state before the tray reads the cached value', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
@@ -93,21 +110,33 @@ describe('Windows startup task', () => {
 
   it('recognizes the current executable and exact hidden argument from task XML', async () => {
     const runner = runnerSequence(
-      successful(taskXml(String.raw`C:\PROGRAM FILES\You &amp; Yu\YOUYU.EXE`, ' --hidden '))
+      successful(taskXml(String.raw`C:\PROGRAM FILES\You &amp; Yu\YOUYU.EXE`, ' --hidden ')),
+      missing()
     );
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const task = createTestTask(runner);
 
     await expect(task.reconcile(false)).resolves.toBe('current');
 
     expect(task.isEnabled()).toBe(true);
-    expect(runner).toHaveBeenCalledOnce();
-    expect(runner).toHaveBeenCalledWith(['/Query', '/TN', 'YouYu', '/XML']);
+    expect(runner).toHaveBeenCalledTimes(2);
+    expect(runner).toHaveBeenNthCalledWith(1, ['/Query', '/TN', sidBoundTaskName, '/XML']);
+    expect(runner).toHaveBeenNthCalledWith(2, ['/Query', '/TN', 'YouYu', '/XML']);
+  });
+
+  it('uses a SID-bound task name for the current interactive user', async () => {
+    const runner = runnerSequence(missing(), missing(), successful());
+    const task = createTestTask(runner);
+
+    await task.reconcile(true);
+
+    expect(runner).toHaveBeenNthCalledWith(1, ['/Query', '/TN', sidBoundTaskName, '/XML']);
+    expect(runner).toHaveBeenNthCalledWith(3, expect.arrayContaining(['/Create', '/TN', sidBoundTaskName]));
   });
 
   it('decodes UTF-16LE XML returned by schtasks', async () => {
     const xml = taskXml(executablePath, '--hidden');
-    const runner = runnerSequence(successful(Buffer.from(`\uFEFF${xml}`, 'utf16le')));
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const runner = runnerSequence(successful(Buffer.from(`\uFEFF${xml}`, 'utf16le')), missing());
+    const task = createTestTask(runner);
 
     await expect(task.reconcile(false)).resolves.toBe('current');
     expect(task.isEnabled()).toBe(true);
@@ -121,25 +150,26 @@ describe('Windows startup task', () => {
           omitTaskEnabled: true
         })
       ),
-      failed()
+      missing()
     );
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const task = createTestTask(runner);
 
     await expect(task.reconcile(false)).resolves.toBe('current');
 
     expect(task.isEnabled()).toBe(true);
-    expect(runner).toHaveBeenCalledOnce();
+    expect(runner).toHaveBeenCalledTimes(2);
   });
 
   it('accepts Windows defaults when the optional Settings container is omitted', async () => {
     const runner = runnerSequence(
-      successful(taskXml(executablePath, '--hidden', 'LeastPrivilege', { omitSettings: true }))
+      successful(taskXml(executablePath, '--hidden', 'LeastPrivilege', { omitSettings: true })),
+      missing()
     );
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const task = createTestTask(runner);
 
     await expect(task.reconcile(false)).resolves.toBe('current');
     expect(task.isEnabled()).toBe(true);
-    expect(runner).toHaveBeenCalledOnce();
+    expect(runner).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -147,17 +177,17 @@ describe('Windows startup task', () => {
     ['different arguments', executablePath, '--startup', 'LeastPrivilege'],
     ['an elevated run level', executablePath, '--hidden', 'HighestAvailable']
   ])('rebuilds a stale task with %s', async (_reason, command, args, runLevel) => {
-    const runner = runnerSequence(successful(taskXml(command, args, runLevel)), successful());
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const runner = runnerSequence(successful(taskXml(command, args, runLevel)), successful(), missing());
+    const task = createTestTask(runner);
 
     await expect(task.reconcile(false)).resolves.toBe('stale');
 
     expect(task.isEnabled()).toBe(true);
-    expect(runner).toHaveBeenNthCalledWith(1, ['/Query', '/TN', 'YouYu', '/XML']);
+    expect(runner).toHaveBeenNthCalledWith(1, ['/Query', '/TN', sidBoundTaskName, '/XML']);
     expect(runner).toHaveBeenNthCalledWith(2, [
       '/Create',
       '/TN',
-      'YouYu',
+      sidBoundTaskName,
       '/SC',
       'ONLOGON',
       '/TR',
@@ -176,67 +206,236 @@ describe('Windows startup task', () => {
   ])('rebuilds %s even when the executable action still matches', async (_reason, options) => {
     const runner = runnerSequence(
       successful(taskXml(executablePath, '--hidden', 'LeastPrivilege', options)),
-      successful()
+      successful(),
+      missing()
     );
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const task = createTestTask(runner);
 
     await expect(task.reconcile(false)).resolves.toBe('stale');
     expect(task.isEnabled()).toBe(true);
-    expect(runner).toHaveBeenCalledTimes(2);
-    expect(runner).toHaveBeenNthCalledWith(2, expect.arrayContaining(['/Create', '/TN', 'YouYu', '/SC', 'ONLOGON']));
+    expect(runner).toHaveBeenCalledTimes(3);
+    expect(runner).toHaveBeenNthCalledWith(
+      2,
+      expect.arrayContaining(['/Create', '/TN', sidBoundTaskName, '/SC', 'ONLOGON'])
+    );
   });
 
   it.each([
     ['the SYSTEM account', { principalUserId: 'S-1-5-18', logonType: 'ServiceAccount' }],
     ['the built-in Administrator account', { principalUserId: 'S-1-5-21-1-2-3-500' }],
     ['an administrators group', { groupId: 'S-1-5-32-544' }],
-    ['a non-interactive logon', { logonType: 'Password' }],
-    ['required privileges', { requiredPrivileges: true }]
-  ])('rebuilds a task that uses %s even when its executable matches', async (_reason, options) => {
-    const runner = runnerSequence(
-      successful(taskXml(executablePath, '--hidden', 'LeastPrivilege', options)),
-      successful()
-    );
-    const task = createWindowsStartupTask({ executablePath, runner });
+    ['multiple principals', { additionalPrincipal: true }],
+    ['multiple user IDs', { duplicateUserId: true }]
+  ])('fails closed when the SID-bound task uses %s', async (_reason, options) => {
+    const runner = runnerSequence(successful(taskXml(executablePath, '--hidden', 'LeastPrivilege', options)));
+    const task = createTestTask(runner);
 
-    await expect(task.reconcile(false)).resolves.toBe('stale');
-    expect(runner).toHaveBeenCalledTimes(2);
-    expect(runner).toHaveBeenNthCalledWith(2, expect.arrayContaining(['/Create', '/TN', 'YouYu', '/RL', 'LIMITED']));
-  });
-
-  it('migrates a legacy login item only when the task is missing', async () => {
-    const runner = runnerSequence(missing(), successful());
-    const task = createWindowsStartupTask({ executablePath, runner });
-
-    await expect(task.reconcile(true)).resolves.toBe('missing');
-
-    expect(task.isEnabled()).toBe(true);
-    expect(runner).toHaveBeenCalledTimes(2);
-    expect(runner).toHaveBeenNthCalledWith(2, expect.arrayContaining(['/Create', '/TN', 'YouYu']));
-  });
-
-  it('leaves a missing task disabled when there is no legacy login item', async () => {
-    const runner = runnerSequence(missing());
-    const task = createWindowsStartupTask({ executablePath, runner });
-
-    await expect(task.reconcile(false)).resolves.toBe('missing');
-
+    await expect(task.reconcile(false)).rejects.toThrow('计划任务不属于当前用户');
     expect(task.isEnabled()).toBe(false);
     expect(runner).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['a non-interactive logon', { logonType: 'Password' }],
+    ['required privileges', { requiredPrivileges: true }]
+  ])('rebuilds a same-user task that uses %s', async (_reason, options) => {
+    const runner = runnerSequence(
+      successful(taskXml(executablePath, '--hidden', 'LeastPrivilege', options)),
+      successful(),
+      missing()
+    );
+    const task = createTestTask(runner);
+
+    await expect(task.reconcile(false)).resolves.toBe('stale');
+    expect(runner).toHaveBeenCalledTimes(3);
+    expect(runner).toHaveBeenNthCalledWith(
+      2,
+      expect.arrayContaining(['/Create', '/TN', sidBoundTaskName, '/RL', 'LIMITED'])
+    );
+  });
+
+  it('migrates a legacy Electron login item only when both scheduled tasks are missing', async () => {
+    const runner = runnerSequence(missing(), missing(), successful());
+    const task = createTestTask(runner);
+
+    await expect(task.reconcile(true)).resolves.toBe('missing');
+
+    expect(task.isEnabled()).toBe(true);
+    expect(runner).toHaveBeenCalledTimes(3);
+    expect(runner).toHaveBeenNthCalledWith(2, ['/Query', '/TN', 'YouYu', '/XML']);
+    expect(runner).toHaveBeenNthCalledWith(3, expect.arrayContaining(['/Create', '/TN', sidBoundTaskName]));
+  });
+
+  it('migrates a same-user managed global task without overwriting another user task', async () => {
+    const runner = runnerSequence(
+      missing(),
+      successful(taskXml(executablePath, '--hidden')),
+      successful(),
+      successful()
+    );
+    const task = createTestTask(runner);
+
+    await expect(task.reconcile(false)).resolves.toBe('missing');
+
+    expect(task.isEnabled()).toBe(true);
+    expect(runner).toHaveBeenNthCalledWith(2, ['/Query', '/TN', 'YouYu', '/XML']);
+    expect(runner).toHaveBeenNthCalledWith(3, expect.arrayContaining(['/Create', '/TN', sidBoundTaskName]));
+    expect(runner).toHaveBeenNthCalledWith(4, ['/Delete', '/TN', 'YouYu', '/F']);
+  });
+
+  it('cleans a strictly managed legacy task even when the SID-bound task is already current', async () => {
+    const runner = runnerSequence(
+      successful(taskXml(executablePath, '--hidden')),
+      successful(taskXml(executablePath, '--hidden')),
+      successful()
+    );
+    const task = createTestTask(runner);
+
+    await expect(task.reconcile(false)).resolves.toBe('current');
+
+    expect(task.isEnabled()).toBe(true);
+    expect(runner).toHaveBeenNthCalledWith(2, ['/Query', '/TN', 'YouYu', '/XML']);
+    expect(runner).toHaveBeenNthCalledWith(3, ['/Delete', '/TN', 'YouYu', '/F']);
+  });
+
+  it('retries a failed legacy cleanup without losing its managed state', async () => {
+    const runner = runnerSequence(
+      successful(taskXml(executablePath, '--hidden')),
+      successful(taskXml(executablePath, '--hidden')),
+      failed(),
+      successful(taskXml(executablePath, '--hidden')),
+      successful()
+    );
+    const task = createTestTask(runner);
+
+    await expect(task.reconcile(false)).rejects.toThrow('无法删除旧版 Windows 计划任务');
+    expect(task.isEnabled()).toBe(true);
+
+    await expect(task.reconcile(false)).resolves.toBe('current');
+    expect(runner).toHaveBeenNthCalledWith(5, ['/Delete', '/TN', 'YouYu', '/F']);
+  });
+
+  it('repairs a stale SID-bound task before cleaning its strictly managed legacy twin', async () => {
+    const runner = runnerSequence(
+      successful(taskXml(executablePath, '--startup')),
+      successful(),
+      successful(taskXml(executablePath, '--hidden')),
+      successful()
+    );
+    const task = createTestTask(runner);
+
+    await expect(task.reconcile(false)).resolves.toBe('stale');
+
+    expect(task.isEnabled()).toBe(true);
+    expect(runner).toHaveBeenNthCalledWith(2, expect.arrayContaining(['/Create', '/TN', sidBoundTaskName]));
+    expect(runner).toHaveBeenNthCalledWith(3, ['/Query', '/TN', 'YouYu', '/XML']);
+    expect(runner).toHaveBeenNthCalledWith(4, ['/Delete', '/TN', 'YouYu', '/F']);
+  });
+
+  it('does not migrate or delete a same-user legacy task from another installation path', async () => {
+    const runner = runnerSequence(missing(), successful(taskXml(String.raw`C:\Old\YouYu.exe`, '--hidden')));
+    const task = createTestTask(runner);
+
+    await expect(task.reconcile(false)).resolves.toBe('missing');
+    await expect(task.setEnabled(false)).resolves.toBeUndefined();
+
+    expect(task.isEnabled()).toBe(false);
+    expect(runner).toHaveBeenCalledTimes(2);
+    expect(runner).not.toHaveBeenCalledWith(expect.arrayContaining(['/Create']));
+    expect(runner).not.toHaveBeenCalledWith(expect.arrayContaining(['/Delete']));
+  });
+
+  it('leaves another user global task untouched', async () => {
+    const runner = runnerSequence(
+      missing(),
+      successful(
+        taskXml(executablePath, '--hidden', 'LeastPrivilege', {
+          principalUserId: 'S-1-5-21-900-800-700-1002'
+        })
+      )
+    );
+    const task = createTestTask(runner);
+
+    await expect(task.reconcile(false)).resolves.toBe('missing');
+    expect(task.isEnabled()).toBe(false);
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a missing task disabled when there is no legacy login item', async () => {
+    const runner = runnerSequence(missing(), missing());
+    const task = createTestTask(runner);
+
+    await expect(task.reconcile(false)).resolves.toBe('missing');
+
+    expect(task.isEnabled()).toBe(false);
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
   it('treats disabling an already missing task as an idempotent operation', async () => {
-    const runner = runnerSequence(missing());
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const runner = runnerSequence(missing(), missing());
+    const task = createTestTask(runner);
     await task.reconcile(false);
 
     await expect(task.setEnabled(false)).resolves.toBeUndefined();
-    expect(runner).toHaveBeenCalledOnce();
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables a same-user managed global task without creating a replacement first', async () => {
+    const runner = runnerSequence(missing(), successful(taskXml(executablePath, '--hidden')), successful());
+    const task = createTestTask(runner);
+
+    await task.setEnabled(false);
+
+    expect(task.isEnabled()).toBe(false);
+    expect(runner).toHaveBeenNthCalledWith(3, ['/Delete', '/TN', 'YouYu', '/F']);
+    expect(runner).not.toHaveBeenCalledWith(expect.arrayContaining(['/Create']));
+  });
+
+  it('disables both strictly managed legacy and SID-bound tasks in cleanup-first order', async () => {
+    const runner = runnerSequence(
+      successful(taskXml(executablePath, '--hidden')),
+      successful(taskXml(executablePath, '--hidden')),
+      successful(),
+      successful()
+    );
+    const task = createTestTask(runner);
+
+    await task.setEnabled(false);
+
+    expect(task.isEnabled()).toBe(false);
+    expect(runner).toHaveBeenNthCalledWith(3, ['/Delete', '/TN', 'YouYu', '/F']);
+    expect(runner).toHaveBeenNthCalledWith(4, ['/Delete', '/TN', sidBoundTaskName, '/F']);
+  });
+
+  it('keeps startup enabled when strict legacy cleanup fails during disable', async () => {
+    const runner = runnerSequence(missing(), successful(taskXml(executablePath, '--hidden')), failed());
+    const task = createTestTask(runner);
+
+    await expect(task.setEnabled(false)).rejects.toThrow('无法删除旧版 Windows 计划任务');
+
+    expect(task.isEnabled()).toBe(true);
+    expect(runner).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps startup enabled when SID-bound deletion fails after legacy cleanup', async () => {
+    const runner = runnerSequence(
+      successful(taskXml(executablePath, '--hidden')),
+      successful(taskXml(executablePath, '--hidden')),
+      successful(),
+      failed()
+    );
+    const task = createTestTask(runner);
+
+    await expect(task.setEnabled(false)).rejects.toThrow('无法删除 Windows 计划任务');
+
+    expect(task.isEnabled()).toBe(true);
+    expect(runner).toHaveBeenNthCalledWith(3, ['/Delete', '/TN', 'YouYu', '/F']);
+    expect(runner).toHaveBeenNthCalledWith(4, ['/Delete', '/TN', sidBoundTaskName, '/F']);
   });
 
   it('does not treat a failed query as a missing task', async () => {
     const runner = runnerSequence(failed());
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const task = createTestTask(runner);
 
     await expect(task.reconcile(false)).rejects.toThrow('无法读取 Windows 计划任务');
     expect(task.isEnabled()).toBe(false);
@@ -245,31 +444,32 @@ describe('Windows startup task', () => {
 
   it('does not report a failed first query as a successful disable', async () => {
     const runner = runnerSequence(failed());
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const task = createTestTask(runner);
 
     await expect(task.setEnabled(false)).rejects.toThrow('无法读取 Windows 计划任务');
+    expect(task.isEnabled()).toBe(true);
     expect(runner).toHaveBeenCalledOnce();
   });
 
   it('queries before the first disable and deletes an existing task', async () => {
-    const runner = runnerSequence(successful(taskXml(executablePath, '--hidden')), successful());
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const runner = runnerSequence(successful(taskXml(executablePath, '--hidden')), missing(), successful());
+    const task = createTestTask(runner);
 
     await task.setEnabled(false);
 
     expect(task.isEnabled()).toBe(false);
-    expect(runner).toHaveBeenNthCalledWith(1, ['/Query', '/TN', 'YouYu', '/XML']);
-    expect(runner).toHaveBeenNthCalledWith(2, ['/Delete', '/TN', 'YouYu', '/F']);
+    expect(runner).toHaveBeenNthCalledWith(1, ['/Query', '/TN', sidBoundTaskName, '/XML']);
+    expect(runner).toHaveBeenNthCalledWith(3, ['/Delete', '/TN', sidBoundTaskName, '/F']);
   });
 
   it('deletes the task with an argument array and updates the cached state', async () => {
-    const runner = runnerSequence(successful(taskXml(executablePath, '--hidden')), successful());
-    const task = createWindowsStartupTask({ executablePath, runner });
+    const runner = runnerSequence(successful(taskXml(executablePath, '--hidden')), missing(), successful());
+    const task = createTestTask(runner);
     await task.reconcile(false);
 
     await task.setEnabled(false);
 
     expect(task.isEnabled()).toBe(false);
-    expect(runner).toHaveBeenNthCalledWith(2, ['/Delete', '/TN', 'YouYu', '/F']);
+    expect(runner).toHaveBeenNthCalledWith(3, ['/Delete', '/TN', sidBoundTaskName, '/F']);
   });
 });

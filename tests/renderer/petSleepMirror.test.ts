@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import { readRendererStyles } from './helpers/rendererStyles';
 
 describe('side-sleep Z animation', () => {
   it('mirrors the right-sleep trajectory while keeping every Z glyph readable', async () => {
     const [styles, component] = await Promise.all([
-      readFile('src/renderer/styles.css', 'utf8'),
+      readRendererStyles(),
       readFile('src/renderer/components/PetSprite.tsx', 'utf8')
     ]);
     const rightSleepStart = styles.indexOf('.pet-sprite-edgeRightSleep {');

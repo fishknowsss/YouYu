@@ -44,6 +44,7 @@ describe('buildMihomoConfig', () => {
     expect(config['geodata-mode']).toBe(false);
     expect(config['proxy-providers'].airport.url).toBe('https://example.com/sub?token=secret');
     expect(config['proxy-providers'].airport.interval).toBe(43200);
+    expect(config['proxy-providers'].airport['size-limit']).toBe(8 * 1024 * 1024);
     expect(config['proxy-providers'].airport['exclude-filter']).toContain('剩余流量');
     expect(config['proxy-providers'].airport['exclude-filter']).toContain('中转');
     expect(config['proxy-providers'].airport['exclude-filter']).toContain('cloudflare');
@@ -55,10 +56,10 @@ describe('buildMihomoConfig', () => {
     expect(config['proxy-providers'].airport['health-check'].interval).toBe(1800);
     expect(config['proxy-providers'].airport['health-check']['expected-status']).toBe(204);
     expect(config['rule-providers']).toMatchObject({
-      OpenAI: expect.objectContaining({ behavior: 'classical' }),
-      Discord: expect.objectContaining({ behavior: 'classical' }),
-      GitHub: expect.objectContaining({ behavior: 'classical' }),
-      Microsoft: expect.objectContaining({ behavior: 'classical' })
+      OpenAI: expect.objectContaining({ behavior: 'classical', 'size-limit': 32 * 1024 * 1024 }),
+      Discord: expect.objectContaining({ behavior: 'classical', 'size-limit': 32 * 1024 * 1024 }),
+      GitHub: expect.objectContaining({ behavior: 'classical', 'size-limit': 32 * 1024 * 1024 }),
+      Microsoft: expect.objectContaining({ behavior: 'classical', 'size-limit': 32 * 1024 * 1024 })
     });
     expect(config['proxy-groups'].map((group: { name: string }) => group.name)).toEqual(
       expect.arrayContaining(['节点选择', '自动选择', '故障转移', '负载均衡', 'AI', 'Discord', '开发平台', '验证码'])
@@ -347,7 +348,7 @@ proxies:
     expect(config['proxy-groups'][1].proxies).not.toContain('自动选择');
   });
 
-  it('can preserve a full airport config while injecting local runtime controls', () => {
+  it('preserves subscription routing while enforcing local runtime controls', () => {
     const yamlText = buildMihomoConfig({
       subscriptionUrl: 'https://example.com/sub',
       secret: 'local-secret',
@@ -402,9 +403,7 @@ rules:
     expect(config['mixed-port']).toBe(7990);
     expect(config['external-controller']).toBe('127.0.0.1:9190');
     expect(config.secret).toBe('local-secret');
-    expect(config.dns.fallback).toBeUndefined();
-    expect(config.dns['fallback-filter']).toBeUndefined();
-    expect(config.dns['fake-ip-filter']).toEqual(['+.lan']);
+    expect(config.dns).toBeUndefined();
     expect(config.proxies.map((proxy: { name: string }) => proxy.name)).toEqual(['HK 01']);
     expect(config['proxy-groups'][0].proxies).toEqual(['HK 01']);
     expect(config.rules).toEqual(
@@ -430,6 +429,253 @@ rules:
     expect(config.rules).toContain('MATCH,DIRECT');
     expect(config.rules).not.toContain('GEOSITE,cn,DIRECT');
     expect(config.rules).not.toContain('GEOIP,CN,DIRECT');
+  });
+
+  it('targets the first usable inline proxy when a full subscription has rules but no routable group', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/sub',
+      secret: 'local-secret',
+      ruleProfile: 'subscription',
+      subscriptionConfigText: `
+proxies:
+  - name: Traffic remaining 100 GB
+    type: ss
+    server: 127.0.0.1
+    port: 8387
+    cipher: aes-128-gcm
+    password: notice
+  - name: HK 01
+    type: ss
+    server: 127.0.0.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+rules:
+  - DOMAIN-SUFFIX,example.com,HK 01
+  - MATCH,HK 01
+`
+    });
+    const config = parse(yamlText);
+
+    expect(config.proxies.map((proxy: { name: string }) => proxy.name)).toEqual(['HK 01']);
+    expect(config['proxy-groups']).toBeUndefined();
+    expect(config.rules).toContain('DOMAIN-SUFFIX,flow.google.com,HK 01');
+    expect(config.rules).toContain('MATCH,HK 01');
+  });
+
+  it('skips whitespace-padded inline proxy names when selecting a fallback routing target', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/sub',
+      secret: 'local-secret',
+      ruleProfile: 'subscription',
+      subscriptionConfigText: `
+proxies:
+  - name: '  HK 01  '
+    type: ss
+    server: 127.0.0.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+  - name: HK 02
+    type: ss
+    server: 127.0.0.1
+    port: 8389
+    cipher: aes-128-gcm
+    password: pass
+rules:
+  - MATCH,HK 02
+`
+    });
+    const config = parse(yamlText);
+
+    expect(config.proxies[0].name).toBe('  HK 01  ');
+    expect(config.rules).toContain('DOMAIN-SUFFIX,flow.google.com,HK 02');
+  });
+
+  it('falls back to the managed provider when every inline proxy name has edge whitespace', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/canonical-subscription',
+      secret: 'local-secret',
+      ruleProfile: 'subscription',
+      subscriptionConfigText: `
+proxies:
+  - name: '  HK 01  '
+    type: ss
+    server: 127.0.0.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+rules:
+  - 'MATCH,  HK 01  '
+`
+    });
+    const config = parse(yamlText);
+
+    expect(config.proxies).toBeUndefined();
+    expect(config['proxy-providers'].airport.url).toBe('https://example.com/canonical-subscription');
+  });
+
+  it('falls back to the managed provider config when provider-only subscription rules have no routable group', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/canonical-subscription',
+      secret: 'local-secret',
+      ruleProfile: 'subscription',
+      subscriptionConfigText: `
+proxy-providers:
+  untrusted:
+    type: http
+    url: https://example.com/untrusted-provider
+    path: ./providers/untrusted.yaml
+rules:
+  - MATCH,PROXY
+`
+    });
+    const config = parse(yamlText);
+
+    expect(config['proxy-providers'].airport.url).toBe('https://example.com/canonical-subscription');
+    expect(config['proxy-providers'].untrusted).toBeUndefined();
+    expect(config['proxy-groups']).not.toHaveLength(0);
+    expect(config.rules.at(-1)).toBe(`MATCH,${config['proxy-groups'][0].name}`);
+  });
+
+  it('keeps only client routing capabilities from an untrusted full subscription', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/sub',
+      secret: 'local-secret',
+      ruleProfile: 'subscription',
+      mixedPort: 7991,
+      controllerPort: 9191,
+      allowLan: false,
+      dnsEnhanced: false,
+      snifferEnabled: false,
+      tunEnabled: false,
+      subscriptionConfigText: String.raw`
+port: 7890
+mixed-port: 7891
+allow-lan: true
+bind-address: 0.0.0.0
+authentication: [attacker:secret]
+skip-auth-prefixes: [0.0.0.0/0]
+lan-allowed-ips: [0.0.0.0/0]
+lan-disallowed-ips: []
+listeners:
+  - name: attacker-http
+    type: http
+    port: 18080
+    listen: 0.0.0.0
+tunnels:
+  - tcp,0.0.0.0:17777,example.com:443,PROXY
+ss-config:
+  listen: 0.0.0.0:18388
+vmess-config:
+  listen: 0.0.0.0:18389
+tuic-server:
+  listen: 0.0.0.0:18390
+external-controller: 0.0.0.0:19090
+external-controller-unix: attacker.sock
+external-controller-pipe: '\\.\pipe\attacker'
+external-controller-tls: 0.0.0.0:19443
+external-controller-cors:
+  allow-origins: ['*']
+external-doh-server: /dns-query
+external-ui: C:\\attacker-ui
+external-ui-name: attacker
+external-ui-url: https://example.com/attacker-ui.zip
+tls:
+  certificate: C:\\attacker.crt
+  private-key: C:\\attacker.key
+dns:
+  enable: true
+  listen: 0.0.0.0:15353
+sniffer:
+  enable: true
+tun:
+  enable: true
+  auto-route: true
+future-inbound:
+  listen: 0.0.0.0:19999
+proxies:
+  - name: HK 01
+    type: ss
+    server: 127.0.0.1
+    port: 8388
+    cipher: aes-128-gcm
+    password: pass
+proxy-providers:
+  backup:
+    type: http
+    url: https://example.com/provider
+    path: ./providers/backup.yaml
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [HK 01]
+rule-providers:
+  SafeRules:
+    type: http
+    behavior: classical
+    url: https://example.com/rules.yaml
+    path: ./rulesets/safe.yaml
+sub-rules:
+  safe-sub-rule:
+    - DOMAIN-SUFFIX,example.net,PROXY
+rules:
+  - RULE-SET,SafeRules,PROXY
+  - SUB-RULE,(NETWORK,tcp),safe-sub-rule
+  - MATCH,PROXY
+`
+    });
+    const config = parse(yamlText);
+
+    expect(config['mixed-port']).toBe(7991);
+    expect(config['allow-lan']).toBe(false);
+    expect(config['external-controller']).toBe('127.0.0.1:9191');
+    expect(config.secret).toBe('local-secret');
+    expect(config.dns).toBeUndefined();
+    expect(config.sniffer).toBeUndefined();
+    expect(config.tun).toBeUndefined();
+    expect(config.proxies).toHaveLength(1);
+    expect(config['proxy-providers'].backup).toMatchObject({
+      url: 'https://example.com/provider',
+      interval: 12 * 60 * 60,
+      'size-limit': 8 * 1024 * 1024
+    });
+    expect(config['proxy-groups'][0].name).toBe('PROXY');
+    expect(config['rule-providers'].SafeRules).toMatchObject({
+      url: 'https://example.com/rules.yaml',
+      interval: 24 * 60 * 60,
+      'size-limit': 32 * 1024 * 1024
+    });
+    expect(config['sub-rules']['safe-sub-rule']).toEqual(['DOMAIN-SUFFIX,example.net,PROXY']);
+    expect(config.rules).toEqual(
+      expect.arrayContaining(['RULE-SET,SafeRules,PROXY', 'SUB-RULE,(NETWORK,tcp),safe-sub-rule'])
+    );
+
+    for (const key of [
+      'port',
+      'bind-address',
+      'authentication',
+      'skip-auth-prefixes',
+      'lan-allowed-ips',
+      'lan-disallowed-ips',
+      'listeners',
+      'tunnels',
+      'ss-config',
+      'vmess-config',
+      'tuic-server',
+      'external-controller-unix',
+      'external-controller-pipe',
+      'external-controller-tls',
+      'external-controller-cors',
+      'external-doh-server',
+      'external-ui',
+      'external-ui-name',
+      'external-ui-url',
+      'tls',
+      'future-inbound'
+    ]) {
+      expect(config[key]).toBeUndefined();
+    }
   });
 
   it('secures provider health checks without changing subscription endpoints', () => {
@@ -481,6 +727,168 @@ rules:
         'expected-status': 204
       }
     });
+  });
+
+  it('bounds only HTTP provider downloads, refreshes, and health checks', () => {
+    const yamlText = buildMihomoConfig({
+      subscriptionUrl: 'https://example.com/sub',
+      secret: 'local-secret',
+      ruleProfile: 'subscription',
+      subscriptionConfigText: `
+proxy-providers:
+  malicious:
+    type: http
+    url: https://example.com/malicious.yaml
+    path: ./providers/malicious.yaml
+    size-limit: 0
+    interval: 1
+    health-check:
+      enable: true
+      url: https://status.example.com/ping
+      interval: 1
+      timeout: 999999
+      lazy: false
+  oversized:
+    type: http
+    url: https://example.com/oversized.yaml
+    path: ./providers/oversized.yaml
+    size-limit: 999999999
+    interval: 999999999
+    health-check:
+      enable: true
+      url: https://status.example.com/ping
+      interval: 999999999
+      timeout: 0
+      lazy: false
+  normal:
+    type: http
+    url: https://example.com/normal.yaml
+    path: ./providers/normal.yaml
+    size-limit: 1048576
+    interval: 7200
+    health-check:
+      enable: true
+      url: https://status.example.com/ping
+      interval: 600
+      timeout: 2500
+      lazy: false
+  local:
+    type: file
+    path: ./providers/local.yaml
+    size-limit: 0
+    interval: 1
+    health-check:
+      enable: true
+      interval: 1
+      timeout: 999999
+      lazy: false
+proxy-groups:
+  - name: MALICIOUS-GROUP
+    type: url-test
+    use: [malicious]
+    url: https://status.example.com/ping
+    interval: 1
+    timeout: 999999
+    lazy: false
+  - name: OVERSIZED-GROUP
+    type: load-balance
+    use: [oversized]
+    url: https://status.example.com/ping
+    interval: 999999999
+    timeout: 0
+    lazy: false
+  - name: NORMAL-GROUP
+    type: fallback
+    use: [normal]
+    url: https://status.example.com/ping
+    interval: 600
+    timeout: 2500
+    lazy: false
+  - name: PROXY
+    type: select
+    use: [malicious, oversized, normal, local]
+    url: https://status.example.com/ping
+    interval: 1
+    timeout: 999999
+    lazy: false
+rule-providers:
+  malicious-rules:
+    type: http
+    behavior: classical
+    url: https://example.com/malicious-rules.yaml
+    path: ./rulesets/malicious.yaml
+    size-limit: 0
+    interval: 1
+  oversized-rules:
+    type: http
+    behavior: classical
+    url: https://example.com/oversized-rules.yaml
+    path: ./rulesets/oversized.yaml
+    size-limit: 999999999
+    interval: 999999999
+  normal-rules:
+    type: http
+    behavior: classical
+    url: https://example.com/normal-rules.yaml
+    path: ./rulesets/normal.yaml
+    size-limit: 1048576
+    interval: 7200
+  inline-rules:
+    type: inline
+    behavior: classical
+    size-limit: 0
+    interval: 1
+    payload:
+      - DOMAIN-SUFFIX,inline.example.com
+rules:
+  - RULE-SET,malicious-rules,PROXY
+  - MATCH,PROXY
+`
+    });
+    const config = parse(yamlText);
+    const proxyProviders = config['proxy-providers'];
+    const ruleProviders = config['rule-providers'];
+    const proxyGroups = Object.fromEntries(
+      config['proxy-groups'].map((group: { name: string }) => [group.name, group])
+    );
+
+    expect(proxyGroups['MALICIOUS-GROUP']).toMatchObject({ interval: 300, timeout: 10_000, lazy: true });
+    expect(proxyGroups['OVERSIZED-GROUP']).toMatchObject({ interval: 24 * 60 * 60, timeout: 1000, lazy: true });
+    expect(proxyGroups['NORMAL-GROUP']).toMatchObject({ interval: 600, timeout: 2500, lazy: true });
+    expect(proxyGroups.PROXY).toMatchObject({ type: 'select', interval: 1, timeout: 999999, lazy: false });
+
+    expect(proxyProviders.malicious).toMatchObject({
+      'size-limit': 8 * 1024 * 1024,
+      interval: 3600,
+      'health-check': { interval: 300, timeout: 10_000, lazy: true }
+    });
+    expect(proxyProviders.oversized).toMatchObject({
+      'size-limit': 8 * 1024 * 1024,
+      interval: 7 * 24 * 60 * 60,
+      'health-check': { interval: 24 * 60 * 60, timeout: 1000, lazy: true }
+    });
+    expect(proxyProviders.normal).toMatchObject({
+      'size-limit': 1024 * 1024,
+      interval: 7200,
+      'health-check': { interval: 600, timeout: 2500, lazy: true }
+    });
+    expect(proxyProviders.local).toMatchObject({
+      type: 'file',
+      'size-limit': 0,
+      interval: 1,
+      'health-check': { interval: 1, timeout: 999999, lazy: false }
+    });
+
+    expect(ruleProviders['malicious-rules']).toMatchObject({
+      'size-limit': 32 * 1024 * 1024,
+      interval: 3600
+    });
+    expect(ruleProviders['oversized-rules']).toMatchObject({
+      'size-limit': 32 * 1024 * 1024,
+      interval: 7 * 24 * 60 * 60
+    });
+    expect(ruleProviders['normal-rules']).toMatchObject({ 'size-limit': 1024 * 1024, interval: 7200 });
+    expect(ruleProviders['inline-rules']).toMatchObject({ type: 'inline', 'size-limit': 0, interval: 1 });
   });
 
   it('secures known group health checks without changing custom HTTPS checks', () => {

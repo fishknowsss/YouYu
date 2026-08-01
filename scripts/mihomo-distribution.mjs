@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 export const mihomoResourceRelativePath = 'resources/mihomo/win-x64';
 export const mihomoManifestFileName = 'manifest.json';
@@ -95,6 +96,40 @@ export async function validateMihomoDistribution(distributionDir, options = {}) 
   };
 }
 
+export function assertPackagedMihomoMatchesSource(sourceManifest, packagedManifest) {
+  if (isDeepStrictEqual(packagedManifest, sourceManifest)) return { signed: false };
+
+  const packagedBinary = packagedManifest?.binary;
+  if (
+    !isRecord(packagedBinary) ||
+    packagedBinary.unsignedSize !== sourceManifest.binary.size ||
+    packagedBinary.unsignedSha256 !== sourceManifest.binary.sha256 ||
+    typeof packagedBinary.authenticodeSubject !== 'string' ||
+    !packagedBinary.authenticodeSubject.trim() ||
+    typeof packagedBinary.authenticodeThumbprint !== 'string' ||
+    !/^[a-f0-9]{40}$/i.test(packagedBinary.authenticodeThumbprint)
+  ) {
+    throw new Error('Packaged Mihomo manifest has an invalid Authenticode provenance envelope');
+  }
+
+  const normalized = structuredClone(packagedManifest);
+  normalized.binary.size = normalized.binary.unsignedSize;
+  normalized.binary.sha256 = normalized.binary.unsignedSha256;
+  delete normalized.binary.unsignedSize;
+  delete normalized.binary.unsignedSha256;
+  delete normalized.binary.authenticodeSubject;
+  delete normalized.binary.authenticodeThumbprint;
+  if (!isDeepStrictEqual(normalized, sourceManifest)) {
+    throw new Error('Packaged Mihomo manifest differs outside the Authenticode provenance envelope');
+  }
+
+  return {
+    signed: true,
+    signerSubject: packagedBinary.authenticodeSubject,
+    signerThumbprint: packagedBinary.authenticodeThumbprint.toUpperCase()
+  };
+}
+
 export function resolveMihomoSourceReleaseAssetName(manifest, appVersion) {
   if (typeof appVersion !== 'string' || !/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(appVersion)) {
     throw new Error(`Invalid YouYu version for Mihomo source asset: ${String(appVersion)}`);
@@ -176,6 +211,21 @@ function validateManifestShape(manifest, manifestPath) {
   assertDistributionFileName(manifest.binary.file, 'binary.file');
   assertPositiveSafeInteger(manifest.binary.size, 'binary.size');
   assertHex(manifest.binary.sha256, 64, 'binary.sha256');
+  const authenticodeFields = [
+    manifest.binary.unsignedSize,
+    manifest.binary.unsignedSha256,
+    manifest.binary.authenticodeSubject,
+    manifest.binary.authenticodeThumbprint
+  ];
+  if (authenticodeFields.some((value) => value !== undefined)) {
+    if (authenticodeFields.some((value) => value === undefined)) {
+      throw new Error('Mihomo manifest binary Authenticode provenance must be complete');
+    }
+    assertPositiveSafeInteger(manifest.binary.unsignedSize, 'binary.unsignedSize');
+    assertHex(manifest.binary.unsignedSha256, 64, 'binary.unsignedSha256');
+    assertNonEmptyString(manifest.binary.authenticodeSubject, 'binary.authenticodeSubject');
+    assertHex(manifest.binary.authenticodeThumbprint, 40, 'binary.authenticodeThumbprint');
+  }
   assertNonEmptyString(manifest.binary.versionOutput, 'binary.versionOutput');
   if (!manifest.binary.versionOutput.includes(`Mihomo Meta v${manifest.version} windows amd64`)) {
     throw new Error('Mihomo manifest binary.versionOutput does not match version/platform/architecture');

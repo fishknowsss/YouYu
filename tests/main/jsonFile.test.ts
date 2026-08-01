@@ -55,6 +55,35 @@ describe('atomic JSON persistence', () => {
       recoveredFromBackup: true
     });
   });
+
+  it('keeps a valid backup intact so a semantically invalid primary can be recovered repeatedly', async () => {
+    const dir = await createTempDir();
+    const filePath = join(dir, 'state.json');
+    const backupPath = `${filePath}.bak`;
+    const validate = (value: { version?: number; value?: string }) => value.version === 1;
+    await writeJsonFileAtomic(filePath, { version: 1, value: 'valid' });
+    await writeJsonFileAtomic(filePath, { version: 2, value: 'new' });
+    await writeFile(filePath, '{"version":99}\n', 'utf8');
+
+    const firstRecovery = await readJsonFile<{ version?: number; value?: string }>(filePath, { validate });
+
+    expect(firstRecovery).toEqual({
+      status: 'found',
+      value: { version: 1, value: 'valid' },
+      recoveredFromBackup: true
+    });
+    expect(JSON.parse(await readFile(backupPath, 'utf8'))).toEqual({ version: 1, value: 'valid' });
+
+    await writeFile(filePath, '{"version":100}\n', 'utf8');
+    const secondRecovery = await readJsonFile<{ version?: number; value?: string }>(filePath, { validate });
+
+    expect(secondRecovery).toEqual({
+      status: 'found',
+      value: { version: 1, value: 'valid' },
+      recoveredFromBackup: true
+    });
+    expect(JSON.parse(await readFile(backupPath, 'utf8'))).toEqual({ version: 1, value: 'valid' });
+  });
 });
 
 async function createTempDir(): Promise<string> {

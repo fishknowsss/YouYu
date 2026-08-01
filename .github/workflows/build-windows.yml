@@ -22,16 +22,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
           cache: npm
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.x'
 
@@ -45,7 +45,7 @@ jobs:
         run: npm run validate:mihomo
 
       - name: Cache electron-builder tools
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~\AppData\Local\electron-builder\Cache
@@ -109,7 +109,7 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Upload installer
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: youyu-windows-x64-${{ steps.package.outputs.version }}
           path: |
@@ -123,5 +123,6 @@ jobs:
             release/YouYu-${{ steps.package.outputs.version }}-x64-no.exe.blockmap
             release/latest-no.yml
             release/YouYu-${{ steps.package.outputs.version }}-Mihomo-*-source.tar.gz
+            release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 3

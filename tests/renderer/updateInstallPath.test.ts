@@ -3,11 +3,11 @@ import { describe, expect, it } from 'vitest';
 
 describe('update install entry points', () => {
   it('uses the same install handler in easy and advanced interfaces', async () => {
-    const source = await readFile('src/renderer/App.tsx', 'utf8');
+    const source = await readFile('src/renderer/hooks/useAppController.ts', 'utf8');
 
-    expect(source).toContain('function handleInstallUpdate(messageSink?: (message: string) => void)');
-    expect(source).toContain('onInstallUpdate={() => handleInstallUpdate()}');
-    expect(source).toContain('onInstallUpdate={() => handleInstallUpdate(setSettingsMessage)}');
+    expect(source).toContain('const handleInstallUpdate = useCallback(');
+    expect(source).toContain('const installUpdate = useCallback(() => handleInstallUpdate()');
+    expect(source).toContain('() => handleInstallUpdate(setSettingsMessage)');
     expect(source).toContain('messageSink');
   });
 

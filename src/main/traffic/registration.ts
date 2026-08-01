@@ -11,6 +11,7 @@ type TrafficRegistrationStore = {
 };
 
 export type TrafficRegistrationCoordinator = {
+  runExclusiveForeground: <T>(operation: () => Promise<T>) => Promise<T>;
   register: (
     input: TrafficRegistrationInput,
     options?: TrafficRegistrationOptions
@@ -155,6 +156,18 @@ export function createTrafficRegistrationCoordinator(deps: {
 }): TrafficRegistrationCoordinator {
   const formatError = deps.formatError ?? defaultFormatError;
   const log = deps.log ?? (() => undefined);
+  let latestRegistrationAttempt = 0;
+  let activeForegroundRegistrations = 0;
+  let foregroundCriticalSectionActive = false;
+
+  function isCurrentRegistration(registrationAttempt: number): boolean {
+    return registrationAttempt === latestRegistrationAttempt;
+  }
+
+  function assertCurrentRegistration(registrationAttempt: number): void {
+    if (isCurrentRegistration(registrationAttempt)) return;
+    throw createSupersededRegistrationError();
+  }
 
   async function storePending(input: TrafficRegistrationInput, error: unknown) {
     log(`登记暂存，等待代理可用后重试：${formatError(error)}`);
@@ -162,67 +175,110 @@ export function createTrafficRegistrationCoordinator(deps: {
   }
 
   return {
-    async register(input, options = {}) {
+    async runExclusiveForeground<T>(operation: () => Promise<T>): Promise<T> {
+      if (foregroundCriticalSectionActive) throw createRegistrationInProgressError();
+      foregroundCriticalSectionActive = true;
+      latestRegistrationAttempt += 1;
+      activeForegroundRegistrations += 1;
       try {
-        await deps.reporter.register(input, {
-          proxyUrl: deps.getProxyUrl()
-        });
-        return { committed: true };
-      } catch (directError) {
-        if (!shouldRetryRegistrationViaProxy(directError, formatError)) {
-          throw directError;
-        }
+        return await operation();
+      } finally {
+        activeForegroundRegistrations = Math.max(0, activeForegroundRegistrations - 1);
+        foregroundCriticalSectionActive = false;
+      }
+    },
 
-        if (!(await deps.hasSubscription())) {
-          if (options.preserveExistingIdentity) throw directError;
-          await storePending(input, directError);
-          return { committed: false };
-        }
-
-        log(`登记请求失败，准备通过代理重试：${formatError(directError)}`);
-        let releaseTemporaryRuntime: TemporaryRuntimeRelease;
+    async register(input, options = {}) {
+      const registrationAttempt = ++latestRegistrationAttempt;
+      activeForegroundRegistrations += 1;
+      try {
         try {
-          releaseTemporaryRuntime = await deps.acquireTemporaryRuntime();
-        } catch (startError) {
-          if (options.preserveExistingIdentity) throw startError;
-          await storePending(input, startError);
-          return { committed: false };
-        }
+          await deps.reporter.register(input, {
+            proxyUrl: deps.getProxyUrl()
+          });
+          assertCurrentRegistration(registrationAttempt);
+          return { committed: true };
+        } catch (directError) {
+          assertCurrentRegistration(registrationAttempt);
+          if (!shouldRetryRegistrationViaProxy(directError, formatError)) {
+            throw directError;
+          }
 
-        let registrationError: unknown;
-        let activationCommitted = false;
-        let postCommitError: unknown;
-        try {
-          await deps.reporter.register(input, { proxyUrl: deps.getProxyUrl() });
-          activationCommitted = true;
-        } catch (proxyError) {
-          log(`登记代理重试失败：${formatError(proxyError)}`);
-          if (options.preserveExistingIdentity || isPermanentTrafficActivationFailure(proxyError, formatError)) {
-            registrationError = proxyError;
-          } else {
-            try {
-              await deps.store.registerPendingIdentity(input);
-            } catch (storeError) {
-              registrationError = storeError;
+          const hasSubscription = await deps.hasSubscription();
+          assertCurrentRegistration(registrationAttempt);
+          if (!hasSubscription) {
+            if (options.preserveExistingIdentity) throw directError;
+            await storePending(input, directError);
+            assertCurrentRegistration(registrationAttempt);
+            return { committed: false };
+          }
+
+          log(`登记请求失败，准备通过代理重试：${formatError(directError)}`);
+          let releaseTemporaryRuntime: TemporaryRuntimeRelease;
+          try {
+            releaseTemporaryRuntime = await deps.acquireTemporaryRuntime();
+          } catch (startError) {
+            assertCurrentRegistration(registrationAttempt);
+            if (options.preserveExistingIdentity) throw startError;
+            await storePending(input, startError);
+            assertCurrentRegistration(registrationAttempt);
+            return { committed: false };
+          }
+
+          let registrationError: unknown;
+          let activationCommitted = false;
+          let postCommitError: unknown;
+          try {
+            assertCurrentRegistration(registrationAttempt);
+            await deps.reporter.register(input, { proxyUrl: deps.getProxyUrl() });
+            assertCurrentRegistration(registrationAttempt);
+            activationCommitted = true;
+          } catch (proxyError) {
+            log(`登记代理重试失败：${formatError(proxyError)}`);
+            if (!isCurrentRegistration(registrationAttempt)) {
+              registrationError = createSupersededRegistrationError();
+            } else if (
+              options.preserveExistingIdentity ||
+              isPermanentTrafficActivationFailure(proxyError, formatError)
+            ) {
+              registrationError = proxyError;
+            } else {
+              try {
+                await deps.store.registerPendingIdentity(input);
+                if (!isCurrentRegistration(registrationAttempt)) {
+                  registrationError = createSupersededRegistrationError();
+                }
+              } catch (storeError) {
+                registrationError = storeError;
+              }
             }
           }
-        }
 
-        try {
-          await releaseTemporaryRuntime();
-        } catch (releaseError) {
-          log(`临时代理释放失败：${formatError(releaseError)}`);
-          if (activationCommitted) postCommitError = releaseError;
-          else registrationError ??= releaseError;
+          try {
+            await releaseTemporaryRuntime();
+          } catch (releaseError) {
+            log(`临时代理释放失败：${formatError(releaseError)}`);
+            if (activationCommitted) postCommitError = releaseError;
+            else registrationError ??= releaseError;
+          }
+          if (!isCurrentRegistration(registrationAttempt)) {
+            registrationError = createSupersededRegistrationError();
+          }
+          if (registrationError) throw registrationError;
+          return { committed: activationCommitted, postCommitError };
         }
-        if (registrationError) throw registrationError;
-        return { committed: activationCommitted, postCommitError };
+      } finally {
+        activeForegroundRegistrations = Math.max(0, activeForegroundRegistrations - 1);
       }
     },
 
     async activatePending() {
+      const observedRegistrationAttempt = latestRegistrationAttempt;
+      if (activeForegroundRegistrations > 0) return false;
       const pending = await deps.store.getPendingRegistration();
-      if (!pending) return false;
+      if (!pending || activeForegroundRegistrations > 0 || observedRegistrationAttempt !== latestRegistrationAttempt) {
+        return false;
+      }
 
       try {
         await deps.reporter.register(pending, { proxyUrl: deps.getProxyUrl() });
@@ -280,4 +336,16 @@ export function isPermanentTrafficActivationFailure(
 
 function defaultFormatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function createSupersededRegistrationError(): Error & { code: 'REGISTRATION_SUPERSEDED' } {
+  return Object.assign(new Error('本次流量登记已被较新的操作取代'), {
+    code: 'REGISTRATION_SUPERSEDED' as const
+  });
+}
+
+function createRegistrationInProgressError(): Error & { code: 'REGISTRATION_IN_PROGRESS' } {
+  return Object.assign(new Error('流量登记正在进行，请稍后重试'), {
+    code: 'REGISTRATION_IN_PROGRESS' as const
+  });
 }

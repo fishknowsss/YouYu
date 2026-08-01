@@ -125,7 +125,7 @@ node --input-type=module -e "import { refreshTeamBuilds } from './scripts/team-b
 
 ## 本地归档规则
 
-`release-archive/` 只用于本机备份公开更新产物，不用于打包中转，也不提交到 Git。它保留 `.blockmap`，因为这些文件服务自动更新。带私有订阅的 `-in`、`-no` 手动分发双包只进入扁平 `team-builds/`，不承担历史归档职责。
+`release-archive/` 只用于本机备份公开更新产物，不用于打包中转，也不提交到 Git。每个新版本使用 `release-archive/<version>/` 独立目录，按 GitHub Release 的原始文件名保留全部 11 个公开资产；这样 `latest.yml`、`latest-in.yml`、`latest-no.yml` 与 `SHA256SUMS.txt` 不会跨版本冲突，归档目录也能直接复用清单校验。带私有订阅的 `-in`、`-no` 手动分发双包只进入扁平 `team-builds/`，不承担历史归档职责。若归档根目录出现高于本次打包版本的语义版本目录，脚本会在写入或删除前直接失败，要求先人工确认版本方向，不会按目录名大小误删当前版本。
 
 归档保留范围：
 
@@ -212,6 +212,16 @@ YouYu-<version>-x64-no.exe
 
 ## GitHub 发布规则
 
+### Windows Authenticode 签名门禁
+
+正式证书可用时，发布环境必须显式设置 `YOUYU_REQUIRE_CODE_SIGNING=1`、`YOUYU_WINDOWS_PUBLISHER_NAME`，并通过 `CSC_LINK`（或 `WIN_CSC_LINK`）提供证书；密码按 electron-builder 的 `CSC_KEY_PASSWORD` / `WIN_CSC_KEY_PASSWORD` 约定注入，禁止写入仓库、日志或 Release。该开关会启用 `forceCodeSigning`，任一目标未签名都会让打包失败，不能静默降级成无签名发布。
+
+只要环境中出现 `CSC_LINK`、`WIN_CSC_LINK`、`CSC_KEY_PASSWORD`、`WIN_CSC_KEY_PASSWORD` 或 `YOUYU_WINDOWS_PUBLISHER_NAME` 任一非空值，就必须同时显式设置 `YOUYU_REQUIRE_CODE_SIGNING=1` 并满足完整门禁；半配置、无效开关值或显式 `0` 携带签名材料都会直接失败，防止正式证书环境因漏设开关而静默产出未签名安装包。
+
+签名目标清单固定为安装器、`YouYu.exe`、`windows-fullscreen-probe.exe` 和包内 `mihomo.exe`，四者必须由同一证书签名并带 RFC3161 时间戳。electron-builder 在复制额外 EXE 时会签名 Mihomo；因此打包钩子会保留上游未签名 SHA256/大小，同时把 Authenticode 后的实际 SHA256/大小和签名者写入包内 provenance envelope。校验器只允许这组字段变化，并会再次读取 Windows Authenticode 状态，不能用改 manifest 绕过。
+
+当前若没有可用的生产代码签名身份，可以完成无签名本地/公开构建，但必须把它列为外部发布风险；不得伪造发布者、生成临时自签名证书冒充正式签名，或关闭已有哈希/更新签名校验。
+
 GitHub release 和 GitHub Actions 使用 `npm run dist:win:release`。用于自动更新的公开 Release 需要同时上传：
 
 ```text
@@ -225,9 +235,10 @@ release/YouYu-<version>-x64-no.exe
 release/YouYu-<version>-x64-no.exe.blockmap
 release/latest-no.yml
 release/YouYu-<version>-Mihomo-v<core-version>-source.tar.gz
+release/SHA256SUMS.txt
 ```
 
-其中 `latest.yml` 只服务标准版，`latest-in.yml` 只服务内部通道，`latest-no.yml` 只服务无桌宠通道。三个公开更新包都必须通过空内置订阅校验，不允许包含 `resources/default-subscription.in.txt` 的内容。Mihomo 对应源码归档是公开的第三方源码合规资产，不参与自动更新，也不得遗漏。
+其中 `latest.yml` 只服务标准版，`latest-in.yml` 只服务内部通道，`latest-no.yml` 只服务无桌宠通道。三个公开更新包都必须通过空内置订阅校验，不允许包含 `resources/default-subscription.in.txt` 的内容。Mihomo 对应源码归档是公开的第三方源码合规资产，不参与自动更新，也不得遗漏。`SHA256SUMS.txt` 必须按稳定文件名顺序覆盖上述其余十个公开资产，并在上传前后逐项复核。
 
 禁止上传本地内置订阅产物：
 
@@ -254,6 +265,8 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 2. 运行本地验证。
 
    ```powershell
+   npm run validate:repo
+   npm run validate:mihomo
    npm run typecheck
    npm test
    npm run test:worker
@@ -295,13 +308,14 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    release/latest-in.yml
    release/latest-no.yml
    release/YouYu-<version>-Mihomo-v<core-version>-source.tar.gz
+   release/SHA256SUMS.txt
    ```
 
-   `dist:win:release` 内部会运行对应校验和 `smoke`，并在三通道安装包完成后下载、固定校验 Mihomo 对应源码归档。如果它失败，先修复失败原因，不要上传部分产物。
+   `dist:win:release` 内部会运行对应校验和 `smoke`，并在三通道安装包完成后下载、固定校验 Mihomo 对应源码归档，最后原子生成并复核 `SHA256SUMS.txt`。如果它失败，先修复失败原因，不要上传部分产物。
 
-4. 维护本地归档。
+4. 复核本地归档。
 
-   `release-archive/` 只保留当前版本和前两个构建版本的公开更新产物。归档当前版本时至少保留三个公开空订阅安装包、对应 `.blockmap` 和该版本的 Mihomo 对应源码归档；可以同时保留 `<version>-latest.yml` 方便本机追溯。删除旧版本前先确认目标路径在 `release-archive/` 内。
+   `dist:win:release` 在包含 `SHA256SUMS.txt` 在内的 11 个公开资产全部验证通过后，才会把它们原名复制到 `release-archive/<version>/`，并以本次版本为锚点，只删除超出“当前版本加前两个版本”的纯语义版本目录。归档脚本不会处理其他名称的历史文件或目录；若发现高于本次版本的目录则先失败且不做删除。确认当前版本目录恰好包含 11 个文件，且可再次通过 `release-sha256-manifest.mjs --verify`；旧的扁平归档可在内容确认后逐步迁移，不得为了整理而猜测或补造缺失资产。
 
    确认扁平 `team-builds/` 已在公开打包前留存当前版本的私有 `-in`、`-no` 两个 EXE。不要从当前公开 `release/` 重新覆盖该目录；它不包含标准版、`.blockmap` 或历史版本，也不上传 GitHub。
 
@@ -342,6 +356,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
      "release/latest-in.yml" `
      "release/latest-no.yml" `
      "release/$sourceName" `
+     "release/SHA256SUMS.txt" `
      --title "YouYu $version" `
      --notes "<本次用户可读更新说明>"
    ```
@@ -383,7 +398,29 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    }
    ```
 
-   每个更新描述文件都必须显示 `version: <version>`，并分别指向 `YouYu-<version>-x64.exe`、`YouYu-<version>-x64-in.exe`、`YouYu-<version>-x64-no.exe`。远端 Mihomo 源码归档的字节数与 SHA256 也必须和 manifest、本地文件一致。
+   最后把远端 11 个资产下载到独立临时目录，复用仓库校验器核对 `SHA256SUMS.txt` 的完整十项清单；不能只检查文件存在或只复核三个更新描述文件：
+
+   ```powershell
+   $assetNames = @((gh release view "v$version" --json assets | ConvertFrom-Json).assets.name)
+   if ($assetNames.Count -ne 11) { throw "Expected 11 release assets, found $($assetNames.Count)" }
+   $remoteRelease = Join-Path $env:TEMP ("youyu-remote-release-{0}-{1}" -f $version, [guid]::NewGuid().ToString('N'))
+   New-Item -ItemType Directory -Path $remoteRelease | Out-Null
+   try {
+     foreach ($name in $assetNames) {
+       $destination = Join-Path $remoteRelease $name
+       curl.exe --ssl-no-revoke --fail --location --retry 3 --retry-all-errors `
+         --output $destination "https://github.com/fishknowsss/YouYu/releases/download/v$version/$name"
+     }
+     node --input-type=module -e "import { verifyReleaseSha256Manifest } from './scripts/release-sha256-manifest.mjs'; const result = await verifyReleaseSha256Manifest({ releaseDir: process.argv[1], version: process.argv[2] }); if (result.assetCount !== 10) throw new Error('Expected 10 manifest entries');" $remoteRelease $version
+     if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $remoteRelease 'SHA256SUMS.txt')).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath 'release/SHA256SUMS.txt').Hash) {
+       throw 'Remote SHA256SUMS.txt differs from the locally verified manifest'
+     }
+   } finally {
+     Remove-Item -LiteralPath $remoteRelease -Recurse -Force -ErrorAction SilentlyContinue
+   }
+   ```
+
+   每个更新描述文件都必须显示 `version: <version>`，并分别指向 `YouYu-<version>-x64.exe`、`YouYu-<version>-x64-in.exe`、`YouYu-<version>-x64-no.exe`。远端 Mihomo 源码归档的字节数与 SHA256 必须和 manifest、本地文件一致；远端 `SHA256SUMS.txt` 必须与本地逐字节一致，并恰好覆盖其余十个远端资产。
 
 9. 最终收尾。
 
@@ -408,4 +445,4 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 - `release/YouYu-<version>-x64-in.exe` 存在。
 - `release/YouYu-<version>-x64-no.exe` 存在。
 - `team-builds/` 中恰好只有当前版本、带订阅的 `-in` 和 `-no` 两个 EXE；没有版本子目录、标准无后缀版或 `.blockmap`。
-- 上传 GitHub 时使用 `npm run dist:win:release` 生成的三通道公开更新产物，并确认 `latest.yml`、`latest-in.yml`、`latest-no.yml` 以及当前 YouYu 版本命名的 Mihomo 对应源码归档都存在。
+- 上传 GitHub 时使用 `npm run dist:win:release` 生成的三通道公开更新产物，并确认 `latest.yml`、`latest-in.yml`、`latest-no.yml`、当前 YouYu 版本命名的 Mihomo 对应源码归档和覆盖全部十个公开资产的 `SHA256SUMS.txt` 都存在。

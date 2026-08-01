@@ -5,7 +5,12 @@ import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { resolveBuildMode } from './build-mode.mjs';
-import { mihomoResourceRelativePath, validateMihomoDistribution } from './mihomo-distribution.mjs';
+import {
+  assertPackagedMihomoMatchesSource,
+  mihomoResourceRelativePath,
+  validateMihomoDistribution
+} from './mihomo-distribution.mjs';
+import { inspectAuthenticodeTargets, validateAuthenticodeRecords } from './windows-signing.mjs';
 
 const root = process.cwd();
 const releaseDir = join(root, 'release');
@@ -36,8 +41,13 @@ await access(expectedUpdateMetadataPath);
 
 const sourceMihomo = await validateMihomoDistribution(join(root, mihomoResourceRelativePath));
 const packagedMihomo = await validateMihomoDistribution(packagedMihomoPath);
-if (JSON.stringify(packagedMihomo.manifest) !== JSON.stringify(sourceMihomo.manifest)) {
-  throw new Error('Packaged Mihomo manifest does not match the repository manifest');
+const mihomoPackaging = assertPackagedMihomoMatchesSource(sourceMihomo.manifest, packagedMihomo.manifest);
+if (mihomoPackaging.signed) {
+  const records = inspectAuthenticodeTargets([{ role: 'mihomo-core', path: packagedMihomo.binaryPath }]);
+  validateAuthenticodeRecords(records, { expectedPublisher: mihomoPackaging.signerSubject });
+  if (records[0].thumbprint?.toUpperCase() !== mihomoPackaging.signerThumbprint) {
+    throw new Error('Packaged Mihomo Authenticode thumbprint does not match its provenance envelope');
+  }
 }
 
 const updateMetadata = parse(await readFile(expectedUpdateMetadataPath, 'utf8')) as {

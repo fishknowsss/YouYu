@@ -42,13 +42,17 @@ try {
   ]);
   await run('node', ['scripts/prepare-mihomo-source.mjs']);
   await run('npm', ['run', 'smoke']);
+  await run('node', ['scripts/release-sha256-manifest.mjs']);
+  await run('node', ['scripts/release-sha256-manifest.mjs', '--verify']);
+  await run('node', ['scripts/archive-windows-release.mjs']);
 
   const entries = (await readdir(releaseDir))
     .filter(
       (name) =>
         name.startsWith(`YouYu-${version}-x64`) ||
         name.startsWith(`YouYu-${version}-Mihomo-`) ||
-        /^latest(?:-in|-no)?\.yml$/.test(name)
+        /^latest(?:-in|-no)?\.yml$/.test(name) ||
+        name === 'SHA256SUMS.txt'
     )
     .sort();
   console.log(entries.join('\n'));
