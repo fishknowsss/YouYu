@@ -415,27 +415,79 @@ describe('manage-installed-process.ps1 user boundary', () => {
     }
   });
 
-  windowsIt('admits the one-time legacy bridge only for an eligible stopped installation', async () => {
-    await withLegacyBoundaryFiles([], '1.6.8.0', async ({ executablePath, inventoryPath, versionInfoPath }) => {
-      const result = await runScript([
-        '-Action',
-        'Verify',
-        '-ExecutablePath',
-        executablePath,
-        '-RequireHandoff',
-        '-AllowLegacyUpdateBridge',
-        '-InstallerVersion',
-        '1.7.0',
-        '-ProcessInventoryPath',
-        inventoryPath,
-        '-LegacyVersionInfoPath',
-        versionInfoPath
-      ]);
+  windowsIt(
+    'admits the one-time legacy bridge without resolving an installer SID when no handoff candidate exists',
+    async () => {
+      await withLegacyBoundaryFiles([], '1.6.8.0', async ({ executablePath, inventoryPath, versionInfoPath }) => {
+        const result = await runScript([
+          '-Action',
+          'Verify',
+          '-ExecutablePath',
+          executablePath,
+          '-RequireHandoff',
+          '-AllowLegacyUpdateBridge',
+          '-InstallerVersion',
+          '1.7.0',
+          '-ProcessInventoryPath',
+          inventoryPath,
+          '-LegacyVersionInfoPath',
+          versionInfoPath
+        ]);
 
-      expect(result.stdout).toContain('"boundaryMode":"legacy"');
-      expect(result.stdout).toContain('"matchingProcessCount":0');
-    });
-  });
+        expect(result.stdout).toContain('"boundaryMode":"legacy"');
+        expect(result.stdout).toContain('"matchingProcessCount":0');
+      });
+    }
+  );
+
+  windowsIt(
+    'ignores an untrusted handoff for another installation target before resolving the legacy bridge identity',
+    async () => {
+      const unrelatedNonce = randomUUID().toLowerCase();
+      const unrelatedHandoffPath = join(
+        await getCanonicalLocalTempDirectory(),
+        `youyu-update-handoff-${unrelatedNonce}.json`
+      );
+      const handoffTime = Date.now();
+      try {
+        await writeFile(
+          unrelatedHandoffPath,
+          JSON.stringify({
+            version: 1,
+            nonce: unrelatedNonce,
+            targetUserSid,
+            targetSessionId,
+            targetProcessId: 4242,
+            executablePath: join(tmpdir(), `unrelated-youyu-${randomUUID()}.exe`),
+            createdAtEpochMs: handoffTime,
+            expiresAtEpochMs: handoffTime + 300_000
+          }),
+          'utf8'
+        );
+
+        await withLegacyBoundaryFiles([], '1.6.8.0', async ({ executablePath, inventoryPath, versionInfoPath }) => {
+          const result = await runScript([
+            '-Action',
+            'Verify',
+            '-ExecutablePath',
+            executablePath,
+            '-RequireHandoff',
+            '-AllowLegacyUpdateBridge',
+            '-InstallerVersion',
+            '1.7.0',
+            '-ProcessInventoryPath',
+            inventoryPath,
+            '-LegacyVersionInfoPath',
+            versionInfoPath
+          ]);
+
+          expect(result.stdout).toContain('"boundaryMode":"legacy"');
+        });
+      } finally {
+        await rm(unrelatedHandoffPath, { force: true });
+      }
+    }
+  );
 
   windowsIt('fails the legacy bridge when the exact installed target is still running', async () => {
     await withLegacyBoundaryFiles(

@@ -5,6 +5,10 @@ describe('Windows upgrade installer safety', () => {
   it('waits only on an authenticated SID/session handoff and never controls another user process', async () => {
     const installer = await readFile('build/installer.nsh', 'utf8');
     const processScript = await readFile('build/manage-installed-process.ps1', 'utf8');
+    const implicitHandoffLookup = processScript.slice(
+      processScript.indexOf('function Find-ImplicitUpdateHandoff'),
+      processScript.indexOf('function Get-HandoffBoundary')
+    );
 
     expect(installer).toContain('!macro customCheckAppRunning');
     expect(installer).toContain('!macro customInstall');
@@ -62,6 +66,15 @@ describe('Windows upgrade installer safety', () => {
     expect(processScript).toContain("if ($Action -eq 'AcknowledgeAndWait')");
     expect(processScript).toContain('SetAccessRuleProtection($true, $false)');
     expect(processScript).toContain('Remove-AuthenticatedUpdateAcknowledgement $Boundary');
+    expect(implicitHandoffLookup.indexOf('$candidateItems.Count -eq 0')).toBeLessThan(
+      implicitHandoffLookup.indexOf('$identity = Get-CurrentInstallerBoundaryIdentity')
+    );
+    expect(implicitHandoffLookup.indexOf('$prefilterExecutablePath -ine $ExpectedExecutablePath')).toBeLessThan(
+      implicitHandoffLookup.indexOf('$identity = Get-CurrentInstallerBoundaryIdentity')
+    );
+    expect(implicitHandoffLookup.indexOf('$identity = Get-CurrentInstallerBoundaryIdentity')).toBeLessThan(
+      implicitHandoffLookup.indexOf('Get-Acl -LiteralPath $item.FullName')
+    );
     expect(processScript).not.toMatch(/HKCU|\$env:LOCALAPPDATA/i);
     expect(processScript).not.toContain('Get-ChildItem C:\\Users');
     expect(installer).not.toMatch(/HKCU|APPDATA|LOCALAPPDATA/i);

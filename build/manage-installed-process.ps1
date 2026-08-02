@@ -142,7 +142,6 @@ function Find-ImplicitUpdateHandoff([string] $ExpectedExecutablePath) {
   # Electron-updater 6.x launches a per-machine NSIS installer across UAC without
   # guaranteeing custom environment propagation. This compatibility lookup is
   # deliberately scoped to the elevated installer's own SID/session LocalAppData\Temp.
-  $identity = Get-CurrentInstallerBoundaryIdentity
   $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
   if ([string]::IsNullOrWhiteSpace($localAppData)) { return $null }
   $tempDirectory = [IO.Path]::GetFullPath([IO.Path]::Combine($localAppData, 'Temp'))
@@ -152,10 +151,14 @@ function Find-ImplicitUpdateHandoff([string] $ExpectedExecutablePath) {
     return $null
   }
 
+  # No structurally plausible candidate can yield an implicit handoff. Delay
+  # resolving the installer's SID/session until one exists so
+  # the separately guarded no-handoff legacy path is not rejected by an
+  # irrelevant identity lookup. Once a candidate exists, its owner, record SID,
+  # and session are still all checked against this exact installer boundary.
   $now = if ($CurrentTimeEpochMs -gt 0) { $CurrentTimeEpochMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
-  $candidates = @()
-  foreach ($item in @(Get-ChildItem -LiteralPath $tempDirectory -Force -File -Filter 'youyu-update-handoff-*.json' -ErrorAction SilentlyContinue)) {
-    try {
+  $candidateItems = @(
+    foreach ($item in @(Get-ChildItem -LiteralPath $tempDirectory -Force -File -Filter 'youyu-update-handoff-*.json' -ErrorAction SilentlyContinue)) {
       if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
       if ($item.Length -le 0 -or $item.Length -gt 8192) { continue }
       $nameMatch = [Text.RegularExpressions.Regex]::Match(
@@ -164,7 +167,38 @@ function Find-ImplicitUpdateHandoff([string] $ExpectedExecutablePath) {
         [Text.RegularExpressions.RegexOptions]::IgnoreCase
       )
       if (-not $nameMatch.Success) { continue }
-      $candidateNonce = $nameMatch.Groups[1].Value.ToLowerInvariant()
+      try {
+        # This is an untrusted prefilter only. The selected record is read again
+        # after its installer boundary and file owner have both been verified.
+        $prefilterRecord = Get-Content -LiteralPath $item.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ((ConvertTo-RequiredInt64 (Get-RequiredProperty $prefilterRecord 'version') 'Handoff version') -ne 1) { continue }
+        $candidateNonce = $nameMatch.Groups[1].Value.ToLowerInvariant()
+        if (([string] (Get-RequiredProperty $prefilterRecord 'nonce')).Trim().ToLowerInvariant() -cne $candidateNonce) { continue }
+        $prefilterExecutablePath = Normalize-ExecutablePath (Get-RequiredProperty $prefilterRecord 'executablePath')
+        if ($prefilterExecutablePath -ine $ExpectedExecutablePath) { continue }
+        $createdAt = ConvertTo-RequiredInt64 (Get-RequiredProperty $prefilterRecord 'createdAtEpochMs') 'Handoff creation time'
+        $expiresAt = ConvertTo-RequiredInt64 (Get-RequiredProperty $prefilterRecord 'expiresAtEpochMs') 'Handoff expiration time'
+        if ($expiresAt -le $createdAt -or ($expiresAt - $createdAt) -gt $handoffLifetimeLimitMs) { continue }
+        if ($createdAt -lt ($now - $implicitHandoffDiscoveryLifetimeMs) -or $createdAt -gt ($now + 60000L) -or $expiresAt -lt $now) {
+          continue
+        }
+      } catch {
+        continue
+      }
+      [pscustomobject]@{
+        Item = $item
+        Nonce = $candidateNonce
+      }
+    }
+  )
+  if ($candidateItems.Count -eq 0) { return $null }
+
+  $identity = Get-CurrentInstallerBoundaryIdentity
+  $candidates = @()
+  foreach ($candidate in $candidateItems) {
+    $item = $candidate.Item
+    $candidateNonce = $candidate.Nonce
+    try {
       $acl = Get-Acl -LiteralPath $item.FullName
       $ownerSid = Normalize-UserSid $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
       if ($ownerSid -ine $identity.UserSid) { continue }
