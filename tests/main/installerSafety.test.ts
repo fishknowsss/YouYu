@@ -8,6 +8,15 @@ describe('Windows upgrade installer safety', () => {
 
     expect(installer).toContain('!macro customCheckAppRunning');
     expect(installer).toContain('!macro customInstall');
+    expect(installer).toContain('!include FileFunc.nsh');
+    expect(installer).toContain('Function YouYuApplyUpdateHandoffArguments');
+    expect(installer).toContain('${GetParameters} $R0');
+    expect(installer).toContain('${GetOptions} $R0 "--youyu-handoff-path" $R2');
+    expect(installer).toContain('StrCmp $R7 "--youyu-" YouYuCountHandoffArgumentFound');
+    expect(installer).toContain(
+      'IntCmp $R2 $R5 YouYuCountHandoffArgumentsDone YouYuReadHandoffArgumentCharacter YouYuCountHandoffArgumentsDone'
+    );
+    expect(installer).toContain('Kernel32::SetEnvironmentVariable');
     expect(installer).toContain('Call YouYuConsumeInstallHandoff');
     expect(installer).toContain('manage-installed-process.ps1');
     expect(installer).toContain('-Action WaitForExit');
@@ -25,7 +34,7 @@ describe('Windows upgrade installer safety', () => {
     expect(installer).not.toContain('-Action CloseWindow');
     expect(installer).not.toContain('-Action Force');
 
-    expect(processScript).toContain("[ValidateSet('WaitForExit', 'Verify', 'Consume')]");
+    expect(processScript).toContain("[ValidateSet('WaitForExit', 'Verify', 'AcknowledgeAndWait', 'Consume')]");
     expect(processScript).toContain("GetEnvironmentVariable('YOUYU_UPDATE_HANDOFF_PATH')");
     expect(processScript).toContain("GetEnvironmentVariable('YOUYU_UPDATE_TARGET_USER_SID')");
     expect(processScript).toContain("GetEnvironmentVariable('YOUYU_UPDATE_TARGET_SESSION_ID')");
@@ -45,7 +54,16 @@ describe('Windows upgrade installer safety', () => {
     expect(processScript).not.toContain('Get-Process');
     expect(processScript).not.toContain('CloseMainWindow');
     expect(processScript).not.toContain('Stop-Process');
-    expect(processScript).not.toMatch(/HKCU|APPDATA|LOCALAPPDATA/i);
+    expect(processScript).toContain('[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)');
+    expect(processScript).toContain("-Filter 'youyu-update-handoff-*.json'");
+    expect(processScript).toContain('$implicitHandoffDiscoveryLifetimeMs = 300000L');
+    expect(processScript).toContain('function Write-AuthenticatedUpdateAcknowledgement');
+    expect(processScript).toContain('function Wait-ForAuthenticatedProcessExit');
+    expect(processScript).toContain("if ($Action -eq 'AcknowledgeAndWait')");
+    expect(processScript).toContain('SetAccessRuleProtection($true, $false)');
+    expect(processScript).toContain('Remove-AuthenticatedUpdateAcknowledgement $Boundary');
+    expect(processScript).not.toMatch(/HKCU|\$env:LOCALAPPDATA/i);
+    expect(processScript).not.toContain('Get-ChildItem C:\\Users');
     expect(installer).not.toMatch(/HKCU|APPDATA|LOCALAPPDATA/i);
   });
 
@@ -64,11 +82,18 @@ describe('Windows upgrade installer safety', () => {
       installer.indexOf('!macro customInstall'),
       installer.indexOf('!macroend', installer.indexOf('!macro customInstall'))
     );
+    const acknowledge = installer.slice(
+      installer.indexOf('Function YouYuAcknowledgeAndWaitUpdateHandoff'),
+      installer.indexOf('FunctionEnd', installer.indexOf('Function YouYuAcknowledgeAndWaitUpdateHandoff'))
+    );
 
     expect(updater).toContain('const args = ["--updated"]');
     expect(updater).toContain('args.push("/S")');
     expect(customInit).toContain('${If} ${isUpdated}');
     expect(customInit).toContain('StrCpy $YouYuIsUpdaterLaunch "1"');
+    expect(customInit.indexOf('Call YouYuApplyUpdateHandoffArguments')).toBeLessThan(
+      customInit.indexOf('Call YouYuValidateInstallBoundary')
+    );
     expect(validate).toContain('$YouYuIsUpdaterLaunch == "1"');
     expect(validate.indexOf('YouYuOptionalHandoff:')).toBeLessThan(validate.indexOf('YouYuRequireHandoff:'));
     expect(
@@ -79,6 +104,10 @@ describe('Windows upgrade installer safety', () => {
     ).toContain('-AllowLegacyUpdateBridge');
     expect(customInstall).toContain('$YouYuLegacyUpdateBridge != "1"');
     expect(customInstall).toContain('Call YouYuConsumeInstallHandoff');
+    expect(customInit).toContain('Call YouYuAcknowledgeAndWaitUpdateHandoff');
+    expect(customInit).toContain('IfSilent YouYuAcknowledgeSilentUpdate YouYuValidateInitialInstallBoundary');
+    expect(acknowledge).toContain('StrCpy $YouYuHandoffValidated "1"');
+    expect(acknowledge).toContain('StrCpy $YouYuInitialBoundaryWaited "1"');
   });
 
   it('keeps every pre-install boundary check non-consuming and consumes only from the post-write hook', async () => {
@@ -169,11 +198,18 @@ describe('Windows upgrade installer safety', () => {
     expect(smoke).toContain('build/installer.nsh');
     expect(smoke).toContain("[Environment]::SetEnvironmentVariable('NSISDIR', $nsisRoot, 'Process')");
     expect(smoke).toContain('RequestExecutionLevel user');
+    expect(smoke).toContain('!include "FileFunc.nsh"');
     expect(smoke).toContain('!macro _isUpdated _a _b _t _f');
     expect(smoke).toContain('VIProductVersion "1.6.8.0"');
     expect(smoke).toContain('installed:1');
     expect(smoke).toContain('runningTarget');
     expect(smoke).toContain('partialHandoff');
+    expect(smoke).toContain('explicitCli');
+    expect(smoke).toContain('unknownCli');
+    expect(smoke).toContain('implicitFallback');
+    expect(smoke).toContain('Write-Handoff $implicitHandoffPath $implicitNonce');
+    expect(smoke).toContain('The no-environment/no-CLI fallback did not use an authenticated handoff.');
+    expect(smoke).toContain('The NSIS handoff parser accepted an unknown YouYu bridge argument.');
     expect(smoke).toContain('fresh');
     expect(init).toBeGreaterThan(-1);
     expect(init).toBeLessThan(check);

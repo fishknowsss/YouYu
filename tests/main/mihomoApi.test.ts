@@ -3,6 +3,22 @@ import { createMihomoApiClient } from '../../src/main/mihomo/api';
 import { strategyTargets } from '../../src/main/mihomo/config';
 
 describe('createMihomoApiClient', () => {
+  it('closes one exact Mihomo connection through the controller API', async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await api.closeConnection('connection/id');
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/connections/connection%2Fid',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer secret' },
+        signal: expect.any(AbortSignal)
+      })
+    );
+  });
+
   it('flushes the Mihomo DNS cache through the controller API', async () => {
     const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
     const api = createMihomoApiClient({ secret: 'secret', fetcher });

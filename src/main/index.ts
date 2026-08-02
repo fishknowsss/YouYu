@@ -81,6 +81,8 @@ import {
 } from '../shared/ipc';
 import { updateInstallingMessage } from '../shared/updateProgress';
 import { deferUpdateInstallerLaunch } from './updateInstallHandoff';
+import { launchDownloadedUpdateInstaller, resolveDownloadedUpdateInstallerPath } from './updateInstallerLauncher';
+import { createCodexConnectionRecoveryCoordinator } from './codexConnectionRecovery';
 import { createPetVisibilityController } from './petVisibilityController';
 import { applyPetWindowTaskbarPolicy } from './petWindowPolicy';
 import { createRuntimeIntentController } from './runtimeIntent';
@@ -289,6 +291,7 @@ const appVersion = resolveAppVersion({
 const appBuildChannel = normalizeBuildChannel(__YOUYU_BUILD_CHANNEL__);
 const appUpdateChannel = getUpdateChannelName(appBuildChannel);
 const reportedAppVersion = formatReportedAppVersion(appVersion, appBuildChannel);
+let downloadedUpdateInstallerPaths: string[] = [];
 updateSnapshot = {
   currentVersion: appVersion,
   buildChannel: appBuildChannel,
@@ -308,12 +311,15 @@ const updateCoordinator = createUpdateCoordinator({
       check: () => autoUpdater.checkForUpdates(),
       getProxyUrl: getRuntimeTrafficProxyUrl
     }),
-  executeDownload: () =>
-    runUpdateDownloadWithNetworkFallback({
+  executeDownload: async () => {
+    const downloadedPaths = await runUpdateDownloadWithNetworkFallback({
       session: autoUpdater.netSession,
       download: () => autoUpdater.downloadUpdate(),
       getProxyUrl: getRuntimeTrafficProxyUrl
-    }),
+    });
+    downloadedUpdateInstallerPaths = downloadedPaths;
+    return downloadedPaths;
+  },
   formatError,
   onLog: appendLog,
   onSnapshot: (next) => {
@@ -360,15 +366,31 @@ const trafficReporter = new TrafficReporter({
     }
   }
 });
+const codexConnectionRecovery = createCodexConnectionRecoveryCoordinator({
+  createMihomoApi: async () => {
+    const settings = await settingsStore.read();
+    return createRuntimeMihomoApi({ secret: settings.controllerSecret });
+  },
+  readConnections: async () => {
+    if (lifecycle.getStatus() !== 'running') return [];
+    const settings = await settingsStore.read();
+    const stats = await createRuntimeMihomoApi({ secret: settings.controllerSecret }).getRuntimeStats({
+      includeConnections: true
+    });
+    return stats.connections ?? [];
+  }
+});
 const trafficTracker = new TrafficTracker({
   store: trafficStore,
   intervalMs: 5000,
   isRunning: () => lifecycle.getStatus() === 'running',
   readRuntimeStats: async () => {
     const settings = await settingsStore.read();
-    return createRuntimeMihomoApi({ secret: settings.controllerSecret }).getRuntimeStats({
+    const stats = await createRuntimeMihomoApi({ secret: settings.controllerSecret }).getRuntimeStats({
       includeConnections: true
     });
+    void codexConnectionRecovery.observe(stats.connections ?? []).catch(() => undefined);
+    return stats;
   },
   readCurrentNode: async () => {
     const settings = await settingsStore.read();
@@ -659,7 +681,9 @@ function clearLastErrorIfUnchanged(expected: string | undefined): boolean {
 
 function setupAutoUpdates() {
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // The per-machine NSIS installer crosses UAC. It must be started only by the
+  // controlled handoff below, which supplies its authenticated CLI bridge.
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowPrerelease = false;
   autoUpdater.setFeedURL(createUpdateFeedConfig());
   autoUpdater.channel = appUpdateChannel;
@@ -691,6 +715,11 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
     throw new Error('update not downloaded');
   }
 
+  const installerPath = resolveDownloadedUpdateInstallerPath({
+    downloadedPaths: downloadedUpdateInstallerPaths,
+    updaterInstallerPath: getAutoUpdaterInstallerPath()
+  });
+
   updateInstallerLaunchPending = true;
   updateInstallerLaunchFailed = false;
   updateInstallerLaunchStarted = false;
@@ -708,14 +737,18 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
     const snapshot = await createSnapshot();
     refreshTrayMenu();
     deferUpdateInstallerLaunch({
-      launch: () => {
+      launch: async (handoff) => {
         if (!updateInstallerLaunchPending || updateInstallAttempt !== installAttempt) {
           return;
+        }
+        await launchDownloadedUpdateInstaller({ installerPath, handoff });
+        if (!updateInstallerLaunchPending || updateInstallAttempt !== installAttempt) {
+          throw new Error('update installer launch was canceled');
         }
         updateInstallerLaunchStarted = true;
         cleanupFinished = true;
         isQuitting = true;
-        autoUpdater.quitAndInstall(true, true);
+        app.quit();
       },
       onError: recoverFromUpdateInstallerLaunchFailure
     });
@@ -725,6 +758,14 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
       recoverFromUpdateInstallFailure('准备安装失败', error);
     }
     throw error;
+  }
+}
+
+function getAutoUpdaterInstallerPath(): unknown {
+  try {
+    return Reflect.get(autoUpdater as object, 'installerPath');
+  } catch {
+    return undefined;
   }
 }
 
@@ -850,6 +891,7 @@ lifecycle = createLifecycleController({
       appRuntimeCoordinator.clearRecoveryTimer();
       startNodeHealthMonitor();
     } else {
+      codexConnectionRecovery.reset();
       trafficTracker.stop();
       trafficReporter.stop();
       stopNodeHealthMonitor();

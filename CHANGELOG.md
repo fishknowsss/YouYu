@@ -2,6 +2,25 @@
 
 本文件记录 YouYu 的重要版本变化。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，分类参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.7.2] - 2026-08-02
+
+### 修复
+
+- 修复已安装的 `1.7.0` 下载更新后，点击“安装”只退出主程序、未完成静默安装的问题。新的受控提权启动器会将短时、用户与 Windows 会话绑定的安装交接显式传给安装器；旧客户端无法传递该参数时，安装器只会在当前用户的规范 `LocalAppData\Temp` 中恢复一份通过所有身份、会话、目标程序、时效与文件所有者校验的交接记录。
+- 将公开更新元数据中的 `isAdminRightsRequired` 固定为 `true` 并加入发布校验，使旧版 `electron-updater` 使用确定的提权路径；用户取消授权、启动器早退或交接失败时不会把失败误报为成功。
+- 补齐生产 NSIS 模板所需的 `FileFunc.nsh` 引入，并以真实 electron-builder 编译覆盖命令行交接解析，避免仅在隔离夹具可用、正式安装器无法编译的差异。
+- 为 Codex 到 OpenAI 边缘的长 TCP 连接增加规则感知 DoH、TCP keep-alive 与精确的无响应连接恢复。恢复只删除满足进程、域名、协议、流量与时长条件的一条连接，随后刷新 DNS 缓存；不切换节点、不改变手动/自动选择，也不影响其他应用流量。
+
+### 改进
+
+- 更新旋转提示移到操作按钮紧左侧；手动检查在 IPC 往返完成前就立即显示检查动画。
+- 后台用户管理不再展示冗长随机用户 ID；定向通知编辑器移除重复的启用/停用控件，仅保留级别与持续时间，并收紧资料、设备与操作区的对齐和留白。
+
+### 验证
+
+- 覆盖显式 CLI 交接、跨 UAC 环境丢失后的受限恢复、规范临时目录、自定义 `TEMP`/`TMP` 隔离、安装器早退、元数据提权标记及真实 NSIS 静默安装器冒烟流程。
+- 覆盖 Codex 无响应连接的严格识别、一次性定时复查、冷却、生命周期重置、精确连接关闭与 DNS 刷新，不调用节点切换或全量连接关闭接口。
+
 ## [1.7.1] - 2026-08-02
 
 ### 新增
@@ -409,6 +428,7 @@
 - 三个公开更新通道的安装包、`.blockmap` 和 `latest*.yml` 均由同一次 `dist:win:release` 构建产生并通过空内置订阅校验。
 - 本版本未修改 `src/renderer` 或前端样式，界面与交互保持不变。
 
+[1.7.2]: https://github.com/fishknowsss/YouYu/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/fishknowsss/YouYu/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/fishknowsss/YouYu/compare/v1.6.10...v1.7.0
 [1.6.10]: https://github.com/fishknowsss/YouYu/compare/v1.6.9...v1.6.10

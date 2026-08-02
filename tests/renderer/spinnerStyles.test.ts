@@ -42,4 +42,21 @@ describe('spinner animation styles', () => {
     expect(testStyles).not.toContain('@media (prefers-reduced-motion: reduce) {');
     expect(petStyles).not.toContain('@keyframes startup-ring-spin {');
   });
+
+  it('keeps update activity attached to the action affordance instead of the left edge of either component', async () => {
+    const [settingsStyles, homeStyles] = await Promise.all([
+      readFile('src/renderer/styles/settings.css', 'utf8'),
+      readFile('src/renderer/styles/home.css', 'utf8')
+    ]);
+
+    expect(settingsStyles).toContain('.update-action-group {');
+    expect(settingsStyles).toContain('justify-content: flex-end;');
+    expect(settingsStyles).toContain('.update-action-group .settings-footer-action {');
+    expect(settingsStyles).toContain('.update-row.has-update-activity {');
+    expect(settingsStyles).toContain('calc(var(--settings-action-width) + 22px)');
+    expect(settingsStyles).not.toContain('.update-row > .update-activity-spinner {');
+    expect(homeStyles).toContain('.easy-update-action {');
+    expect(homeStyles).toContain('grid-area: action;');
+    expect(homeStyles).not.toContain('.easy-update-notice > .update-activity-spinner {');
+  });
 });

@@ -75,7 +75,7 @@
   width: 100%;
   min-height: 56px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 70px;
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: 'copy action';
   align-items: center;
   gap: 9px;
@@ -88,26 +88,11 @@
   animation: easy-update-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.easy-update-notice.has-update-activity {
-  grid-template-columns: 14px minmax(0, 1fr) 70px;
-  grid-template-areas: 'activity copy action';
-}
-
-.easy-update-notice.has-update-activity.is-downloading {
-  grid-template-areas:
-    'activity copy action'
-    'activity progress progress'
-    'activity transfer transfer';
-}
-
-.easy-update-notice > .update-activity-spinner {
-  grid-area: activity;
-  align-self: center;
-  justify-self: center;
-}
-
 .easy-update-notice.is-downloading {
-  border-color: rgb(216 209 225);
+  grid-template-areas:
+    'copy action'
+    'progress progress'
+    'transfer transfer';
 }
 
 .easy-update-notice.is-ready {
@@ -139,8 +124,16 @@
   white-space: nowrap;
 }
 
-.easy-update-notice button {
+.easy-update-action {
   grid-area: action;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.easy-update-action > button {
   width: 70px;
   height: 34px;
   padding: 0 10px;
@@ -179,7 +172,6 @@
 }
 
 .easy-update-state {
-  grid-area: action;
   width: 70px;
   height: 34px;
   display: inline-flex;

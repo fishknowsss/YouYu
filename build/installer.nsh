@@ -1,4 +1,5 @@
 !include LogicLib.nsh
+!include FileFunc.nsh
 !include nsDialogs.nsh
 !include WinMessages.nsh
 
@@ -30,6 +31,7 @@ Var YouYuHandoffValidated
   Var YouYuIsUpdateInstall
   Var YouYuIsUpdaterLaunch
   Var YouYuLegacyUpdateBridge
+  Var YouYuInitialBoundaryWaited
 !endif
 
 !macro customInit
@@ -39,13 +41,23 @@ Var YouYuHandoffValidated
     StrCpy $YouYuIsUpdateInstall "0"
     StrCpy $YouYuIsUpdaterLaunch "0"
     StrCpy $YouYuLegacyUpdateBridge "0"
+    StrCpy $YouYuInitialBoundaryWaited "0"
     IfFileExists "$INSTDIR\YouYu.exe" 0 +2
       StrCpy $YouYuIsUpdateInstall "1"
     ${If} ${isUpdated}
       StrCpy $YouYuIsUpdaterLaunch "1"
       StrCpy $YouYuIsUpdateInstall "1"
     ${EndIf}
+    Call YouYuApplyUpdateHandoffArguments
+    ${If} $YouYuIsUpdaterLaunch == "1"
+      IfSilent YouYuAcknowledgeSilentUpdate YouYuValidateInitialInstallBoundary
+    ${EndIf}
+  YouYuValidateInitialInstallBoundary:
     Call YouYuValidateInstallBoundary
+    Goto YouYuInitialInstallBoundaryDone
+  YouYuAcknowledgeSilentUpdate:
+    Call YouYuAcknowledgeAndWaitUpdateHandoff
+  YouYuInitialInstallBoundaryDone:
   !endif
   Call YouYuHideTitleIcon
 !macroend
@@ -54,11 +66,147 @@ Var YouYuHandoffValidated
   !ifdef BUILD_UNINSTALLER
     Call un.YouYuValidateInstallBoundary
   !else
-    Call YouYuValidateInstallBoundary
+    ${If} $YouYuInitialBoundaryWaited != "1"
+      Call YouYuValidateInstallBoundary
+    ${EndIf}
   !endif
 !macroend
 
 !ifndef BUILD_UNINSTALLER
+Function YouYuAcknowledgeAndWaitUpdateHandoff
+  File /oname=$PLUGINSDIR\YouYuManageProcess.ps1 "${BUILD_RESOURCES_DIR}\manage-installed-process.ps1"
+  nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\YouYuManageProcess.ps1" -Action AcknowledgeAndWait -ExecutablePath "$INSTDIR\YouYu.exe" -RequireHandoff -AllowLegacyUpdateBridge -InstallerVersion "${VERSION}"`
+  Pop $0
+  ${If} $0 == 0
+    StrCpy $YouYuHandoffValidated "1"
+    StrCpy $YouYuInitialBoundaryWaited "1"
+    Return
+  ${EndIf}
+  ${If} $0 == 10
+    StrCpy $YouYuHandoffValidated "1"
+    StrCpy $YouYuInitialBoundaryWaited "1"
+    StrCpy $YouYuLegacyUpdateBridge "1"
+    Return
+  ${EndIf}
+  DetailPrint "The authenticated update handoff could not be acknowledged and waited."
+  SetErrorLevel 2
+  Quit
+FunctionEnd
+
+Function YouYuApplyUpdateHandoffArguments
+  ${GetParameters} $R0
+  StrCpy $R1 "0"
+  StrCpy $R2 "0"
+  StrCpy $R3 "1"
+  StrCpy $R4 ""
+  StrLen $R5 $R0
+
+  YouYuCountHandoffArguments:
+    IntCmp $R2 $R5 YouYuCountHandoffArgumentsDone YouYuReadHandoffArgumentCharacter YouYuCountHandoffArgumentsDone
+
+  YouYuReadHandoffArgumentCharacter:
+    StrCpy $R6 $R0 1 $R2
+    StrCmp $R4 "" YouYuReadHandoffArgumentOutsideQuote YouYuReadHandoffArgumentInsideQuote
+
+  YouYuReadHandoffArgumentOutsideQuote:
+    StrCmp $R6 '"' YouYuOpenHandoffArgumentQuote
+    StrCmp $R6 " " YouYuHandoffArgumentWhitespace
+    StrCmp $R6 "$\t" YouYuHandoffArgumentWhitespace
+    StrCmp $R3 "1" YouYuMaybeHandoffArgument YouYuAdvanceHandoffArgumentCharacter
+
+  YouYuMaybeHandoffArgument:
+    StrCpy $R7 $R0 8 $R2
+    StrCmp $R7 "--youyu-" YouYuCountHandoffArgumentFound YouYuHandoffArgumentTokenStarted
+
+  YouYuCountHandoffArgumentFound:
+    IntOp $R1 $R1 + 1
+
+  YouYuHandoffArgumentTokenStarted:
+    StrCpy $R3 "0"
+    Goto YouYuAdvanceHandoffArgumentCharacter
+
+  YouYuOpenHandoffArgumentQuote:
+    StrCpy $R4 '"'
+    StrCpy $R3 "0"
+    Goto YouYuAdvanceHandoffArgumentCharacter
+
+  YouYuHandoffArgumentWhitespace:
+    StrCpy $R3 "1"
+    Goto YouYuAdvanceHandoffArgumentCharacter
+
+  YouYuReadHandoffArgumentInsideQuote:
+    StrCmp $R6 '"' YouYuCloseHandoffArgumentQuote YouYuAdvanceHandoffArgumentCharacter
+
+  YouYuCloseHandoffArgumentQuote:
+    StrCpy $R4 ""
+
+  YouYuAdvanceHandoffArgumentCharacter:
+    IntOp $R2 $R2 + 1
+    Goto YouYuCountHandoffArguments
+
+  YouYuCountHandoffArgumentsDone:
+    ${If} $R1 == "0"
+      Return
+    ${EndIf}
+    ${If} $R1 != "4"
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+
+    ${GetOptions} $R0 "--youyu-handoff-path" $R2
+    ${If} ${Errors}
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    ${GetOptions} $R0 "--youyu-handoff-nonce" $R3
+    ${If} ${Errors}
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    ${GetOptions} $R0 "--youyu-target-user-sid" $R4
+    ${If} ${Errors}
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    ${GetOptions} $R0 "--youyu-target-session-id" $R5
+    ${If} ${Errors}
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    ${If} $R2 == ""
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    ${If} $R3 == ""
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    ${If} $R4 == ""
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    ${If} $R5 == ""
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+
+    # These are process-only values. They are never persisted to registry or a
+    # user profile, and the PowerShell boundary revalidates every value and file.
+    System::Call 'Kernel32::SetEnvironmentVariable(t "YOUYU_UPDATE_HANDOFF_PATH", t "$R2") i.r6'
+    ${If} $R6 == 0
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    System::Call 'Kernel32::SetEnvironmentVariable(t "YOUYU_UPDATE_HANDOFF_NONCE", t "$R3") i.r6'
+    ${If} $R6 == 0
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    System::Call 'Kernel32::SetEnvironmentVariable(t "YOUYU_UPDATE_TARGET_USER_SID", t "$R4") i.r6'
+    ${If} $R6 == 0
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    System::Call 'Kernel32::SetEnvironmentVariable(t "YOUYU_UPDATE_TARGET_SESSION_ID", t "$R5") i.r6'
+    ${If} $R6 == 0
+      Goto YouYuInvalidHandoffArguments
+    ${EndIf}
+    Return
+
+  YouYuInvalidHandoffArguments:
+    DetailPrint "The update handoff arguments are invalid."
+    SetErrorLevel 2
+    Quit
+FunctionEnd
+
   !macro customInstall
     ${If} $YouYuLegacyUpdateBridge != "1"
       Call YouYuConsumeInstallHandoff

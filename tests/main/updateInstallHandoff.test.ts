@@ -1,14 +1,29 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createUpdateInstallerHandoff,
+  createUpdateInstallerHandoffArguments,
   deferUpdateInstallerLaunch,
+  resolveUpdateInstallerHandoffAcknowledgementPath,
+  resolveWindowsUpdateHandoffDirectory,
   updateInstallerHandoffDelayMs,
   updateInstallerHandoffEnvironment,
   updateInstallerHandoffLifetimeMs
 } from '../../src/main/updateInstallHandoff';
+
+function createLease() {
+  return {
+    path: String.raw`C:\Temp\youyu-update-handoff-8fb748f0-540a-4f7a-9bd2-144020b83e9b.json`,
+    nonce: '8fb748f0-540a-4f7a-9bd2-144020b83e9b',
+    targetUserSid: 'S-1-5-21-100-200-300-1001',
+    targetSessionId: 7,
+    targetProcessId: 4242,
+    targetExecutablePath: String.raw`C:\Program Files\YouYu\YouYu.exe`,
+    abandon: async () => undefined
+  };
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -20,7 +35,7 @@ describe('deferUpdateInstallerLaunch', () => {
     vi.useFakeTimers();
     const launch = vi.fn();
 
-    deferUpdateInstallerLaunch({ launch, onError: vi.fn(), prepareHandoff: async () => undefined });
+    deferUpdateInstallerLaunch({ launch, onError: vi.fn(), prepareHandoff: async () => createLease() });
 
     await vi.advanceTimersByTimeAsync(updateInstallerHandoffDelayMs - 1);
     expect(launch).not.toHaveBeenCalled();
@@ -36,7 +51,7 @@ describe('deferUpdateInstallerLaunch', () => {
       launch,
       onError: vi.fn(),
       defer: (task) => scheduled.push(task),
-      prepareHandoff: async () => undefined
+      prepareHandoff: async () => createLease()
     });
 
     expect(launch).not.toHaveBeenCalled();
@@ -56,7 +71,15 @@ describe('deferUpdateInstallerLaunch', () => {
       },
       onError,
       defer: (task) => scheduled.push(task),
-      prepareHandoff: async () => ({ path: String.raw`C:\Temp\youyu-update-handoff-test.json`, abandon })
+      prepareHandoff: async () => ({
+        path: String.raw`C:\Temp\youyu-update-handoff-8fb748f0-540a-4f7a-9bd2-144020b83e9b.json`,
+        nonce: '8fb748f0-540a-4f7a-9bd2-144020b83e9b',
+        targetUserSid: 'S-1-5-21-100-200-300-1001',
+        targetSessionId: 7,
+        targetProcessId: 4242,
+        targetExecutablePath: String.raw`C:\Program Files\YouYu\YouYu.exe`,
+        abandon
+      })
     });
 
     await scheduled[0]();
@@ -140,6 +163,16 @@ describe('deferUpdateInstallerLaunch', () => {
         [updateInstallerHandoffEnvironment.userSid]: 'S-1-5-21-100-200-300-1001',
         [updateInstallerHandoffEnvironment.sessionId]: '7'
       });
+      expect(createUpdateInstallerHandoffArguments(lease)).toEqual([
+        '--youyu-handoff-path',
+        lease.path,
+        '--youyu-handoff-nonce',
+        '8fb748f0-540a-4f7a-9bd2-144020b83e9b',
+        '--youyu-target-user-sid',
+        'S-1-5-21-100-200-300-1001',
+        '--youyu-target-session-id',
+        '7'
+      ]);
 
       await lease.abandon();
       await expect(readFile(lease.path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
@@ -148,6 +181,43 @@ describe('deferUpdateInstallerLaunch', () => {
       expect(environment[updateInstallerHandoffEnvironment.userSid]).toBeUndefined();
       expect(environment[updateInstallerHandoffEnvironment.sessionId]).toBeUndefined();
       expect(environment.EXISTING).toBe('preserved');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('always uses LocalAppData Temp even when TEMP and TMP point elsewhere', () => {
+    expect(
+      resolveWindowsUpdateHandoffDirectory({
+        LOCALAPPDATA: String.raw`C:\Users\Example User\AppData\Local`,
+        TEMP: String.raw`D:\temporary-override`,
+        TMP: String.raw`E:\another-temporary-override`
+      })
+    ).toBe(String.raw`C:\Users\Example User\AppData\Local\Temp`);
+    expect(() => resolveWindowsUpdateHandoffDirectory({ LOCALAPPDATA: 'relative-path' })).toThrow(
+      'Windows LocalAppData path is unavailable for the update handoff'
+    );
+  });
+
+  it('derives a nonce-bound acknowledgement sidecar and removes it with an abandoned handoff', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'youyu-update-acknowledgement-test-'));
+    const environment: NodeJS.ProcessEnv = {};
+    try {
+      const lease = await createUpdateInstallerHandoff({
+        executablePath: String.raw`C:\Program Files\YouYu\YouYu.exe`,
+        processId: 4242,
+        temporaryDirectory: directory,
+        environment,
+        nonce: '8fb748f0-540a-4f7a-9bd2-144020b83e9b',
+        resolveUserIdentity: async () => ({ userSid: 'S-1-5-21-100-200-300-1001', sessionId: 7 })
+      });
+      const acknowledgementPath = resolveUpdateInstallerHandoffAcknowledgementPath(lease);
+      await writeFile(acknowledgementPath, '{}', 'utf8');
+
+      await lease.abandon();
+
+      await expect(readFile(lease.path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(acknowledgementPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

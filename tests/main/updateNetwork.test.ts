@@ -145,7 +145,7 @@ describe('update network fallback', () => {
     expect(source).toContain('autoUpdater.autoDownload = false;');
     expect(source).toContain('createUpdateCoordinator({');
     expect(source).toContain('executeCheck: () =>');
-    expect(source).toContain('executeDownload: () =>');
+    expect(source).toContain('executeDownload: async () =>');
     expect(source).toContain('runUpdateCheckWithNetworkFallback');
     expect(source).toContain('runUpdateDownloadWithNetworkFallback');
     expect(source).toContain('getProxyUrl: getRuntimeTrafficProxyUrl');

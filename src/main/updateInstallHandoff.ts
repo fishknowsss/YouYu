@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import {
   normalizeWindowsUserSid,
@@ -31,8 +30,64 @@ export type UpdateInstallerHandoffRecord = {
 
 export type UpdateInstallerHandoffLease = {
   path: string;
+  nonce: string;
+  targetUserSid: string;
+  targetSessionId: number;
+  targetProcessId: number;
+  targetExecutablePath: string;
   abandon: () => Promise<void>;
 };
+
+export function resolveUpdateInstallerHandoffAcknowledgementPath(
+  options: Pick<UpdateInstallerHandoffLease, 'path' | 'nonce'>
+): string {
+  const handoffPath = win32.normalize(options.path.trim());
+  if (!win32.isAbsolute(handoffPath) || handoffPath.includes('\0')) {
+    throw new Error('invalid update handoff path');
+  }
+  const nonce = options.nonce.trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(nonce)) {
+    throw new Error('invalid update handoff nonce');
+  }
+  if (win32.basename(handoffPath).toLowerCase() !== 'youyu-update-handoff-' + nonce + '.json') {
+    throw new Error('update handoff path does not match its nonce');
+  }
+  return win32.join(win32.dirname(handoffPath), 'youyu-update-handoff-' + nonce + '.ready.json');
+}
+
+export function resolveWindowsUpdateHandoffDirectory(environment: NodeJS.ProcessEnv = process.env): string {
+  const localAppData = environment.LOCALAPPDATA?.trim();
+  if (!localAppData || localAppData.includes('\0') || !win32.isAbsolute(localAppData)) {
+    throw new Error('Windows LocalAppData path is unavailable for the update handoff');
+  }
+  return win32.join(win32.normalize(localAppData), 'Temp');
+}
+
+export function createUpdateInstallerHandoffArguments(lease: UpdateInstallerHandoffLease): string[] {
+  const path = win32.normalize(lease.path.trim());
+  if (!win32.isAbsolute(path) || path.includes('\0')) {
+    throw new Error('invalid update handoff path');
+  }
+  const nonce = lease.nonce.trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(nonce)) {
+    throw new Error('invalid update handoff nonce');
+  }
+  const targetUserSid = normalizeWindowsUserSid(lease.targetUserSid);
+  if (!Number.isSafeInteger(lease.targetSessionId) || lease.targetSessionId <= 0) {
+    throw new Error('invalid update handoff Windows session');
+  }
+
+  return [
+    '--youyu-handoff-path',
+    path,
+    '--youyu-handoff-nonce',
+    nonce,
+    '--youyu-target-user-sid',
+    targetUserSid,
+    '--youyu-target-session-id',
+    String(lease.targetSessionId)
+  ];
+}
 
 export async function createUpdateInstallerHandoff(
   options: {
@@ -74,8 +129,12 @@ export async function createUpdateInstallerHandoff(
     createdAtEpochMs: now,
     expiresAtEpochMs: now + updateInstallerHandoffLifetimeMs
   };
-  const path = join(options.temporaryDirectory ?? tmpdir(), `youyu-update-handoff-${nonce}.json`);
   const environment = options.environment ?? process.env;
+  const path = join(
+    options.temporaryDirectory ?? resolveWindowsUpdateHandoffDirectory(environment),
+    `youyu-update-handoff-${nonce}.json`
+  );
+  const acknowledgementPath = resolveUpdateInstallerHandoffAcknowledgementPath({ path, nonce });
   const assignedEnvironment: Record<string, string> = {
     [updateInstallerHandoffEnvironment.path]: path,
     [updateInstallerHandoffEnvironment.nonce]: nonce,
@@ -95,7 +154,7 @@ export async function createUpdateInstallerHandoff(
     cancelExpiryCleanup?.();
     cancelExpiryCleanup = undefined;
     try {
-      await rm(path, { force: true });
+      await Promise.all([rm(path, { force: true }), rm(acknowledgementPath, { force: true })]);
     } finally {
       for (const [name, assignedValue] of Object.entries(assignedEnvironment)) {
         if (environment[name] !== assignedValue) continue;
@@ -114,12 +173,17 @@ export async function createUpdateInstallerHandoff(
 
   return {
     path,
+    nonce,
+    targetUserSid,
+    targetSessionId: identity.sessionId,
+    targetProcessId: processId,
+    targetExecutablePath: executablePath,
     abandon
   };
 }
 
 export function deferUpdateInstallerLaunch(options: {
-  launch: () => void;
+  launch: (lease: UpdateInstallerHandoffLease) => Promise<void> | void;
   onError: (error: unknown) => void;
   defer?: (task: () => Promise<void>) => void;
   prepareHandoff?: () => Promise<UpdateInstallerHandoffLease | undefined>;
@@ -146,7 +210,8 @@ export function deferUpdateInstallerLaunch(options: {
     let lease: UpdateInstallerHandoffLease | undefined;
     try {
       lease = await prepareHandoff();
-      options.launch();
+      if (!lease) throw new Error('authenticated update handoff is unavailable');
+      await options.launch(lease);
     } catch (error) {
       try {
         await lease?.abandon();

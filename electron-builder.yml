@@ -49,6 +49,7 @@ win:
 nsis:
   oneClick: false
   perMachine: true
+  packElevateHelper: true
   allowToChangeInstallationDirectory: false
   createDesktopShortcut: true
   createStartMenuShortcut: true

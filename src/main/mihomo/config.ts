@@ -172,7 +172,13 @@ const steamAccelerationDomains = [
   'steamcloud-sydney.storage.googleapis.com',
   'steamcloud-taiwan.storage.googleapis.com'
 ];
-const steamDnsResolvers = ['https://1.1.1.1/dns-query#RULES', 'https://8.8.8.8/dns-query#RULES'];
+const stableProxyDnsResolvers = ['https://1.1.1.1/dns-query#RULES', 'https://8.8.8.8/dns-query#RULES'];
+// Codex keeps a long-lived response WebSocket on the ChatGPT edge.  Resolve
+// just that OpenAI edge family through the same rule-aware public resolvers we
+// already use for Steam, rather than letting a domestic resolver pin it to a
+// transient or unsuitable edge.  The proxy target remains the user's current
+// manual/automatic selection.
+const codexDnsDomains = ['openai.com', 'chatgpt.com', 'oaistatic.com', 'oaiusercontent.com'];
 const gamingFakeIpFilterDomains = [
   '*.steampowered.com',
   '*.steamcommunity.com',
@@ -627,6 +633,9 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
     ipv6: false,
     'unified-delay': true,
     'tcp-concurrent': true,
+    'disable-keep-alive': false,
+    'keep-alive-idle': 30,
+    'keep-alive-interval': 15,
     'find-process-mode': 'strict',
     'geodata-mode': false,
     'geo-auto-update': false,
@@ -661,7 +670,10 @@ function buildRuntimeOptions(input: MihomoConfigInput) {
       'default-nameserver': ['223.5.5.5', '119.29.29.29'],
       nameserver: ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
       'nameserver-policy': Object.fromEntries(
-        steamAccelerationDomains.map((domain) => [`+.${domain}`, [...steamDnsResolvers]])
+        [...new Set([...steamAccelerationDomains, ...codexDnsDomains])].map((domain) => [
+          `+.${domain}`,
+          [...stableProxyDnsResolvers]
+        ])
       ),
       'direct-nameserver': ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
       'proxy-server-nameserver': ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],

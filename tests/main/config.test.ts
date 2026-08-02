@@ -42,6 +42,9 @@ describe('buildMihomoConfig', () => {
     expect(config.secret).toBe('local-secret');
     expect(config['geo-auto-update']).toBe(false);
     expect(config['geodata-mode']).toBe(false);
+    expect(config['disable-keep-alive']).toBe(false);
+    expect(config['keep-alive-idle']).toBe(30);
+    expect(config['keep-alive-interval']).toBe(15);
     expect(config['proxy-providers'].airport.url).toBe('https://example.com/sub?token=secret');
     expect(config['proxy-providers'].airport.interval).toBe(43200);
     expect(config['proxy-providers'].airport['size-limit']).toBe(8 * 1024 * 1024);
@@ -166,6 +169,14 @@ describe('buildMihomoConfig', () => {
     expect(config.dns['cache-algorithm']).toBe('arc');
     expect(config.dns['prefer-h3']).toBe(false);
     expect(config.dns['nameserver-policy']['+.steampowered.com']).toEqual([
+      'https://1.1.1.1/dns-query#RULES',
+      'https://8.8.8.8/dns-query#RULES'
+    ]);
+    expect(config.dns['nameserver-policy']['+.chatgpt.com']).toEqual([
+      'https://1.1.1.1/dns-query#RULES',
+      'https://8.8.8.8/dns-query#RULES'
+    ]);
+    expect(config.dns['nameserver-policy']['+.openai.com']).toEqual([
       'https://1.1.1.1/dns-query#RULES',
       'https://8.8.8.8/dns-query#RULES'
     ]);

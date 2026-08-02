@@ -1699,12 +1699,17 @@ test('admin page exposes the fixed-viewport management workspace without removed
   assert.match(page, /data-drawer-tab="merge">合并用户/);
   assert.match(page, /data-drawer-tab="profile">资料通知/);
   assert.match(page, /id="userProfileName"[^>]*maxlength="80"/);
+  assert.match(page, /id="activeUserVersion"/);
+  assert.match(page, /id="activeUserReportedAt"/);
   assert.match(page, /id="userNoticeMessage"[^>]*maxlength="500"/);
   assert.match(page, /id="userNoticeDuration" type="number" min="5" max="10080" step="5"/);
   assert.match(page, /id="decreaseUserNoticeDuration" type="button"/);
   assert.match(page, /id="increaseUserNoticeDuration" type="button"/);
-  assert.match(page, /保存并重新计时/);
+  assert.match(page, /保存通知/);
   assert.doesNotMatch(page, /userNoticeExpiresAt/);
+  assert.doesNotMatch(page, /id="activeUserId"/);
+  assert.doesNotMatch(page, /id="userNoticeEnabled"/);
+  assert.doesNotMatch(page, /id="userNoticeState"/);
   assert.match(page, /id="previewMerge"[^>]*>预览合并/);
   assert.doesNotMatch(page, /查看、筛选和配置(?:登记)?用户/);
   for (const removed of [
@@ -1856,7 +1861,6 @@ test('admin page edits a user profile and plain-text targeted notice end to end'
   const message = '<img src=x onerror=alert(1)>今晚维护';
   document.getElementById('userNoticeMessage').value = message;
   document.getElementById('userNoticeTone').value = 'warning';
-  document.getElementById('userNoticeEnabled').value = 'true';
   document.getElementById('increaseUserNoticeDuration').click();
   assert.equal(document.getElementById('userNoticeDuration').value, '15');
   document.getElementById('decreaseUserNoticeDuration').click();
@@ -1871,11 +1875,18 @@ test('admin page edits a user profile and plain-text targeted notice end to end'
   );
   assert.equal(document.getElementById('userNoticeMessage').value, message);
   assert.equal(document.querySelector('img[src="x"]'), null);
-  assert.equal(document.getElementById('userNoticeState').textContent, '已启用');
+  assert.equal(document.getElementById('userNoticeEnabled'), null);
+  assert.equal(document.getElementById('userNoticeState'), null);
   assert.equal(
     database.queryAll('SELECT duration_minutes FROM user_notice_audit WHERE user_id = ?', identity.userId)[0]
       ?.duration_minutes,
     15
+  );
+  assert.equal(database.queryAll('SELECT enabled FROM user_notices WHERE user_id = ?', identity.userId)[0]?.enabled, 1);
+
+  document.getElementById('clearUserNotice').click();
+  await waitFor(
+    () => database.queryAll('SELECT enabled FROM user_notices WHERE user_id = ?', identity.userId)[0]?.enabled === 0
   );
 });
 

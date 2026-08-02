@@ -19,14 +19,16 @@ describe('update install entry points', () => {
     expect(source).toContain('event.preventDefault();');
   });
 
-  it('installs an in-app Windows update silently and starts YouYu again', async () => {
+  it('uses the controlled UAC launcher before quitting the current app', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
     const install = source.slice(
       source.indexOf('async function installDownloadedUpdate'),
       source.indexOf('function recoverFromUpdateInstallerLaunchFailure')
     );
 
-    expect(install).toContain('autoUpdater.quitAndInstall(true, true)');
-    expect(install).not.toContain('autoUpdater.quitAndInstall(false, true)');
+    expect(install).toContain('launchDownloadedUpdateInstaller({ installerPath, handoff })');
+    expect(install).toContain('updateInstallerLaunchStarted = true');
+    expect(install).toContain('app.quit()');
+    expect(install).not.toContain('autoUpdater.quitAndInstall');
   });
 });

@@ -206,7 +206,7 @@ export function adminPage(): string {
               </div>
               <div class="users-toolbar">
                 <div class="toolbar-group">
-                  <label class="search-box"><span class="visually-hidden">搜索用户</span>${icon('search')}<input id="userSearch" type="search" placeholder="搜索姓名或用户 ID" autocomplete="off" /></label>
+                  <label class="search-box"><span class="visually-hidden">搜索用户名</span>${icon('search')}<input id="userSearch" type="search" placeholder="搜索用户名" autocomplete="off" /></label>
                   <select class="compact" id="userSubscriptionFilter" aria-label="订阅状态"><option value="">全部订阅</option><option value="跟随全局">跟随全局</option><option value="单独订阅">单独订阅</option><option value="单独配置">单独配置</option><option value="已停用">已停用</option><option value="未配置">未配置</option></select>
                   <select class="compact" id="userAnomalyFilter" aria-label="异常筛选"><option value="">全部用户</option><option value="has">存在异常</option><option value="none">无异常</option></select>
                 </div>
@@ -247,7 +247,13 @@ export function adminPage(): string {
                 <div class="drawer-profile">
                   <div class="profile-head">
                     <span class="profile-avatar" id="activeUserInitial">—</span>
-                    <div class="profile-copy"><h2 id="activeUserName">—</h2><p id="activeUserId">用户 ID：—</p></div>
+                    <div class="profile-copy">
+                      <h2 id="activeUserName">—</h2>
+                      <dl class="profile-meta" aria-label="客户端信息">
+                        <div><dt>客户端</dt><dd id="activeUserVersion">未上报</dd></div>
+                        <div><dt>最近上报</dt><dd id="activeUserReportedAt">—</dd></div>
+                      </dl>
+                    </div>
                     <button class="button ghost" id="closeUserDrawer" type="button" aria-label="关闭用户详情">${icon('close', 'icon-sm')}</button>
                   </div>
                   <div class="profile-stats">
@@ -285,9 +291,8 @@ export function adminPage(): string {
                     <div class="field-error" id="userProfileNameError" role="alert"></div>
                   </form>
                   <form class="notice-editor" id="userNoticeForm">
-                    <div class="section-title"><h3>定向通知</h3><span class="chip gray" id="userNoticeState">未设置</span></div>
+                    <div class="section-title"><h3>定向通知</h3></div>
                     <div class="form-grid">
-                      <label class="field" for="userNoticeEnabled">状态<select id="userNoticeEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
                       <label class="field" for="userNoticeTone">级别<select id="userNoticeTone"><option value="info">提示</option><option value="warning">警告</option></select></label>
                       <div class="field notice-duration-field">
                         <span id="userNoticeDurationLabel">持续时间</span>
@@ -301,7 +306,7 @@ export function adminPage(): string {
                       <label class="field wide" for="userNoticeMessage">内容<textarea id="userNoticeMessage" maxlength="500" rows="4" aria-describedby="userNoticeError"></textarea></label>
                       <div class="field-error wide" id="userNoticeError" role="alert"></div>
                     </div>
-                    <div class="drawer-actions"><button class="button" id="saveUserNotice" type="submit">${icon('save', 'icon-sm')}保存并重新计时</button><button class="button secondary" id="clearUserNotice" type="button">${icon('reset', 'icon-sm')}停用</button></div>
+                    <div class="drawer-actions"><button class="button" id="saveUserNotice" type="submit">${icon('save', 'icon-sm')}保存通知</button><button class="button secondary" id="clearUserNotice" type="button">${icon('reset', 'icon-sm')}停止通知</button></div>
                   </form>
                 </section>
                 <section class="drawer-section" id="drawerTrafficSection" role="tabpanel" aria-labelledby="drawerTabTraffic" data-drawer-section="traffic" hidden>

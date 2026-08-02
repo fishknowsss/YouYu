@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -261,6 +262,158 @@ describe('manage-installed-process.ps1 user boundary', () => {
       }
     }
   );
+
+  windowsIt(
+    'writes a canonical private acknowledgement, then consumes both files after the same boundary waits',
+    async () => {
+      const current = await getCurrentWindowsIdentity();
+      if (isNonInteractiveIdentity(current.sid)) return;
+
+      const acknowledgementNonce = randomUUID().toLowerCase();
+      const canonicalTempDirectory = await getCanonicalLocalTempDirectory();
+      const handoffPath = join(canonicalTempDirectory, `youyu-update-handoff-${acknowledgementNonce}.json`);
+      const acknowledgementPath = join(
+        canonicalTempDirectory,
+        `youyu-update-handoff-${acknowledgementNonce}.ready.json`
+      );
+      const uniqueExecutablePath = join(tmpdir(), `youyu-acknowledgement-target-${randomUUID()}.exe`);
+      const currentTime = Date.now();
+      const boundaryArgs = [
+        '-ExecutablePath',
+        uniqueExecutablePath,
+        '-HandoffPath',
+        handoffPath,
+        '-HandoffNonce',
+        acknowledgementNonce,
+        '-ExpectedUserSid',
+        current.sid,
+        '-ExpectedSessionId',
+        String(current.session),
+        '-RequireHandoff'
+      ];
+      try {
+        await writeFile(
+          handoffPath,
+          JSON.stringify({
+            version: 1,
+            nonce: acknowledgementNonce,
+            targetUserSid: current.sid,
+            targetSessionId: current.session,
+            targetProcessId: process.pid,
+            executablePath: uniqueExecutablePath,
+            createdAtEpochMs: currentTime,
+            expiresAtEpochMs: currentTime + 300_000
+          }),
+          'utf8'
+        );
+
+        const acknowledged = await runScript(['-Action', 'AcknowledgeAndWait', ...boundaryArgs]);
+        expect(acknowledged.stdout).toContain('"status":"acknowledged-and-waited"');
+        const acknowledgement = JSON.parse(await readFile(acknowledgementPath, 'utf8')) as {
+          version: number;
+          nonce: string;
+          handoffPath: string;
+          targetUserSid: string;
+          targetSessionId: number;
+          targetProcessId: number;
+          executablePath: string;
+          acknowledgedAtEpochMs: number;
+          expiresAtEpochMs: number;
+        };
+        expect(acknowledgement).toMatchObject({
+          version: 1,
+          nonce: acknowledgementNonce,
+          handoffPath,
+          targetUserSid: current.sid,
+          targetSessionId: current.session,
+          targetProcessId: process.pid,
+          executablePath: uniqueExecutablePath
+        });
+        expect(acknowledgement.acknowledgedAtEpochMs).toBeGreaterThan(0);
+        expect(acknowledgement.expiresAtEpochMs - acknowledgement.acknowledgedAtEpochMs).toBeLessThanOrEqual(900_000);
+
+        const acl = await getPrivateAcknowledgementAcl(acknowledgementPath);
+        expect(acl).toEqual({
+          ownerSid: current.sid,
+          aclProtected: true,
+          ruleCount: 1,
+          ruleSid: current.sid,
+          allowsFullControl: true
+        });
+
+        await runScript(['-Action', 'Consume', ...boundaryArgs]);
+        await expect(readFile(handoffPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(readFile(acknowledgementPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally {
+        await rm(handoffPath, { force: true });
+        await rm(acknowledgementPath, { force: true });
+      }
+    }
+  );
+
+  windowsIt('recovers the old 1.7.0 handoff from only the current installer identity temp directory', async () => {
+    const current = await getCurrentWindowsIdentity();
+    if (isNonInteractiveIdentity(current.sid)) return;
+
+    const fallbackNonce = randomUUID().toLowerCase();
+    const fallbackPath = join(await getCanonicalLocalTempDirectory(), `youyu-update-handoff-${fallbackNonce}.json`);
+    const uniqueExecutablePath = join(tmpdir(), `youyu-fallback-target-${randomUUID()}.exe`);
+    const now = Date.now();
+    try {
+      await writeFile(
+        fallbackPath,
+        JSON.stringify({
+          version: 1,
+          nonce: fallbackNonce,
+          targetUserSid: current.sid,
+          targetSessionId: current.session,
+          targetProcessId: process.pid,
+          executablePath: uniqueExecutablePath,
+          createdAtEpochMs: now,
+          expiresAtEpochMs: now + 300_000
+        }),
+        'utf8'
+      );
+
+      const result = await runScript(['-Action', 'Verify', '-ExecutablePath', uniqueExecutablePath, '-RequireHandoff']);
+      expect(result.stdout).toContain('"boundaryMode":"authenticated"');
+      await expect(readFile(fallbackPath, 'utf8')).resolves.toContain(fallbackNonce);
+    } finally {
+      await rm(fallbackPath, { force: true });
+    }
+  });
+
+  windowsIt('does not revive an expired fallback handoff from the current user temp directory', async () => {
+    const current = await getCurrentWindowsIdentity();
+    if (isNonInteractiveIdentity(current.sid)) return;
+
+    const fallbackNonce = randomUUID().toLowerCase();
+    const fallbackPath = join(await getCanonicalLocalTempDirectory(), `youyu-update-handoff-${fallbackNonce}.json`);
+    const uniqueExecutablePath = join(tmpdir(), `youyu-expired-fallback-${randomUUID()}.exe`);
+    const now = Date.now();
+    try {
+      await writeFile(
+        fallbackPath,
+        JSON.stringify({
+          version: 1,
+          nonce: fallbackNonce,
+          targetUserSid: current.sid,
+          targetSessionId: current.session,
+          targetProcessId: process.pid,
+          executablePath: uniqueExecutablePath,
+          createdAtEpochMs: now - 300_001,
+          expiresAtEpochMs: now + 1_000
+        }),
+        'utf8'
+      );
+
+      await expect(
+        runScript(['-Action', 'Verify', '-ExecutablePath', uniqueExecutablePath, '-RequireHandoff'])
+      ).rejects.toMatchObject({ stderr: expect.stringContaining('An authenticated update handoff is required.') });
+    } finally {
+      await rm(fallbackPath, { force: true });
+    }
+  });
 
   windowsIt('admits the one-time legacy bridge only for an eligible stopped installation', async () => {
     await withLegacyBoundaryFiles([], '1.6.8.0', async ({ executablePath, inventoryPath, versionInfoPath }) => {
@@ -549,4 +702,70 @@ function runScript(args: string[]) {
       }
     }
   );
+}
+
+async function getCurrentWindowsIdentity(): Promise<{ sid: string; session: number }> {
+  const { stdout } = await execFileAsync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      '$identity = [Security.Principal.WindowsIdentity]::GetCurrent(); $session = (Get-Process -Id $PID).SessionId; [pscustomobject]@{ sid = $identity.User.Value; session = $session } | ConvertTo-Json -Compress'
+    ],
+    { windowsHide: true }
+  );
+  const current = JSON.parse(String(stdout)) as { sid: string; session: number };
+  return { sid: current.sid.toUpperCase(), session: current.session };
+}
+
+async function getCanonicalLocalTempDirectory(): Promise<string> {
+  const { stdout } = await execFileAsync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      "[IO.Path]::GetFullPath([IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData), 'Temp'))"
+    ],
+    { windowsHide: true }
+  );
+  return String(stdout).trim();
+}
+
+async function getPrivateAcknowledgementAcl(path: string): Promise<{
+  ownerSid: string;
+  aclProtected: boolean;
+  ruleCount: number;
+  ruleSid: string;
+  allowsFullControl: boolean;
+}> {
+  const script = [
+    '$acl = Get-Acl -LiteralPath $env:YOUYU_TEST_ACKNOWLEDGEMENT_PATH -ErrorAction Stop',
+    '$rules = @($acl.Access)',
+    '$fullControl = [int64] [Security.AccessControl.FileSystemRights]::FullControl',
+    '$rule = if ($rules.Count -eq 1) { $rules[0] } else { $null }',
+    '[pscustomobject]@{',
+    '  ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant()',
+    '  aclProtected = [bool] $acl.AreAccessRulesProtected',
+    '  ruleCount = $rules.Count',
+    '  ruleSid = if ($null -eq $rule) { "" } else { $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant() }',
+    '  allowsFullControl = if ($null -eq $rule) { $false } else { ((([int64] $rule.FileSystemRights) -band $fullControl) -eq $fullControl) }',
+    '} | ConvertTo-Json -Compress'
+  ].join('\n');
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    windowsHide: true,
+    env: { ...process.env, YOUYU_TEST_ACKNOWLEDGEMENT_PATH: path }
+  });
+  return JSON.parse(String(stdout)) as {
+    ownerSid: string;
+    aclProtected: boolean;
+    ruleCount: number;
+    ruleSid: string;
+    allowsFullControl: boolean;
+  };
+}
+
+function isNonInteractiveIdentity(sid: string): boolean {
+  return ['S-1-5-18', 'S-1-5-19', 'S-1-5-20'].includes(sid) || sid.endsWith('-500');
 }

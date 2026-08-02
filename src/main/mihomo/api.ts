@@ -45,6 +45,7 @@ export type MihomoApiClient = {
     strategy: Exclude<StrategyKey, 'manual' | 'direct'>,
     options?: { avoidNode?: string; signal?: AbortSignal }
   ) => Promise<string | undefined>;
+  closeConnection: (id: string) => Promise<void>;
   closeConnections: () => Promise<void>;
   flushDnsCache: () => Promise<void>;
   updateProvider: (options?: { signal?: AbortSignal }) => Promise<void>;
@@ -787,6 +788,14 @@ export function createMihomoApiClient(options: {
 
       await this.selectNode(bestNode.name);
       return bestNode.name;
+    },
+    async closeConnection(id) {
+      const connectionId = id.trim();
+      if (!connectionId) throw new Error('mihomo connection id is required');
+      await request(`/connections/${encodeURIComponent(connectionId)}`, {
+        method: 'DELETE',
+        headers: headers()
+      });
     },
     async closeConnections() {
       await request('/connections', {

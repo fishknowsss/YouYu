@@ -37,7 +37,7 @@ describe('silent update installation notice', () => {
     expect(container.textContent).not.toContain('已开始自动安装');
     const spinner = container.querySelector('.update-activity-spinner');
     expect(spinner?.getAttribute('aria-hidden')).toBe('true');
-    expect(spinner?.parentElement?.classList.contains('easy-update-notice')).toBe(true);
+    expect(spinner?.parentElement?.classList.contains('easy-update-action')).toBe(true);
     expect(findButton(container, '安装')).toBeUndefined();
   });
 
@@ -59,7 +59,7 @@ describe('silent update installation notice', () => {
     expect(confirmingButton?.disabled).toBe(true);
     const spinner = container.querySelector('.update-activity-spinner');
     expect(spinner?.getAttribute('aria-hidden')).toBe('true');
-    expect(spinner?.parentElement?.classList.contains('update-row')).toBe(true);
+    expect(spinner?.parentElement?.classList.contains('update-action-group')).toBe(true);
     expect(confirmingButton?.querySelector('.update-activity-spinner')).toBeNull();
   });
 
@@ -109,7 +109,7 @@ describe('silent update installation notice', () => {
     expect(container.textContent).toContain('即将重启');
     const spinner = container.querySelector('.update-activity-spinner');
     expect(spinner?.getAttribute('aria-hidden')).toBe('true');
-    expect(spinner?.parentElement?.classList.contains('easy-update-notice')).toBe(true);
+    expect(spinner?.parentElement?.classList.contains('easy-update-action')).toBe(true);
     expect(findButton(container, '安装')).toBeUndefined();
   });
 
@@ -140,39 +140,71 @@ describe('silent update installation notice', () => {
     expect(installingButton?.disabled).toBe(true);
     const spinner = container.querySelector('.update-activity-spinner');
     expect(spinner?.getAttribute('aria-hidden')).toBe('true');
-    expect(spinner?.parentElement?.classList.contains('update-row')).toBe(true);
+    expect(spinner?.parentElement?.classList.contains('update-action-group')).toBe(true);
     expect(installingButton?.querySelector('.update-activity-spinner')).toBeNull();
   });
 
   it.each([
     ['checking', undefined],
     ['downloading', 'verifying']
-  ] as const)('keeps %s activity at the left edge on both update surfaces', async (status, downloadPhase) => {
+  ] as const)(
+    'keeps %s activity immediately beside the action on both update surfaces',
+    async (status, downloadPhase) => {
+      const snapshot = await createDownloadedSnapshot();
+      snapshot.update = {
+        ...snapshot.update,
+        status,
+        availableVersion: '1.6.10',
+        downloadedVersion: undefined,
+        downloadPhase,
+        percent: status === 'downloading' ? 100 : undefined
+      };
+      const container = document.createElement('div');
+      document.body.append(container);
+      root = createRoot(container);
+
+      await act(async () => root?.render(<Home {...createHomeProps(snapshot)} busy={false} busyLabel="" />));
+
+      const easySpinner = container.querySelector('.update-activity-spinner');
+      expect(easySpinner?.parentElement?.classList.contains('easy-update-action')).toBe(true);
+      expect(container.querySelector('button .update-activity-spinner')).toBeNull();
+
+      await act(async () =>
+        root?.render(
+          <Settings
+            snapshot={snapshot}
+            busy={false}
+            busyLabel=""
+            message=""
+            onRepair={() => undefined}
+            onSave={() => undefined}
+            onSyncRemoteConfig={() => undefined}
+            onExportDiagnostics={() => undefined}
+            onCheckUpdate={() => undefined}
+            onInstallUpdate={() => undefined}
+          />
+        )
+      );
+
+      const settingsSpinner = container.querySelector('.update-activity-spinner');
+      expect(settingsSpinner?.parentElement?.classList.contains('update-action-group')).toBe(true);
+      expect(container.querySelector('button .update-activity-spinner')).toBeNull();
+    }
+  );
+
+  it('shows an immediate animated check state after manually requesting an update', async () => {
     const snapshot = await createDownloadedSnapshot();
-    snapshot.update = {
-      ...snapshot.update,
-      status,
-      availableVersion: '1.6.10',
-      downloadedVersion: undefined,
-      downloadPhase,
-      percent: status === 'downloading' ? 100 : undefined
-    };
+    snapshot.update = { ...snapshot.update, status: 'idle', downloadedVersion: undefined };
     const container = document.createElement('div');
     document.body.append(container);
     root = createRoot(container);
-
-    await act(async () => root?.render(<Home {...createHomeProps(snapshot)} busy={false} busyLabel="" />));
-
-    const easySpinner = container.querySelector('.update-activity-spinner');
-    expect(easySpinner?.parentElement?.classList.contains('easy-update-notice')).toBe(true);
-    expect(container.querySelector('button .update-activity-spinner')).toBeNull();
 
     await act(async () =>
       root?.render(
         <Settings
           snapshot={snapshot}
-          busy={false}
-          busyLabel=""
+          busy
+          busyLabel="检查中"
           message=""
           onRepair={() => undefined}
           onSave={() => undefined}
@@ -184,9 +216,11 @@ describe('silent update installation notice', () => {
       )
     );
 
-    const settingsSpinner = container.querySelector('.update-activity-spinner');
-    expect(settingsSpinner?.parentElement?.classList.contains('update-row')).toBe(true);
-    expect(container.querySelector('button .update-activity-spinner')).toBeNull();
+    expect(container.querySelector('.update-row')?.getAttribute('aria-busy')).toBe('true');
+    expect(findButton(container, '检查中')?.disabled).toBe(true);
+    const spinner = container.querySelector('.update-activity-spinner');
+    expect(spinner?.parentElement?.classList.contains('update-action-group')).toBe(true);
+    expect(spinner?.nextElementSibling?.tagName).toBe('BUTTON');
   });
 
   it('restores an actionable install button when the silent handoff fails', async () => {

@@ -321,15 +321,15 @@ function UpdatePanel({
   const confirming = busy && busyLabel === '确认新版中' && update.status === 'downloaded';
   const ready = update.status === 'downloaded' && !installing && !confirming;
   const downloading = update.status === 'downloading';
-  const active = update.status === 'checking' || confirming || downloading || installing;
+  // The IPC snapshot can arrive one render after a manual check starts. Keep the
+  // action affordance live for that short handoff instead of making the button
+  // look frozen until the main process publishes `checking`.
+  const checking = update.status === 'checking' || (busy && busyLabel === '检查中');
+  const active = checking || confirming || downloading || installing;
   const verifying = update.downloadPhase === 'verifying';
   const fullPackage = update.downloadPhase === 'full-download';
   const waiting =
-    update.status === 'checking' ||
-    update.status === 'downloading' ||
-    update.status === 'available' ||
-    confirming ||
-    installing;
+    checking || update.status === 'downloading' || update.status === 'available' || confirming || installing;
   const buttonLabel = installing
     ? '安装中'
     : confirming
@@ -342,7 +342,7 @@ function UpdatePanel({
             : fullPackage
               ? '完整包'
               : '下载中'
-          : update.status === 'checking'
+          : checking
             ? '检查中'
             : update.status === 'available'
               ? '准备中'
@@ -358,7 +358,6 @@ function UpdatePanel({
       } ${update.status === 'failed' ? 'is-failed' : ''}`}
       aria-busy={waiting}
     >
-      {active && <span className="update-activity-spinner" aria-hidden="true" />}
       <div className="update-copy" role="status" aria-live="polite" aria-atomic="true">
         <span>软件更新</span>
         <strong title={statusText}>{statusText}</strong>
@@ -369,13 +368,16 @@ function UpdatePanel({
           <span style={{ width: `${progress}%` }} />
         </div>
       )}
-      <button
-        className={`wide-button ${ready || installing ? 'settings-action-install' : 'settings-action-check'} settings-footer-action`}
-        disabled={busy || waiting}
-        onClick={ready ? onInstallUpdate : onCheckUpdate}
-      >
-        {buttonLabel}
-      </button>
+      <div className="update-action-group">
+        {active && <span className="update-activity-spinner" aria-hidden="true" />}
+        <button
+          className={`wide-button ${ready || installing ? 'settings-action-install' : 'settings-action-check'} settings-footer-action`}
+          disabled={busy || waiting}
+          onClick={ready ? onInstallUpdate : onCheckUpdate}
+        >
+          {buttonLabel}
+        </button>
+      </div>
     </div>
   );
 }

@@ -103,8 +103,6 @@ export const ADMIN_SCRIPT = String.raw`
   const userModeEl = document.getElementById('userMode');
   const userProfileNameEl = document.getElementById('userProfileName');
   const userProfileNameError = document.getElementById('userProfileNameError');
-  const userNoticeState = document.getElementById('userNoticeState');
-  const userNoticeEnabled = document.getElementById('userNoticeEnabled');
   const userNoticeTone = document.getElementById('userNoticeTone');
   const userNoticeMessage = document.getElementById('userNoticeMessage');
   const userNoticeDuration = document.getElementById('userNoticeDuration');
@@ -214,7 +212,7 @@ export const ADMIN_SCRIPT = String.raw`
   document.getElementById('clearUserNotice').addEventListener('click', () => runAction(document.getElementById('clearUserNotice'), '停用中', clearUserNotice));
   document.getElementById('decreaseUserNoticeDuration').addEventListener('click', () => adjustUserNoticeDuration(-USER_NOTICE_DURATION_STEP_MINUTES));
   document.getElementById('increaseUserNoticeDuration').addEventListener('click', () => adjustUserNoticeDuration(USER_NOTICE_DURATION_STEP_MINUTES));
-  [userNoticeEnabled, userNoticeTone].forEach((element) => element.addEventListener('change', () => { state.noticeRequestId = ''; }));
+  userNoticeTone.addEventListener('change', () => { state.noticeRequestId = ''; });
   [userNoticeMessage, userNoticeDuration].forEach((element) => element.addEventListener('input', () => { state.noticeRequestId = ''; }));
   userModeEl.addEventListener('change', updateUserModeState);
   mergeTargetEl.addEventListener('change', resetMergePreview);
@@ -585,7 +583,7 @@ export const ADMIN_SCRIPT = String.raw`
     renderAll();
     if (selectedId) {
       const selected = state.users.find((user) => user.id === selectedId);
-      if (selected) await loadUserOverview(selected.id, selected.name || selected.id || '未命名');
+      if (selected) await loadUserOverview(selected.id, selected.name || '未命名');
       else closeUserContext();
     }
     setStatus('');
@@ -905,7 +903,7 @@ export const ADMIN_SCRIPT = String.raw`
     users.forEach((user, index) => {
       const row = document.createElement('div');
       row.className = 'ranking-row';
-      const button = createTextElement('button', 'user-link', user.name || user.id || '未命名');
+      const button = createTextElement('button', 'user-link', user.name || '未命名');
       button.type = 'button';
       button.addEventListener('click', () => openUserFromAnywhere(user));
       row.append(
@@ -930,7 +928,7 @@ export const ADMIN_SCRIPT = String.raw`
       const row = document.createElement('tr');
       const anomalyCount = nonNegativeNumber(user.anomalies);
       const nameCell = appendTableCell(row);
-      const button = createTextElement('button', 'user-link', user.name || user.id || '未命名');
+      const button = createTextElement('button', 'user-link', user.name || '未命名');
       button.type = 'button';
       button.addEventListener('click', () => openUserFromAnywhere(user));
       nameCell.appendChild(button);
@@ -994,7 +992,7 @@ export const ADMIN_SCRIPT = String.raw`
     const subscription = userSubscriptionFilter.value;
     const anomaly = userAnomalyFilter.value;
     return state.users.filter((user) => {
-      const haystack = String(user.name || '') + '\n' + String(user.id || '');
+      const haystack = String(user.name || '');
       if (search && !haystack.toLocaleLowerCase('zh-CN').includes(search)) return false;
       if (subscription && user.subscriptionState !== subscription) return false;
       const count = nonNegativeNumber(user.anomalies);
@@ -1020,7 +1018,7 @@ export const ADMIN_SCRIPT = String.raw`
     } else {
       visible.forEach((user) => {
         const row = document.createElement('tr');
-        const displayName = user.name || user.id || '未命名';
+        const displayName = user.name || '未命名';
         const logicalDevices = nonNegativeNumber(user.devices);
         const deviceRecords = nonNegativeNumber(user.deviceRecords);
         row.dataset.userId = user.id || '';
@@ -1107,13 +1105,11 @@ export const ADMIN_SCRIPT = String.raw`
   }
 
   function renderUserProfile(user) {
-    const name = user.name || user.id || '未命名';
+    const name = user.name || '未命名';
     document.getElementById('activeUserInitial').textContent = Array.from(name)[0] || '—';
     document.getElementById('activeUserName').textContent = name;
-    document.getElementById('activeUserId').textContent =
-      '用户 ID：' + (user.id || '—') +
-      ' · 客户端：' + formatAppVersion(user.latestAppVersion) +
-      ' · 最近上报：' + formatTime(user.appVersionReportedAt || user.lastSeenAt);
+    document.getElementById('activeUserVersion').textContent = formatAppVersion(user.latestAppVersion);
+    document.getElementById('activeUserReportedAt').textContent = formatShortTime(user.appVersionReportedAt || user.lastSeenAt);
     document.getElementById('activeUserDevices').textContent = nonNegativeNumber(user.devices);
     document.getElementById('activeUserRecords').textContent = nonNegativeNumber(user.deviceRecords);
     document.getElementById('activeUserTraffic').textContent = formatBytes(totalBytes(user));
@@ -1221,16 +1217,11 @@ export const ADMIN_SCRIPT = String.raw`
 
   function renderUserNotice(notice) {
     const exists = Boolean(notice && Number.isSafeInteger(Number(notice.revision)));
-    userNoticeEnabled.value = !exists || notice.enabled !== false ? 'true' : 'false';
     userNoticeTone.value = exists && notice.tone === 'warning' ? 'warning' : 'info';
     userNoticeMessage.value = exists && typeof notice.message === 'string' ? notice.message : '';
     userNoticeDuration.value = String(getNoticeDurationForEditor(notice, exists));
     clearFieldError(userNoticeMessage, userNoticeError);
     userNoticeDuration.removeAttribute('aria-invalid');
-    const expired = exists && dateValue(notice.expiresAt) <= Date.now();
-    const stateText = !exists ? '未设置' : notice.enabled === false ? '已停用' : expired ? '已过期' : '已启用';
-    userNoticeState.textContent = stateText;
-    userNoticeState.className = 'chip ' + (stateText === '已启用' ? 'green' : stateText === '已过期' ? 'red' : 'gray');
   }
 
   function getNoticeDurationForEditor(notice, exists) {
@@ -1290,7 +1281,7 @@ export const ADMIN_SCRIPT = String.raw`
 
   function openUserFromAnywhere(user) {
     setView('users');
-    runAction(null, (user.name || user.id || '用户') + ' 加载中', () => loadUserOverview(user.id, user.name || user.id || '未命名'));
+    runAction(null, (user.name || '用户') + ' 加载中', () => loadUserOverview(user.id, user.name || '未命名'));
   }
 
   async function saveGlobalConfig() {
@@ -1487,7 +1478,7 @@ export const ADMIN_SCRIPT = String.raw`
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        enabled: userNoticeEnabled.value === 'true',
+        enabled: true,
         message: message,
         tone: userNoticeTone.value === 'warning' ? 'warning' : 'info',
         durationMinutes: durationMinutes,
@@ -1666,7 +1657,7 @@ export const ADMIN_SCRIPT = String.raw`
       if (!user.id || user.id === state.activeUserId) return;
       const option = document.createElement('option');
       option.value = user.id;
-      option.textContent = user.name || user.id || '未命名';
+      option.textContent = user.name || '未命名';
       mergeTargetEl.appendChild(option);
     });
     if (Array.from(mergeTargetEl.options).some((option) => option.value === selected)) mergeTargetEl.value = selected;
@@ -1726,8 +1717,8 @@ export const ADMIN_SCRIPT = String.raw`
     const source = Object.assign({}, state.users.find((user) => user.id === state.activeUserId) || {}, previewSource || {});
     const target = Object.assign({}, state.users.find((user) => user.id === targetUserId) || {}, previewTarget || {});
     mergePreviewSummary.replaceChildren();
-    mergePreviewSummary.appendChild(createPreviewCard('当前用户', source.name || state.activeUserName || state.activeUserId, source));
-    mergePreviewSummary.appendChild(createPreviewCard('目标用户', target.name || targetUserId, target));
+    mergePreviewSummary.appendChild(createPreviewCard('当前用户', source.name || state.activeUserName || '未命名', source));
+    mergePreviewSummary.appendChild(createPreviewCard('目标用户', target.name || '未命名', target));
     mergeConflictEl.classList.toggle('hidden', !conflict);
     mergeResolutionEl.value = '';
     mergePreviewEl.classList.remove('hidden');
@@ -1764,7 +1755,7 @@ export const ADMIN_SCRIPT = String.raw`
     const previewState = state.mergePreviewState;
     const targetUserId = state.mergePreviewState.targetUserId;
     const target = state.users.find((user) => user.id === targetUserId);
-    const targetName = target ? target.name || target.id || '未命名' : targetUserId;
+    const targetName = target ? target.name || '未命名' : '目标用户';
     const confirmed = await askConfirm('当前用户的数据将并入“' + targetName + '”，合并后不能撤销。', '合并');
     if (!confirmed) {
       setStatus('');

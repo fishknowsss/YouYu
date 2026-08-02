@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('WaitForExit', 'Verify', 'Consume')]
+  [ValidateSet('WaitForExit', 'Verify', 'AcknowledgeAndWait', 'Consume')]
   [string] $Action,
 
   [Parameter(Mandatory = $true)]
@@ -16,7 +16,7 @@ param(
   [switch] $AllowLegacyUpdateBridge,
   [string] $InstallerVersion = '',
 
-  # Test/QA-only seams. Production WaitForExit and Consume reject all four.
+  # Test/QA-only seams. Production WaitForExit, AcknowledgeAndWait, and Consume reject all four.
   [string] $ProcessInventoryPath = '',
   [string] $LegacyVersionInfoPath = '',
   [switch] $SkipFileOwnerCheck,
@@ -26,6 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $handoffLifetimeLimitMs = 900000L
+$implicitHandoffDiscoveryLifetimeMs = 300000L
 $legacyBridgeTargetVersion = '1.7.0'
 $legacyBridgeMaximumSourceVersion = [Version]::new(1, 6, 8, 0)
 $legacyBridgeActive = $false
@@ -120,6 +121,88 @@ function Assert-LegacyUpdateBridgeEligibility([string] $ExpectedExecutablePath) 
   $script:legacyBridgeActive = $true
 }
 
+function Get-CurrentInstallerBoundaryIdentity {
+  $installerProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop
+  if ($null -eq $installerProcess) { throw 'Cannot resolve the installer process identity.' }
+  $owner = Invoke-CimMethod -InputObject $installerProcess -MethodName GetOwnerSid -ErrorAction Stop
+  if ([int] $owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($owner.Sid)) {
+    throw 'Cannot resolve the installer process owner SID.'
+  }
+  $sessionId = ConvertTo-RequiredInt64 $installerProcess.SessionId 'Installer Windows session'
+  if ($sessionId -le 0 -or $sessionId -gt [int]::MaxValue) {
+    throw 'Installer Windows session is invalid.'
+  }
+  return [pscustomobject]@{
+    UserSid = Normalize-UserSid $owner.Sid
+    SessionId = [int] $sessionId
+  }
+}
+
+function Find-ImplicitUpdateHandoff([string] $ExpectedExecutablePath) {
+  # Electron-updater 6.x launches a per-machine NSIS installer across UAC without
+  # guaranteeing custom environment propagation. This compatibility lookup is
+  # deliberately scoped to the elevated installer's own SID/session LocalAppData\Temp.
+  $identity = Get-CurrentInstallerBoundaryIdentity
+  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  if ([string]::IsNullOrWhiteSpace($localAppData)) { return $null }
+  $tempDirectory = [IO.Path]::GetFullPath([IO.Path]::Combine($localAppData, 'Temp'))
+  if (-not (Test-Path -LiteralPath $tempDirectory -PathType Container)) { return $null }
+  $tempItem = Get-Item -LiteralPath $tempDirectory -Force
+  if ($tempItem.PSIsContainer -eq $false -or ($tempItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    return $null
+  }
+
+  $now = if ($CurrentTimeEpochMs -gt 0) { $CurrentTimeEpochMs } else { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+  $candidates = @()
+  foreach ($item in @(Get-ChildItem -LiteralPath $tempDirectory -Force -File -Filter 'youyu-update-handoff-*.json' -ErrorAction SilentlyContinue)) {
+    try {
+      if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+      if ($item.Length -le 0 -or $item.Length -gt 8192) { continue }
+      $nameMatch = [Text.RegularExpressions.Regex]::Match(
+        $item.Name,
+        '^youyu-update-handoff-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$',
+        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+      )
+      if (-not $nameMatch.Success) { continue }
+      $candidateNonce = $nameMatch.Groups[1].Value.ToLowerInvariant()
+      $acl = Get-Acl -LiteralPath $item.FullName
+      $ownerSid = Normalize-UserSid $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+      if ($ownerSid -ine $identity.UserSid) { continue }
+
+      $record = Get-Content -LiteralPath $item.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+      if ((ConvertTo-RequiredInt64 (Get-RequiredProperty $record 'version') 'Handoff version') -ne 1) { continue }
+      if (([string] (Get-RequiredProperty $record 'nonce')).Trim().ToLowerInvariant() -cne $candidateNonce) { continue }
+      $recordSid = Normalize-UserSid (Get-RequiredProperty $record 'targetUserSid')
+      if ($recordSid -ine $identity.UserSid) { continue }
+      $recordSession = ConvertTo-RequiredInt64 (Get-RequiredProperty $record 'targetSessionId') 'Handoff Windows session'
+      if ($recordSession -ne $identity.SessionId) { continue }
+      $recordProcessId = ConvertTo-RequiredInt64 (Get-RequiredProperty $record 'targetProcessId') 'Handoff process id'
+      if ($recordProcessId -le 0 -or $recordProcessId -gt [int]::MaxValue) { continue }
+      $recordExecutablePath = Normalize-ExecutablePath (Get-RequiredProperty $record 'executablePath')
+      if ($recordExecutablePath -ine $ExpectedExecutablePath) { continue }
+      $createdAt = ConvertTo-RequiredInt64 (Get-RequiredProperty $record 'createdAtEpochMs') 'Handoff creation time'
+      $expiresAt = ConvertTo-RequiredInt64 (Get-RequiredProperty $record 'expiresAtEpochMs') 'Handoff expiration time'
+      if ($expiresAt -le $createdAt -or ($expiresAt - $createdAt) -gt $handoffLifetimeLimitMs) { continue }
+      if ($createdAt -lt ($now - $implicitHandoffDiscoveryLifetimeMs) -or $createdAt -gt ($now + 60000L) -or $expiresAt -lt $now) {
+        continue
+      }
+      $candidates += [pscustomobject]@{
+        HandoffPath = [IO.Path]::GetFullPath($item.FullName)
+        HandoffNonce = $candidateNonce
+        ExpectedUserSid = $identity.UserSid
+        ExpectedSessionId = [string] $identity.SessionId
+        CreatedAtEpochMs = $createdAt
+      }
+    } catch {
+      # Untrusted or stale files in the caller's temp directory are ignored.
+    }
+  }
+
+  $orderedCandidates = @($candidates | Sort-Object -Property @{ Expression = 'CreatedAtEpochMs'; Descending = $true }, @{ Expression = 'HandoffPath'; Descending = $false })
+  if ($orderedCandidates.Count -eq 0) { return $null }
+  return $orderedCandidates[0]
+}
+
 function Get-HandoffBoundary([string] $ExpectedExecutablePath) {
   if ([string]::IsNullOrWhiteSpace($script:HandoffPath)) {
     $script:HandoffPath = [Environment]::GetEnvironmentVariable('YOUYU_UPDATE_HANDOFF_PATH')
@@ -135,12 +218,28 @@ function Get-HandoffBoundary([string] $ExpectedExecutablePath) {
   }
 
   $provided = @(
-    -not [string]::IsNullOrWhiteSpace($script:HandoffPath),
-    -not [string]::IsNullOrWhiteSpace($script:HandoffNonce),
-    -not [string]::IsNullOrWhiteSpace($script:ExpectedUserSid),
-    -not [string]::IsNullOrWhiteSpace($script:ExpectedSessionId)
-  )
+      -not [string]::IsNullOrWhiteSpace($script:HandoffPath),
+      -not [string]::IsNullOrWhiteSpace($script:HandoffNonce),
+      -not [string]::IsNullOrWhiteSpace($script:ExpectedUserSid),
+      -not [string]::IsNullOrWhiteSpace($script:ExpectedSessionId)
+    )
   $providedCount = @($provided | Where-Object { $_ }).Count
+  if ($providedCount -eq 0 -and $RequireHandoff) {
+    $implicitHandoff = Find-ImplicitUpdateHandoff $ExpectedExecutablePath
+    if ($null -ne $implicitHandoff) {
+      $script:HandoffPath = $implicitHandoff.HandoffPath
+      $script:HandoffNonce = $implicitHandoff.HandoffNonce
+      $script:ExpectedUserSid = $implicitHandoff.ExpectedUserSid
+      $script:ExpectedSessionId = $implicitHandoff.ExpectedSessionId
+      $provided = @(
+        -not [string]::IsNullOrWhiteSpace($script:HandoffPath),
+        -not [string]::IsNullOrWhiteSpace($script:HandoffNonce),
+        -not [string]::IsNullOrWhiteSpace($script:ExpectedUserSid),
+        -not [string]::IsNullOrWhiteSpace($script:ExpectedSessionId)
+      )
+      $providedCount = @($provided | Where-Object { $_ }).Count
+    }
+  }
   if ($providedCount -eq 0) {
     if ($RequireHandoff) {
       Assert-LegacyUpdateBridgeEligibility $ExpectedExecutablePath
@@ -211,7 +310,123 @@ function Get-HandoffBoundary([string] $ExpectedExecutablePath) {
     UserSid = $expectedSid
     SessionId = [int] $expectedSession
     ProcessId = [int] $recordProcessId
+    ExecutablePath = $recordExecutablePath
+    CreatedAtEpochMs = $createdAt
+    ExpiresAtEpochMs = $expiresAt
   }
+}
+
+function Get-UpdateHandoffAcknowledgementPath([object] $Boundary) {
+  if ($null -eq $Boundary) { throw 'Cannot resolve an acknowledgement without an authenticated handoff.' }
+  $directory = [IO.Path]::GetDirectoryName($Boundary.Path)
+  if ([string]::IsNullOrWhiteSpace($directory)) { throw 'Update handoff directory is invalid.' }
+  return [IO.Path]::Combine(
+    [IO.Path]::GetFullPath($directory),
+    ('youyu-update-handoff-' + $Boundary.Nonce + '.ready.json')
+  )
+}
+
+function Assert-CanonicalAcknowledgementDirectory([string] $Directory) {
+  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  if ([string]::IsNullOrWhiteSpace($localAppData)) {
+    throw 'LocalAppData is unavailable for the update acknowledgement.'
+  }
+  $canonicalDirectory = [IO.Path]::GetFullPath([IO.Path]::Combine($localAppData, 'Temp'))
+  if ([IO.Path]::GetFullPath($Directory) -ine $canonicalDirectory) {
+    throw 'Update acknowledgement must stay in the current user LocalAppData Temp directory.'
+  }
+  $directoryItem = Get-Item -LiteralPath $canonicalDirectory -Force -ErrorAction Stop
+  if ($directoryItem.PSIsContainer -eq $false -or ($directoryItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'Update acknowledgement directory is not a regular directory.'
+  }
+}
+
+function Set-PrivateUpdateAcknowledgementAcl([string] $Path, [string] $UserSid) {
+  $sid = [Security.Principal.SecurityIdentifier]::new($UserSid)
+  $security = [Security.AccessControl.FileSecurity]::new()
+  $security.SetOwner($sid)
+  $security.SetAccessRuleProtection($true, $false)
+  $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+    $sid,
+    [Security.AccessControl.FileSystemRights]::FullControl,
+    [Security.AccessControl.InheritanceFlags]::None,
+    [Security.AccessControl.PropagationFlags]::None,
+    [Security.AccessControl.AccessControlType]::Allow
+  )
+  $security.SetAccessRule($rule)
+  [IO.File]::SetAccessControl($Path, $security)
+}
+
+function Assert-PrivateUpdateAcknowledgementAcl([string] $Path, [string] $UserSid) {
+  $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+  $ownerSid = Normalize-UserSid $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+  if ($ownerSid -ine $UserSid) { throw 'Update acknowledgement belongs to a different user SID.' }
+  if (-not $acl.AreAccessRulesProtected) { throw 'Update acknowledgement ACL is not protected.' }
+  $rules = @($acl.Access)
+  if ($rules.Count -ne 1) { throw 'Update acknowledgement ACL is not user-only.' }
+  $rule = $rules[0]
+  if ($rule.IsInherited -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) {
+    throw 'Update acknowledgement ACL is not user-only.'
+  }
+  $ruleSid = Normalize-UserSid $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+  if ($ruleSid -ine $UserSid) { throw 'Update acknowledgement ACL is not user-only.' }
+  $fullControl = [int64] [Security.AccessControl.FileSystemRights]::FullControl
+  if ((([int64] $rule.FileSystemRights) -band $fullControl) -ne $fullControl) {
+    throw 'Update acknowledgement ACL does not grant the target user full control.'
+  }
+}
+
+function Write-AuthenticatedUpdateAcknowledgement([object] $Boundary) {
+  if ($null -eq $Boundary) { throw 'Cannot acknowledge an unauthenticated update handoff.' }
+  $acknowledgementPath = Get-UpdateHandoffAcknowledgementPath $Boundary
+  $directory = [IO.Path]::GetDirectoryName($acknowledgementPath)
+  Assert-CanonicalAcknowledgementDirectory $directory
+  if (Test-Path -LiteralPath $acknowledgementPath) {
+    throw 'Update acknowledgement already exists.'
+  }
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  if ($Boundary.ExpiresAtEpochMs -lt $now) { throw 'Update handoff has expired before acknowledgement.' }
+  $acknowledgement = [ordered]@{
+    version = 1
+    nonce = $Boundary.Nonce
+    handoffPath = $Boundary.Path
+    targetUserSid = $Boundary.UserSid
+    targetSessionId = $Boundary.SessionId
+    targetProcessId = $Boundary.ProcessId
+    executablePath = $Boundary.ExecutablePath
+    acknowledgedAtEpochMs = $now
+    expiresAtEpochMs = $Boundary.ExpiresAtEpochMs
+  }
+  $stagingPath = [IO.Path]::Combine(
+    $directory,
+    ('.youyu-update-handoff-' + $Boundary.Nonce + '.ready-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  )
+  try {
+    [IO.File]::WriteAllText(
+      $stagingPath,
+      (($acknowledgement | ConvertTo-Json -Compress) + [Environment]::NewLine),
+      [Text.UTF8Encoding]::new($false)
+    )
+    Set-PrivateUpdateAcknowledgementAcl $stagingPath $Boundary.UserSid
+    Assert-PrivateUpdateAcknowledgementAcl $stagingPath $Boundary.UserSid
+    [IO.File]::Move($stagingPath, $acknowledgementPath)
+  } finally {
+    if (Test-Path -LiteralPath $stagingPath) {
+      Remove-Item -LiteralPath $stagingPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+  return $acknowledgementPath
+}
+
+function Remove-AuthenticatedUpdateAcknowledgement([object] $Boundary) {
+  if ($null -eq $Boundary) { return }
+  $acknowledgementPath = Get-UpdateHandoffAcknowledgementPath $Boundary
+  if (-not (Test-Path -LiteralPath $acknowledgementPath -PathType Leaf)) { return }
+  $item = Get-Item -LiteralPath $acknowledgementPath -Force
+  if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'Update acknowledgement must be a regular file.'
+  }
+  Remove-Item -LiteralPath $acknowledgementPath -Force -ErrorAction Stop
 }
 
 function Get-InstalledProcesses([string] $ExpectedExecutablePath) {
@@ -261,6 +476,27 @@ function Assert-ProcessBoundary([object[]] $Processes, [object] $Boundary) {
   }
 }
 
+function Assert-AcknowledgementSourceProcess([object[]] $Processes, [object] $Boundary) {
+  if ($null -eq $Boundary -or $Processes.Count -eq 0) { return }
+  $sourceProcesses = @($Processes | Where-Object { [int] $_.ProcessId -eq [int] $Boundary.ProcessId })
+  if ($sourceProcesses.Count -eq 0) {
+    throw 'The authenticated update source process is no longer present for acknowledgement.'
+  }
+}
+
+function Wait-ForAuthenticatedProcessExit([string] $ExpectedExecutablePath, [object] $Boundary) {
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+  while ($true) {
+    $processes = @(Get-InstalledProcesses $ExpectedExecutablePath)
+    Assert-ProcessBoundary $processes $Boundary
+    if ($processes.Count -eq 0) { return }
+    if ([DateTimeOffset]::UtcNow -ge $deadline) {
+      throw 'Timed out waiting for the authenticated YouYu process to exit.'
+    }
+    Start-Sleep -Milliseconds 250
+  }
+}
+
 function Invoke-AtomicHandoffConsume([object] $Boundary) {
   if ($null -eq $Boundary) { return }
 
@@ -285,6 +521,14 @@ function Invoke-AtomicHandoffConsume([object] $Boundary) {
     # The lease has already been consumed. Avoid reporting a completed install as
     # failed solely because antivirus briefly retained the private tombstone.
     [Console]::Error.WriteLine('Consumed update handoff cleanup was deferred.')
+  }
+  try {
+    Remove-AuthenticatedUpdateAcknowledgement $Boundary
+  } catch {
+    # The handoff itself is already gone, so an acknowledgement cannot be reused
+    # to authorize another install. Leave a diagnostic instead of reporting a
+    # completed install as failed solely because antivirus retained the sidecar.
+    [Console]::Error.WriteLine('Consumed update acknowledgement cleanup was deferred.')
   }
 }
 
@@ -322,6 +566,21 @@ try {
     exit 0
   }
 
+  if ($Action -eq 'AcknowledgeAndWait') {
+    $processes = @(Get-InstalledProcesses $expectedPath)
+    Assert-ProcessBoundary $processes $boundary
+    Assert-AcknowledgementSourceProcess $processes $boundary
+    $acknowledgementPath = if ($null -eq $boundary) { $null } else { Write-AuthenticatedUpdateAcknowledgement $boundary }
+    Wait-ForAuthenticatedProcessExit $expectedPath $boundary
+    if ($legacyBridgeActive) { exit 10 }
+    [pscustomobject]@{
+      status = 'acknowledged-and-waited'
+      handoffPresent = $null -ne $boundary
+      acknowledgementPath = $acknowledgementPath
+    } | ConvertTo-Json -Compress
+    exit 0
+  }
+
   if ($Action -eq 'Consume') {
     $processes = @(Get-InstalledProcesses $expectedPath)
     Assert-ProcessBoundary $processes $boundary
@@ -336,16 +595,7 @@ try {
     exit 0
   }
 
-  $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
-  while ($true) {
-    $processes = @(Get-InstalledProcesses $expectedPath)
-    Assert-ProcessBoundary $processes $boundary
-    if ($processes.Count -eq 0) { break }
-    if ([DateTimeOffset]::UtcNow -ge $deadline) {
-      throw 'Timed out waiting for the authenticated YouYu process to exit.'
-    }
-    Start-Sleep -Milliseconds 250
-  }
+  Wait-ForAuthenticatedProcessExit $expectedPath $boundary
 
   if ($legacyBridgeActive) { exit 10 }
   exit 0

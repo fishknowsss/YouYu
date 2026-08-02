@@ -483,22 +483,11 @@
 }
 
 .update-row.has-update-activity {
-  grid-template-columns: 14px minmax(0, 1fr) var(--settings-action-width);
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) calc(var(--settings-action-width) + 22px);
 }
 
 .update-row.is-downloading.has-update-activity {
-  grid-template-columns: 14px minmax(0, 1fr) minmax(110px, 128px) var(--settings-action-width);
-}
-
-.update-row > .update-activity-spinner {
-  grid-column: 1;
-  align-self: center;
-  justify-self: center;
-}
-
-.update-row.has-update-activity .update-copy {
-  grid-column: 2;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 128px) calc(var(--settings-action-width) + 22px);
 }
 
 .update-copy {
@@ -566,26 +555,22 @@
   transition: width 180ms ease;
 }
 
-.update-row button {
+.update-action-group {
   grid-column: 2;
-  width: 100%;
-  height: var(--settings-control-height);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
-.update-row.is-downloading button {
+.update-action-group .settings-footer-action {
+  width: var(--settings-action-width);
+  flex: 0 0 var(--settings-action-width);
+}
+
+.update-row.is-downloading .update-action-group {
   grid-column: 3;
-}
-
-.update-row.has-update-activity button {
-  grid-column: 3;
-}
-
-.update-row.is-downloading.has-update-activity .update-progress {
-  grid-column: 3;
-}
-
-.update-row.is-downloading.has-update-activity button {
-  grid-column: 4;
 }
 
 .usage-registration {

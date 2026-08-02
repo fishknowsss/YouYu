@@ -14,7 +14,7 @@ describe('update and exit lifecycle safety', () => {
       install.indexOf('updateInstallerLaunchPending = true')
     );
     expect(install.indexOf('await updateCoordinator.prepareInstall()')).toBeLessThan(
-      install.indexOf('autoUpdater.quitAndInstall(true, true)')
+      install.indexOf('launchDownloadedUpdateInstaller({ installerPath, handoff })')
     );
   });
 
@@ -62,18 +62,34 @@ describe('update and exit lifecycle safety', () => {
     expect(deferredLaunch).toContain('!updateInstallerLaunchPending');
     expect(deferredLaunch).toContain('updateInstallAttempt !== installAttempt');
     expect(deferredLaunch.indexOf('updateInstallAttempt !== installAttempt')).toBeLessThan(
-      deferredLaunch.indexOf('autoUpdater.quitAndInstall(true, true)')
+      deferredLaunch.indexOf('launchDownloadedUpdateInstaller({ installerPath, handoff })')
     );
     expect(deferredLaunch.indexOf('updateInstallerLaunchStarted = true')).toBeLessThan(
-      deferredLaunch.indexOf('autoUpdater.quitAndInstall(true, true)')
+      deferredLaunch.indexOf('app.quit()')
     );
-    expect(deferredLaunch.indexOf('cleanupFinished = true')).toBeLessThan(
-      deferredLaunch.indexOf('autoUpdater.quitAndInstall(true, true)')
-    );
-    expect(deferredLaunch.indexOf('isQuitting = true')).toBeLessThan(
-      deferredLaunch.indexOf('autoUpdater.quitAndInstall(true, true)')
+    expect(deferredLaunch.indexOf('cleanupFinished = true')).toBeLessThan(deferredLaunch.indexOf('app.quit()'));
+    expect(deferredLaunch.indexOf('isQuitting = true')).toBeLessThan(deferredLaunch.indexOf('app.quit()'));
+    expect(deferredLaunch.indexOf('launchDownloadedUpdateInstaller({ installerPath, handoff })')).toBeLessThan(
+      deferredLaunch.indexOf('updateInstallerLaunchStarted = true')
     );
     expect(install.slice(0, install.indexOf('deferUpdateInstallerLaunch'))).not.toContain('isQuitting = true');
+  });
+
+  it('does not let electron-updater take an unbridged quit-time elevation path', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const setup = source.slice(
+      source.indexOf('function setupAutoUpdates()'),
+      source.indexOf('function setUpdateSnapshot')
+    );
+    const install = source.slice(
+      source.indexOf('async function installDownloadedUpdate'),
+      source.indexOf('function recoverFromUpdateInstallerLaunchFailure')
+    );
+
+    expect(setup).toContain('autoUpdater.autoInstallOnAppQuit = false');
+    expect(install).toContain('resolveDownloadedUpdateInstallerPath');
+    expect(install).toContain('launchDownloadedUpdateInstaller({ installerPath, handoff })');
+    expect(install).not.toContain('autoUpdater.quitAndInstall');
   });
 
   it('keeps the application alive throughout the installer handoff buffer', async () => {

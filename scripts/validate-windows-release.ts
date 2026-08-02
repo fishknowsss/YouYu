@@ -58,7 +58,7 @@ const updateMetadata = parse(await readFile(expectedUpdateMetadataPath, 'utf8'))
   version?: unknown;
   path?: unknown;
   sha512?: unknown;
-  files?: Array<{ url?: unknown; sha512?: unknown }>;
+  files?: Array<{ url?: unknown; sha512?: unknown; isAdminRightsRequired?: unknown }>;
 };
 if (updateMetadata.version !== packageJson.version) {
   throw new Error(`${expectedUpdateMetadataName} has unexpected version: ${String(updateMetadata.version)}`);
@@ -69,6 +69,13 @@ if (updateMetadata.path !== expectedInstallerName) {
 const metadataFile = updateMetadata.files?.find((entry) => entry.url === expectedInstallerName);
 if (!metadataFile || typeof metadataFile.sha512 !== 'string' || typeof updateMetadata.sha512 !== 'string') {
   throw new Error(`${expectedUpdateMetadataName} is missing installer checksums`);
+}
+// Legacy clients (including 1.7.0) still use electron-updater's NSIS route.
+// Make its UAC elevation deterministic; the new installer then recovers the
+// SID/session-bound handoff without depending on UAC environment inheritance.
+// New clients do not call quitAndInstall and use the explicit CLI bridge instead.
+if (metadataFile.isAdminRightsRequired !== true) {
+  throw new Error(`${expectedUpdateMetadataName} must require elevation for the legacy NSIS update route`);
 }
 const installerSha512 = await hashFileSha512(expectedInstallerPath);
 if (metadataFile.sha512 !== installerSha512 || updateMetadata.sha512 !== installerSha512) {

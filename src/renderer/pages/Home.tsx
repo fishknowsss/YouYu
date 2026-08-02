@@ -182,13 +182,12 @@ function EasyUpdateNotice({
 
   return (
     <aside
-      className={`easy-update-notice ${noticeClass}${active ? ' has-update-activity' : ''}`}
+      className={`easy-update-notice ${noticeClass}`}
       role="status"
       aria-live="polite"
       aria-atomic="true"
       aria-busy={active}
     >
-      {active && <span className="update-activity-spinner" aria-hidden="true" />}
       <div className="easy-update-copy">
         <span>软件更新</span>
         <strong>{text}</strong>
@@ -201,13 +200,16 @@ function EasyUpdateNotice({
           <span className="easy-update-transfer">{formatUpdateTransfer(update)}</span>
         </>
       )}
-      {downloaded ? (
-        <button className="wide-button" disabled={busy} onClick={onInstallUpdate}>
-          安装
-        </button>
-      ) : (
-        <span className="easy-update-state">{stateLabel}</span>
-      )}
+      <div className="easy-update-action">
+        {active && <span className="update-activity-spinner" aria-hidden="true" />}
+        {downloaded ? (
+          <button className="wide-button" disabled={busy} onClick={onInstallUpdate}>
+            安装
+          </button>
+        ) : (
+          <span className="easy-update-state">{stateLabel}</span>
+        )}
+      </div>
     </aside>
   );
 }

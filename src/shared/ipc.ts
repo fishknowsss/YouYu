@@ -83,10 +83,13 @@ export type StrategyGroup = {
 
 export type RuntimeConnectionStats = {
   id?: string;
+  start?: string;
   upload?: number;
   download?: number;
   chains?: string[];
   metadata?: {
+    network?: string;
+    type?: string;
     host?: string;
     destinationIP?: string;
     process?: string;
