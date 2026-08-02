@@ -167,7 +167,9 @@ const devConnectivity: Array<{
   }
 ];
 
-export function createDevYouYuApi(options: { preset?: 'readme'; updateStatus?: 'installing' } = {}): YouYuApi {
+export function createDevYouYuApi(
+  options: { preset?: 'readme'; updateStatus?: 'installing'; noticeTone?: 'info' | 'warning' } = {}
+): YouYuApi {
   let petState: DesktopPetState = 'idle';
   const petListeners = new Set<(state: DesktopPetState) => void>();
   const petSequenceTimers = new Set<number>();
@@ -223,6 +225,18 @@ export function createDevYouYuApi(options: { preset?: 'readme'; updateStatus?: '
       ...snapshot.update,
       status: 'installing',
       message: updateInstallingMessage
+    };
+  }
+  if (options.noticeTone) {
+    snapshot.userNotice = {
+      revision: 1,
+      tone: options.noticeTone,
+      message:
+        options.noticeTone === 'warning'
+          ? '演示警告：请在维护完成后重新检查网络状态。'
+          : '演示通知：后台可向指定用户发送一条纯文本提醒。',
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+      updatedAt: new Date().toISOString()
     };
   }
 
@@ -511,6 +525,9 @@ export function createDevYouYuApi(options: { preset?: 'readme'; updateStatus?: '
       if (snapshot.userNotice?.revision !== revision) return snapshot;
       return publish({ userNotice: undefined });
     },
+    async wakeRemoteConfig() {
+      return undefined;
+    },
     async syncRemoteConfig() {
       requireTrafficIdentity();
       return publish({
@@ -645,13 +662,15 @@ export function installDevApiFallback() {
     const params = new URLSearchParams(window.location.search);
     const preset = params.get('demo') === 'readme' ? 'readme' : undefined;
     const updateStatus = params.get('update') === 'installing' ? 'installing' : undefined;
-    window.youyu = createDevYouYuApi({ preset, updateStatus });
+    const noticeTone =
+      params.get('notice') === 'warning' ? 'warning' : params.get('notice') === 'info' ? 'info' : undefined;
+    window.youyu = createDevYouYuApi({ preset, updateStatus, noticeTone });
   }
 }
 
 function createReadmePreviewSnapshot(base: AppSnapshot): AppSnapshot {
   const gib = 1024 ** 3;
-  const checkedAt = '2026-07-18T05:26:12.000Z';
+  const checkedAt = '2026-08-02T09:26:12.000Z';
   return {
     ...base,
     status: 'running',

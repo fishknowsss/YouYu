@@ -14,6 +14,7 @@ const noArgumentChannels = new Set<string>([
   ipcChannels.wavePet,
   ipcChannels.startPetDrag,
   ipcChannels.showMainWindow,
+  ipcChannels.wakeRemoteConfig,
   ipcChannels.testAllNodes,
   ipcChannels.cancelNodeTests,
   ipcChannels.testAllConnectivity,

@@ -7,6 +7,7 @@ describe('IPC argument schemas', () => {
     expect(parseIpcArguments(ipcChannels.selectNode, ['  Node A  '])).toEqual(['Node A']);
     expect(parseIpcArguments(ipcChannels.stopPetDrag, [undefined])).toEqual([undefined]);
     expect(parseIpcArguments(ipcChannels.acknowledgeUserNotice, [7])).toEqual([7]);
+    expect(parseIpcArguments(ipcChannels.wakeRemoteConfig, [])).toEqual([]);
     expect(parseIpcArguments(ipcChannels.start, [{ requestId: 'request-123' }])).toEqual([
       { requestId: 'request-123' }
     ]);

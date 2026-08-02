@@ -33,17 +33,15 @@ describe('targeted user notice', () => {
     expect(container.querySelector('b')).toBeNull();
   });
 
-  it('acknowledges from both the confirmation and close controls', async () => {
+  it('acknowledges only from the explicit confirmation control', async () => {
     const acknowledge = vi.fn(async () => false);
     const container = await renderNotice(createNotice('info', '测试通知'), acknowledge);
     const confirm = findButton(container, '知道了');
 
     await act(async () => confirm?.click());
     expect(acknowledge).toHaveBeenLastCalledWith(3);
-
-    const close = container.querySelector<HTMLButtonElement>('[aria-label="关闭通知"]');
-    await act(async () => close?.click());
-    expect(acknowledge).toHaveBeenCalledTimes(2);
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[aria-label="关闭通知"]')).toBeNull();
   });
 
   it('hides expired or invalid notices', async () => {
@@ -71,13 +69,11 @@ describe('targeted user notice', () => {
     expect(container.querySelector('.user-notice-banner')).toBeNull();
   });
 
-  it('keeps long message content scrollable while the confirmation row stays in the viewport', () => {
+  it('keeps long message content scrollable while the confirmation row stays in the desktop card', () => {
     const styles = readFileSync(join(process.cwd(), 'src/renderer/styles/user-notice.css'), 'utf8');
-    expect(styles).toMatch(
-      /\.user-notice-banner\s*\{[^}]*max-height:\s*calc\(100vh - 88px\);[^}]*overflow:\s*hidden;/s
-    );
-    expect(styles).toMatch(/\.user-notice-copy\s*\{[^}]*max-height:\s*calc\(100vh - 180px\);[^}]*overflow:\s*auto;/s);
-    expect(styles).toMatch(/\.user-notice-confirm\s*\{[^}]*grid-column:\s*2 \/ 4;/s);
+    expect(styles).toMatch(/\.user-notice-banner\s*\{[^}]*height:\s*100%;[^}]*overflow:\s*hidden;/s);
+    expect(styles).toMatch(/\.user-notice-copy\s*\{[^}]*max-height:\s*112px;[^}]*overflow:\s*auto;/s);
+    expect(styles).toMatch(/\.user-notice-actions\s*\{[^}]*grid-area:\s*actions;/s);
   });
 });
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { DesktopNoticeApp } from './DesktopNoticeApp';
 import { installDevApiFallback } from './devApi';
 import './styles.css';
 
@@ -10,6 +11,11 @@ installDevApiFallback();
 
 async function getRootComponent() {
   const params = new URLSearchParams(window.location.search);
+  if (params.get('view') === 'notice') {
+    document.documentElement.classList.add('desktop-notice-window');
+    document.body.classList.add('desktop-notice-window');
+    return DesktopNoticeApp;
+  }
   const isPetView = !__YOUYU_DISABLE_PET__ && params.get('view') === 'pet';
   if (!isPetView) return App;
 

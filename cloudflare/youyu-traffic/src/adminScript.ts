@@ -7,6 +7,10 @@ export const ADMIN_SCRIPT = String.raw`
   const DEFAULT_TRAFFIC_EXPIRY = '2026-08-11T20:00:00.000Z';
   const ADMIN_API_PAGE_SIZE = 200;
   const ADMIN_API_MAX_ROWS = 5000;
+  const USER_NOTICE_DEFAULT_DURATION_MINUTES = 10;
+  const USER_NOTICE_MIN_DURATION_MINUTES = 5;
+  const USER_NOTICE_MAX_DURATION_MINUTES = 10080;
+  const USER_NOTICE_DURATION_STEP_MINUTES = 5;
   const viewMeta = {
     overview: { title: '概览' },
     users: { title: '用户管理' },
@@ -55,7 +59,8 @@ export const ADMIN_SCRIPT = String.raw`
     mergePreviewSequence: 0,
     mergePreviewState: null,
     mergeRequestId: '',
-    profileRequestId: ''
+    profileRequestId: '',
+    noticeRequestId: ''
   };
 
   const adminShell = document.getElementById('adminShell');
@@ -102,7 +107,7 @@ export const ADMIN_SCRIPT = String.raw`
   const userNoticeEnabled = document.getElementById('userNoticeEnabled');
   const userNoticeTone = document.getElementById('userNoticeTone');
   const userNoticeMessage = document.getElementById('userNoticeMessage');
-  const userNoticeExpiresAt = document.getElementById('userNoticeExpiresAt');
+  const userNoticeDuration = document.getElementById('userNoticeDuration');
   const userNoticeError = document.getElementById('userNoticeError');
   const mergeTargetEl = document.getElementById('mergeTarget');
   const mergePreviewEl = document.getElementById('mergePreview');
@@ -206,7 +211,11 @@ export const ADMIN_SCRIPT = String.raw`
     event.preventDefault();
     runAction(document.getElementById('saveUserNotice'), '保存中', saveUserNotice);
   });
-  document.getElementById('clearUserNotice').addEventListener('click', () => runAction(document.getElementById('clearUserNotice'), '清除中', clearUserNotice));
+  document.getElementById('clearUserNotice').addEventListener('click', () => runAction(document.getElementById('clearUserNotice'), '停用中', clearUserNotice));
+  document.getElementById('decreaseUserNoticeDuration').addEventListener('click', () => adjustUserNoticeDuration(-USER_NOTICE_DURATION_STEP_MINUTES));
+  document.getElementById('increaseUserNoticeDuration').addEventListener('click', () => adjustUserNoticeDuration(USER_NOTICE_DURATION_STEP_MINUTES));
+  [userNoticeEnabled, userNoticeTone].forEach((element) => element.addEventListener('change', () => { state.noticeRequestId = ''; }));
+  [userNoticeMessage, userNoticeDuration].forEach((element) => element.addEventListener('input', () => { state.noticeRequestId = ''; }));
   userModeEl.addEventListener('change', updateUserModeState);
   mergeTargetEl.addEventListener('change', resetMergePreview);
   mergeResolutionEl.addEventListener('change', updateMergeConfirmState);
@@ -1007,7 +1016,7 @@ export const ADMIN_SCRIPT = String.raw`
     usersBody.replaceChildren();
     updateUserSortHeaders();
     if (!visible.length) {
-      appendEmptyTableRow(usersBody, 9, '暂无符合条件的用户');
+      appendEmptyTableRow(usersBody, 10, '暂无符合条件的用户');
     } else {
       visible.forEach((user) => {
         const row = document.createElement('tr');
@@ -1020,6 +1029,12 @@ export const ADMIN_SCRIPT = String.raw`
         if (user.id === state.activeUserId) row.classList.add('is-active');
         appendTableCell(row, displayName, 'name-cell', displayName);
         appendTableCell(row).appendChild(createSubscriptionBadge(user.subscriptionState));
+        appendTableCell(
+          row,
+          formatAppVersion(user.latestAppVersion),
+          'client-version',
+          user.appVersionReportedAt ? '最近版本上报：' + formatTime(user.appVersionReportedAt) : '尚未收到客户端版本上报'
+        );
         appendTableCell(row, logicalDevices, 'num', '逻辑设备 ' + logicalDevices + '，原始记录 ' + deviceRecords);
         appendTableCell(row, formatBytes(nonNegativeNumber(user.uploadBytes)), 'num');
         appendTableCell(row, formatBytes(nonNegativeNumber(user.downloadBytes)), 'num');
@@ -1095,7 +1110,10 @@ export const ADMIN_SCRIPT = String.raw`
     const name = user.name || user.id || '未命名';
     document.getElementById('activeUserInitial').textContent = Array.from(name)[0] || '—';
     document.getElementById('activeUserName').textContent = name;
-    document.getElementById('activeUserId').textContent = '用户 ID：' + (user.id || '—') + ' · 最近上报：' + formatTime(user.lastSeenAt);
+    document.getElementById('activeUserId').textContent =
+      '用户 ID：' + (user.id || '—') +
+      ' · 客户端：' + formatAppVersion(user.latestAppVersion) +
+      ' · 最近上报：' + formatTime(user.appVersionReportedAt || user.lastSeenAt);
     document.getElementById('activeUserDevices').textContent = nonNegativeNumber(user.devices);
     document.getElementById('activeUserRecords').textContent = nonNegativeNumber(user.deviceRecords);
     document.getElementById('activeUserTraffic').textContent = formatBytes(totalBytes(user));
@@ -1170,6 +1188,7 @@ export const ADMIN_SCRIPT = String.raw`
     state.activeUserName = '';
     state.activeUserTrafficRows = [];
     state.profileRequestId = '';
+    state.noticeRequestId = '';
     state.userTrafficPage = 1;
     drawerContent.hidden = true;
     drawerPlaceholder.hidden = false;
@@ -1194,6 +1213,7 @@ export const ADMIN_SCRIPT = String.raw`
 
   function renderUserManagement(profile, notice) {
     state.profileRequestId = '';
+    state.noticeRequestId = '';
     userProfileNameEl.value = profile && profile.name ? String(profile.name) : state.activeUserName;
     clearFieldError(userProfileNameEl, userProfileNameError);
     renderUserNotice(notice);
@@ -1204,15 +1224,30 @@ export const ADMIN_SCRIPT = String.raw`
     userNoticeEnabled.value = !exists || notice.enabled !== false ? 'true' : 'false';
     userNoticeTone.value = exists && notice.tone === 'warning' ? 'warning' : 'info';
     userNoticeMessage.value = exists && typeof notice.message === 'string' ? notice.message : '';
-    userNoticeExpiresAt.value = exists && notice.expiresAt
-      ? formatShanghaiDateTimeInput(notice.expiresAt)
-      : formatShanghaiDateTimeInput(new Date(Date.now() + 7 * 86400000).toISOString());
+    userNoticeDuration.value = String(getNoticeDurationForEditor(notice, exists));
     clearFieldError(userNoticeMessage, userNoticeError);
-    userNoticeExpiresAt.removeAttribute('aria-invalid');
+    userNoticeDuration.removeAttribute('aria-invalid');
     const expired = exists && dateValue(notice.expiresAt) <= Date.now();
     const stateText = !exists ? '未设置' : notice.enabled === false ? '已停用' : expired ? '已过期' : '已启用';
     userNoticeState.textContent = stateText;
     userNoticeState.className = 'chip ' + (stateText === '已启用' ? 'green' : stateText === '已过期' ? 'red' : 'gray');
+  }
+
+  function getNoticeDurationForEditor(notice, exists) {
+    if (!exists || notice.enabled === false) return USER_NOTICE_DEFAULT_DURATION_MINUTES;
+    const remaining = dateValue(notice.expiresAt) - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) return USER_NOTICE_DEFAULT_DURATION_MINUTES;
+    const rounded = Math.ceil(remaining / (USER_NOTICE_DURATION_STEP_MINUTES * 60000)) * USER_NOTICE_DURATION_STEP_MINUTES;
+    return Math.min(USER_NOTICE_MAX_DURATION_MINUTES, Math.max(USER_NOTICE_MIN_DURATION_MINUTES, rounded));
+  }
+
+  function adjustUserNoticeDuration(delta) {
+    const current = parseUserNoticeDuration(userNoticeDuration.value);
+    const base = current === null ? USER_NOTICE_DEFAULT_DURATION_MINUTES : current;
+    const next = Math.min(USER_NOTICE_MAX_DURATION_MINUTES, Math.max(USER_NOTICE_MIN_DURATION_MINUTES, base + delta));
+    userNoticeDuration.value = String(next);
+    clearFieldError(userNoticeDuration, userNoticeError);
+    state.noticeRequestId = '';
   }
 
   function renderUserTraffic(name, rows) {
@@ -1435,17 +1470,19 @@ export const ADMIN_SCRIPT = String.raw`
     const userId = state.activeUserId;
     const sequence = state.userLoadSequence;
     const message = userNoticeMessage.value.trim();
-    const expiresAt = parseShanghaiDateTimeInput(userNoticeExpiresAt.value);
+    const durationMinutes = parseUserNoticeDuration(userNoticeDuration.value);
     clearFieldError(userNoticeMessage, userNoticeError);
-    userNoticeExpiresAt.removeAttribute('aria-invalid');
+    userNoticeDuration.removeAttribute('aria-invalid');
     if (!message || Array.from(message).length > 500 || hasControlCharacters(message)) {
       setFieldError(userNoticeMessage, userNoticeError, '请输入 1 至 500 个有效字符');
       return;
     }
-    if (!expiresAt || (userNoticeEnabled.value === 'true' && dateValue(expiresAt) <= Date.now())) {
-      setFieldError(userNoticeExpiresAt, userNoticeError, '启用时请选择未来的到期时间');
+    if (durationMinutes === null) {
+      setFieldError(userNoticeDuration, userNoticeError, '持续时间请使用 5 分钟的整数倍（5 分钟至 7 天）');
       return;
     }
+    const requestId = state.noticeRequestId || createRequestId();
+    state.noticeRequestId = requestId;
     const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/notice', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1453,13 +1490,15 @@ export const ADMIN_SCRIPT = String.raw`
         enabled: userNoticeEnabled.value === 'true',
         message: message,
         tone: userNoticeTone.value === 'warning' ? 'warning' : 'info',
-        expiresAt: expiresAt
+        durationMinutes: durationMinutes,
+        requestId: requestId
       })
     });
     if (!isCurrentUserContext(userId, sequence)) return;
+    state.noticeRequestId = '';
     renderUserNotice(data.notice || null);
-    setStatus('定向通知已保存');
-    showToast('定向通知已保存');
+    setStatus('定向通知已保存并重新计时');
+    showToast('定向通知已保存并重新计时');
   }
 
   async function clearUserNotice() {
@@ -1468,6 +1507,7 @@ export const ADMIN_SCRIPT = String.raw`
     const sequence = state.userLoadSequence;
     const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/notice/reset', { method: 'POST' });
     if (!isCurrentUserContext(userId, sequence)) return;
+    state.noticeRequestId = '';
     renderUserNotice(data.notice || null);
     setStatus('定向通知已停用');
     showToast('定向通知已停用');
@@ -2045,6 +2085,19 @@ export const ADMIN_SCRIPT = String.raw`
     return formatShanghaiDateTimeInput(iso) === value ? iso : '';
   }
 
+  function parseUserNoticeDuration(value) {
+    const text = String(value || '').trim();
+    if (!/^(?:0|[1-9]\d*)$/.test(text)) return null;
+    const minutes = Number(text);
+    if (
+      !Number.isSafeInteger(minutes) ||
+      minutes < USER_NOTICE_MIN_DURATION_MINUTES ||
+      minutes > USER_NOTICE_MAX_DURATION_MINUTES ||
+      minutes % USER_NOTICE_DURATION_STEP_MINUTES !== 0
+    ) return null;
+    return minutes;
+  }
+
   function formatQuotaExpiryTitle(value) {
     const time = dateValue(value);
     if (!time) return '';
@@ -2092,6 +2145,12 @@ export const ADMIN_SCRIPT = String.raw`
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return '—';
     return date.toLocaleString('zh-CN', { hour12: false });
+  }
+
+  function formatAppVersion(value) {
+    const version = typeof value === 'string' ? value.trim() : '';
+    if (!version) return '未上报';
+    return /^v/i.test(version) ? version : 'v' + version;
   }
 
   function formatShortTime(value) {

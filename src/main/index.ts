@@ -46,8 +46,9 @@ import {
   type StoredNodeAvailability
 } from './storage/nodeHealth';
 import { createNodeHealthCoordinator, type NodeHealthContext } from './nodeHealthCoordinator';
+import { resolvePetNoticePlacement } from './noticePlacement';
 import { resolveDefaultSubscriptionUrl } from './defaultSubscription';
-import { resolveAppVersion } from './appVersion';
+import { formatReportedAppVersion, resolveAppVersion } from './appVersion';
 import { TrafficReporter } from './traffic/reporter';
 import { createTemporaryRuntimeLeaseManager, createTrafficRegistrationCoordinator } from './traffic/registration';
 import { TrafficStore } from './traffic/store';
@@ -122,6 +123,7 @@ const resumeProxyAfterRelaunch = process.argv.includes(resumeProxyAfterRelaunchA
 const windowsStartupTask = createWindowsStartupTask({ executablePath: process.execPath });
 let mainWindow: BrowserWindow | null = null;
 let petWindow: BrowserWindow | null = null;
+let noticeWindow: BrowserWindow | null = null;
 const petIpcChannels = new Set<string>([
   ipcChannels.getSnapshot,
   ipcChannels.wavePet,
@@ -130,15 +132,22 @@ const petIpcChannels = new Set<string>([
   ipcChannels.setPetMousePassthrough,
   ipcChannels.showMainWindow
 ]);
+const noticeIpcChannels = new Set<string>([ipcChannels.getSnapshot, ipcChannels.acknowledgeUserNotice]);
 const ipcMain: Pick<typeof electronIpcMain, 'handle'> = {
   handle(channel, listener) {
     return electronIpcMain.handle(channel, (event, ...args) => {
-      const trusted = event.sender === mainWindow?.webContents || event.sender === petWindow?.webContents;
+      const trusted =
+        event.sender === mainWindow?.webContents ||
+        event.sender === petWindow?.webContents ||
+        event.sender === noticeWindow?.webContents;
       if (!trusted || event.senderFrame !== event.sender.mainFrame || !isTrustedRendererUrl(event.senderFrame.url)) {
         throw new Error('untrusted IPC sender');
       }
       if (event.sender === petWindow?.webContents && !petIpcChannels.has(channel)) {
         throw new Error('IPC channel is not available to the pet window');
+      }
+      if (event.sender === noticeWindow?.webContents && !noticeIpcChannels.has(channel)) {
+        throw new Error('IPC channel is not available to the notice window');
       }
       return listener(event, ...parseIpcArguments(channel, args));
     });
@@ -155,6 +164,7 @@ let petDragTimer: ReturnType<typeof setInterval> | undefined;
 let petDockTimer: ReturnType<typeof setTimeout> | undefined;
 let petSequenceTimer: ReturnType<typeof setTimeout> | undefined;
 let petMoveTimer: ReturnType<typeof setInterval> | undefined;
+let noticeLayoutFrame: ReturnType<typeof setTimeout> | undefined;
 let petMousePassthrough = false;
 let petFullscreenProbe: WindowsFullscreenProbe | undefined;
 let petFullscreenProbeHelperPath: string | undefined;
@@ -221,6 +231,10 @@ const petWindowSize = {
   width: 190,
   height: 212
 };
+const noticeWindowSize = {
+  width: 336,
+  height: 188
+};
 const petDragFrameMs = 16;
 const petSideBlinkDelayMs = 7000;
 const petSideSleepDelayMs = 28000;
@@ -233,6 +247,7 @@ const nodeHealthRepairDelayMs = 3000;
 const nodeHealthRetryDelayMs = 8000;
 const nodeHealthFailureThreshold = 2;
 const remoteConfigSyncIntervalMs = 3 * 60 * 1000;
+const remoteConfigWakeCooldownMs = 12 * 1000;
 const updatePeriodicIntervalMs = 30 * 60 * 1000;
 const trafficSnapshotBroadcastIntervalMs = 10000;
 const runtimeRecoveryInitialDelayMs = 1500;
@@ -273,6 +288,7 @@ const appVersion = resolveAppVersion({
 });
 const appBuildChannel = normalizeBuildChannel(__YOUYU_BUILD_CHANNEL__);
 const appUpdateChannel = getUpdateChannelName(appBuildChannel);
+const reportedAppVersion = formatReportedAppVersion(appVersion, appBuildChannel);
 updateSnapshot = {
   currentVersion: appVersion,
   buildChannel: appBuildChannel,
@@ -316,7 +332,7 @@ const nodeHealthStore = new NodeHealthStore(app.getPath('userData'));
 const remoteConfigClient = new RemoteConfigClient({
   baseDir: app.getPath('userData'),
   endpoint: readOptionalText(trafficApiUrlPath),
-  appVersion,
+  appVersion: reportedAppVersion,
   store: trafficStore,
   fetch: directNetworkFetch
 });
@@ -332,7 +348,7 @@ const remoteSubscriptionCoordinator = createRemoteSubscriptionCoordinator({
 const trafficReporter = new TrafficReporter({
   store: trafficStore,
   endpoint: readOptionalText(trafficApiUrlPath),
-  appVersion,
+  appVersion: reportedAppVersion,
   intervalMs: 2 * 60 * 1000,
   fetch: directNetworkFetch,
   getDeviceKey: () => deviceKeyProvider.getDeviceKey(),
@@ -583,6 +599,21 @@ async function syncRemoteConfig(options: RemoteConfigSyncOptions = {}): Promise<
   const { source = 'system', signal, ...request } = options;
   const result = await subscriptionCoordinator.refresh('remote', { source, signal, request });
   return result.applied ? Boolean(result.value) : false;
+}
+
+let lastRemoteConfigWakeAt = 0;
+function wakeRemoteConfig(): void {
+  if (cleanupStarted || cleanupFinished || isQuitting) return;
+  const now = Date.now();
+  if (now - lastRemoteConfigWakeAt < remoteConfigWakeCooldownMs) return;
+  lastRemoteConfigWakeAt = now;
+  void syncRemoteConfig({
+    proxyUrl: getRuntimeTrafficProxyUrl(),
+    restartIfRunning: true,
+    quiet: true,
+    intentGeneration: runtimeIntent.capture(),
+    source: 'system'
+  }).catch(() => undefined);
 }
 
 function startRemoteConfigPolling() {
@@ -1227,6 +1258,100 @@ function sendSnapshotToWindows(snapshot: AppSnapshot) {
       window.webContents.send(ipcChannels.snapshotUpdated, snapshot);
     }
   });
+  scheduleNoticeLayout(snapshot);
+}
+
+let latestNoticeSnapshot: AppSnapshot | undefined;
+let noticeExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+let scheduledNoticeExpiryAt: string | undefined;
+
+function scheduleNoticeLayout(snapshot?: AppSnapshot): void {
+  if (snapshot) latestNoticeSnapshot = snapshot;
+  if (noticeLayoutFrame) return;
+  noticeLayoutFrame = setTimeout(() => {
+    noticeLayoutFrame = undefined;
+    void syncNoticeWindow().catch((error) => console.error('notice window synchronization failed', error));
+  }, 0);
+  noticeLayoutFrame.unref?.();
+}
+
+function clearNoticeExpiryTimer(): void {
+  if (noticeExpiryTimer) {
+    clearTimeout(noticeExpiryTimer);
+    noticeExpiryTimer = undefined;
+  }
+  scheduledNoticeExpiryAt = undefined;
+}
+
+function scheduleNoticeExpiry(notice: AppSnapshot['userNotice']): void {
+  if (!notice) {
+    clearNoticeExpiryTimer();
+    return;
+  }
+  if (scheduledNoticeExpiryAt === notice.expiresAt) return;
+  clearNoticeExpiryTimer();
+  const expiresAt = Date.parse(notice.expiresAt);
+  const delay = expiresAt - Date.now();
+  if (!Number.isFinite(delay)) return;
+  scheduledNoticeExpiryAt = notice.expiresAt;
+  noticeExpiryTimer = setTimeout(
+    () => {
+      noticeExpiryTimer = undefined;
+      scheduledNoticeExpiryAt = undefined;
+      void broadcastSnapshot().catch((error) => console.error('notice expiry snapshot failed', error));
+    },
+    Math.max(0, delay)
+  );
+  noticeExpiryTimer.unref?.();
+}
+
+function hasActiveUserNotice(snapshot: AppSnapshot | undefined): boolean {
+  const expiresAt = snapshot?.userNotice ? Date.parse(snapshot.userNotice.expiresAt) : Number.NaN;
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
+function getNoticeWindowBounds(): Rectangle | undefined {
+  if (petFeatureEnabled && petVisibilityController.isFullscreenSuppressed()) return undefined;
+
+  if (petFeatureEnabled && petWindow && !petWindow.isDestroyed() && petWindow.isVisible()) {
+    const petBounds = petWindow.getBounds();
+    const workArea = screen.getDisplayMatching(petBounds).workArea;
+    return resolvePetNoticePlacement(petBounds, workArea, noticeWindowSize);
+  }
+
+  const workArea = screen.getPrimaryDisplay().workArea;
+  return {
+    ...noticeWindowSize,
+    x: workArea.x + workArea.width - noticeWindowSize.width - 16,
+    y: workArea.y + workArea.height - noticeWindowSize.height - 16
+  };
+}
+
+function hideNoticeWindow(): void {
+  if (!noticeWindow || noticeWindow.isDestroyed()) return;
+  noticeWindow.hide();
+}
+
+async function syncNoticeWindow(): Promise<void> {
+  const snapshot = latestNoticeSnapshot;
+  scheduleNoticeExpiry(snapshot?.userNotice);
+  if (!hasActiveUserNotice(snapshot) || cleanupStarted || isQuitting) {
+    hideNoticeWindow();
+    return;
+  }
+
+  const bounds = getNoticeWindowBounds();
+  if (!bounds) {
+    hideNoticeWindow();
+    return;
+  }
+
+  const win = await createNoticeWindow();
+  if (!win || win.isDestroyed()) return;
+  win.setBounds(bounds, false);
+  if (!win.webContents.isLoading() && !win.isVisible()) {
+    win.showInactive();
+  }
 }
 
 async function broadcastSnapshot(): Promise<AppSnapshot> {
@@ -2051,6 +2176,9 @@ function registerIpc() {
     sendSnapshotToWindows(snapshot);
     return snapshot;
   });
+  ipcMain.handle(ipcChannels.wakeRemoteConfig, async () => {
+    wakeRemoteConfig();
+  });
   ipcMain.handle(ipcChannels.syncRemoteConfig, async (event, request?: OperationRequest) => {
     return runCancelableOperation(
       event.sender.id,
@@ -2126,6 +2254,7 @@ function showMainWindow() {
   }
   mainWindow.show();
   mainWindow.focus();
+  wakeRemoteConfig();
 }
 
 function sendPetState() {
@@ -2323,6 +2452,7 @@ function applyPetWindowVisibility(visible = petVisibilityController.isVisible())
     petWindow.setAlwaysOnTop(false);
     petWindow.hide();
     setPetState('idle');
+    scheduleNoticeLayout();
     refreshTrayMenu();
     return;
   }
@@ -2332,6 +2462,7 @@ function applyPetWindowVisibility(visible = petVisibilityController.isVisible())
   applyPetWindowTaskbarPolicy(petWindow);
   setPetMousePassthrough(true, true);
   syncPetStateToRuntime();
+  scheduleNoticeLayout();
   refreshTrayMenu();
 }
 
@@ -2660,6 +2791,7 @@ async function dockPetToBottomRight() {
   const area = screen.getDisplayMatching(petWindow.getBounds()).workArea;
   const bounds = getBottomRightEdgeBounds(area);
   petWindow.setBounds(bounds, false);
+  scheduleNoticeLayout();
   savePetBounds(bounds);
   setPetState('edgeRight');
 }
@@ -2703,6 +2835,7 @@ function animatePetBounds(target: Rectangle, durationMs: number, onDone: () => v
       },
       false
     );
+    scheduleNoticeLayout();
 
     if (progress >= 1) {
       clearPetMoveTimer();
@@ -2766,6 +2899,7 @@ function startPetDrag() {
       ),
       false
     );
+    scheduleNoticeLayout();
   }, petDragFrameMs);
 }
 
@@ -2782,6 +2916,7 @@ function stopPetDrag(options: { settle?: boolean } = {}): DesktopPetState | unde
   if (shouldSettle) {
     const settled = settlePetBounds(petWindow.getBounds());
     petWindow.setBounds(settled.bounds, false);
+    scheduleNoticeLayout();
     savePetBounds(settled.bounds);
     const nextState: DesktopPetState = settled.dockState ?? 'fallRecover';
     if (settled.dockState) {
@@ -2949,6 +3084,8 @@ async function createWindow() {
     win.hide();
   });
 
+  win.on('focus', () => wakeRemoteConfig());
+
   win.on('closed', () => {
     if (mainWindow === win) {
       mainWindow = null;
@@ -2960,6 +3097,69 @@ async function createWindow() {
   } else {
     await win.loadFile(join(__dirname, '../renderer/index.html'));
   }
+}
+
+async function createNoticeWindow(): Promise<BrowserWindow | undefined> {
+  if (noticeWindow && !noticeWindow.isDestroyed()) return noticeWindow;
+  if (cleanupStarted || isQuitting) return undefined;
+
+  const win = new BrowserWindow({
+    ...noticeWindowSize,
+    useContentSize: true,
+    title: 'YouYu 通知',
+    type: 'toolbar',
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    focusable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    show: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      sandbox: true
+    }
+  });
+  noticeWindow = win;
+  secureRendererNavigation(win);
+  win.setAlwaysOnTop(true, 'floating');
+  win.setFocusable(false);
+  win.setSkipTaskbar(true);
+  win.setIgnoreMouseEvents(false);
+
+  win.webContents.on('preload-error', (_event, preloadPath, error) => {
+    console.error(`notice preload failed: ${preloadPath}`, error);
+  });
+  win.once('ready-to-show', () => {
+    void syncNoticeWindow().catch((error) => console.error('notice window initial synchronization failed', error));
+  });
+  win.on('closed', () => {
+    if (noticeWindow === win) {
+      noticeWindow = null;
+    }
+  });
+
+  if (isDev && process.env.ELECTRON_RENDERER_URL) {
+    const url = new URL(process.env.ELECTRON_RENDERER_URL);
+    url.searchParams.set('view', 'notice');
+    await win.loadURL(url.toString());
+  } else {
+    await win.loadFile(join(__dirname, '../renderer/index.html'), {
+      query: { view: 'notice' }
+    });
+  }
+  return win;
 }
 
 async function createPetWindow() {
@@ -3012,12 +3212,16 @@ async function createPetWindow() {
   win.webContents.on('context-menu', () => {
     showPetContextMenu();
   });
+  win.on('move', () => scheduleNoticeLayout());
+  win.on('show', () => scheduleNoticeLayout());
+  win.on('hide', () => scheduleNoticeLayout());
 
   win.once('ready-to-show', () => {
     applyPetWindowVisibility();
     applyPetWindowTaskbarPolicy(win);
     sendPetState();
     syncPetStateToRuntime();
+    scheduleNoticeLayout();
     refreshTrayMenu();
   });
 
@@ -3030,6 +3234,7 @@ async function createPetWindow() {
     clearPetDockBehavior();
     clearPetSequenceTimer();
     clearPetMoveTimer();
+    scheduleNoticeLayout();
     refreshTrayMenu();
   });
 
@@ -3103,6 +3308,12 @@ async function cleanupBeforeExit(options: ExitCleanupOptions = {}): Promise<bool
     clearTimeout(trafficSnapshotBroadcastTimer);
     trafficSnapshotBroadcastTimer = undefined;
   }
+  if (noticeLayoutFrame) {
+    clearTimeout(noticeLayoutFrame);
+    noticeLayoutFrame = undefined;
+  }
+  clearNoticeExpiryTimer();
+  hideNoticeWindow();
   updateCoordinator.pause();
   stopNodeHealthMonitor();
   appRuntimeCoordinator.stopRecovery();
@@ -3192,6 +3403,7 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
       createTray();
       void createWindow().catch((error) => recordError('创建主窗口失败', error));
       startRemoteConfigPolling();
+      void broadcastSnapshot().catch((error) => recordError('初始化通知快照失败', error));
       void refreshTrafficTotalsFromServer();
       if (petFeatureEnabled) {
         void createPetWindow().catch((error) => recordError('创建桌宠窗口失败', error));

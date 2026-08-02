@@ -3,7 +3,6 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { TrafficRegistrationInput } from '../shared/ipc';
 import { isActionErrorMessage } from './actionMessages';
 import { AppShell } from './components/AppShell';
-import { UserNoticeBanner } from './components/UserNoticeBanner';
 import { useAppController } from './hooks/useAppController';
 import { Home } from './pages/Home';
 import { NodeSelect } from './pages/NodeSelect';
@@ -19,6 +18,15 @@ const PetPreviewPage = lazy(async () => {
 
 export function App() {
   const controller = useAppController();
+
+  useEffect(() => {
+    const wakeRemoteConfig = () => {
+      const api = window.youyu;
+      if (api) void api.wakeRemoteConfig().catch(() => undefined);
+    };
+    window.addEventListener('online', wakeRemoteConfig);
+    return () => window.removeEventListener('online', wakeRemoteConfig);
+  }, []);
 
   if (controller.snapshotLoaded && (!controller.registered || controller.registrationSwitchOpen)) {
     const switchingUser = controller.registered && controller.registrationSwitchOpen;
@@ -102,7 +110,6 @@ export function App() {
           />
         )}
       </AppShell>
-      <UserNoticeBanner notice={controller.snapshot.userNotice} onAcknowledge={controller.acknowledgeUserNotice} />
       {controller.busyLabel === '修复中' && (
         <div className="busy-overlay" aria-live="polite" aria-label="修复中">
           <div className="busy-spinner" />

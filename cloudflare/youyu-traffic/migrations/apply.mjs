@@ -17,7 +17,8 @@ const migrationFiles = [
   '2026-07-19-add-admin-traffic-limit.sql',
   '2026-07-20-add-traffic-expiry-and-trend-index.sql',
   '2026-08-01-persist-traffic-report-dedup.sql',
-  '2026-08-02-add-user-profiles-and-notices.sql'
+  '2026-08-02-add-user-profiles-and-notices.sql',
+  '2026-08-02-add-user-notice-audit.sql'
 ].map((name) => resolve(migrationDirectory, name));
 const repairableColumns = new Map([
   ['remote_config.subscription_url', 'TEXT'],
@@ -100,7 +101,19 @@ const requiredTableColumns = {
     'renamed_at'
   ],
   user_notices: ['user_id', 'revision', 'enabled', 'message', 'tone', 'expires_at', 'updated_at'],
-  user_notice_acknowledgements: ['user_id', 'revision', 'device_id', 'acknowledged_at']
+  user_notice_acknowledgements: ['user_id', 'revision', 'device_id', 'acknowledged_at'],
+  user_notice_audit: [
+    'id',
+    'request_id',
+    'user_id',
+    'revision',
+    'enabled',
+    'message',
+    'tone',
+    'duration_minutes',
+    'expires_at',
+    'updated_at'
+  ]
 };
 const requiredIndexes = {
   idx_devices_user_id: { table: 'devices', columns: ['user_id'] },
@@ -117,6 +130,10 @@ const requiredIndexes = {
   idx_user_notice_acknowledgements_device: {
     table: 'user_notice_acknowledgements',
     columns: ['device_id', 'user_id', 'revision']
+  },
+  idx_user_notice_audit_user_updated: {
+    table: 'user_notice_audit',
+    columns: ['user_id', 'updated_at']
   }
 };
 const requiredPrimaryKeyColumns = {
@@ -134,13 +151,15 @@ const requiredPrimaryKeyColumns = {
   user_name_aliases: ['normalized_name'],
   user_profile_audit: ['id'],
   user_notices: ['user_id'],
-  user_notice_acknowledgements: ['user_id', 'revision', 'device_id']
+  user_notice_acknowledgements: ['user_id', 'revision', 'device_id'],
+  user_notice_audit: ['id']
 };
 const requiredUniqueConstraintColumns = {
   users: [['normalized_name']],
   devices: [['device_seed']],
   user_merge_audit: [['request_id'], ['source_user_id']],
-  user_profile_audit: [['request_id']]
+  user_profile_audit: [['request_id']],
+  user_notice_audit: [['request_id']]
 };
 const baseTableNames = new Set(['users', 'devices', 'traffic_daily']);
 const baseIndexNames = new Set(['idx_devices_user_id', 'idx_traffic_daily_user_date']);

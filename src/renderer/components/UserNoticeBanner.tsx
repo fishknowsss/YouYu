@@ -5,10 +5,12 @@ const maximumTimerDelayMs = 2_147_000_000;
 
 export function UserNoticeBanner({
   notice,
-  onAcknowledge
+  onAcknowledge,
+  variant = 'desktop'
 }: {
   notice?: UserNotice;
   onAcknowledge: (revision: number) => boolean | Promise<boolean>;
+  variant?: 'desktop';
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now);
@@ -50,7 +52,7 @@ export function UserNoticeBanner({
 
   const warning = notice.tone === 'warning';
   return (
-    <div className="user-notice-layer">
+    <div className={`user-notice-layer ${variant}`}>
       <section
         className={`user-notice-banner ${warning ? 'warning' : 'info'}`}
         role={warning ? 'alert' : 'status'}
@@ -65,18 +67,16 @@ export function UserNoticeBanner({
           <strong id="user-notice-title">{warning ? '重要通知' : '通知'}</strong>
           <p id="user-notice-message">{notice.message}</p>
         </div>
-        <button
-          type="button"
-          className="user-notice-close"
-          aria-label="关闭通知"
-          disabled={submitting}
-          onClick={() => void acknowledge()}
-        >
-          ×
-        </button>
-        <button type="button" className="user-notice-confirm" disabled={submitting} onClick={() => void acknowledge()}>
-          {submitting ? '确认中' : '知道了'}
-        </button>
+        <div className="user-notice-actions">
+          <button
+            type="button"
+            className="user-notice-confirm"
+            disabled={submitting}
+            onClick={() => void acknowledge()}
+          >
+            {submitting ? '确认中' : '知道了'}
+          </button>
+        </div>
       </section>
     </div>
   );

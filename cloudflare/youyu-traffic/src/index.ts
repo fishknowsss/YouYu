@@ -72,7 +72,8 @@ type UserNoticeInput = {
   enabled?: unknown;
   message?: unknown;
   tone?: unknown;
-  expiresAt?: unknown;
+  durationMinutes?: unknown;
+  requestId?: unknown;
 };
 
 type UserNoticeAcknowledgementInput = {
@@ -217,6 +218,10 @@ const USER_NOTICE_MAX_MESSAGE_LENGTH = 500;
 const ACTIVATION_MAX_DEVICE_NAME_LENGTH = 120;
 const ACTIVATION_MAX_PLATFORM_LENGTH = 32;
 const ACTIVATION_MAX_APP_VERSION_LENGTH = 64;
+const USER_NOTICE_DEFAULT_DURATION_MINUTES = 10;
+const USER_NOTICE_MIN_DURATION_MINUTES = 5;
+const USER_NOTICE_DURATION_STEP_MINUTES = 5;
+const USER_NOTICE_MAX_DURATION_MINUTES = 7 * 24 * 60;
 const TRAFFIC_TIME_ZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ANOMALY_THRESHOLD_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_TRAFFIC_LIMIT_BYTES = 3148 * 1024 * 1024 * 1024;
@@ -411,14 +416,7 @@ async function activate(request: Request, env: Env): Promise<Response> {
   );
   const platform = normalizeActivationText(input.platform, ACTIVATION_MAX_PLATFORM_LENGTH, 'invalid platform');
   if (platform && !/^[A-Za-z0-9._-]+$/.test(platform)) throw new HttpError(400, 'invalid platform');
-  const appVersion = normalizeActivationText(
-    input.appVersion,
-    ACTIVATION_MAX_APP_VERSION_LENGTH,
-    'invalid app version'
-  );
-  if (appVersion && !/^[A-Za-z0-9][A-Za-z0-9.+_-]*$/.test(appVersion)) {
-    throw new HttpError(400, 'invalid app version');
-  }
+  const appVersion = parseAppVersion(input.appVersion);
 
   const now = new Date().toISOString();
 
@@ -521,13 +519,40 @@ async function getClientConfig(request: Request, env: Env): Promise<Response> {
   const deviceId = url.searchParams.get('deviceId')?.trim() ?? '';
   if (!userId || !deviceId) throw new HttpError(400, 'missing identity');
 
-  await verifyDeviceRequest(request, env, userId, deviceId, '');
+  if (url.searchParams.getAll('appVersion').length > 1) throw new HttpError(400, 'invalid app version');
+  const appVersion = parseAppVersion(url.searchParams.get('appVersion'));
+  const canonicalUserId = await verifyDeviceRequest(request, env, userId, deviceId, '');
+  await updateDeviceVersionHeartbeat(env, canonicalUserId, deviceId, appVersion);
   const state = await getEffectiveClientStateForDevice(env, deviceId);
   return json({
     config: state.config,
     profile: { ...state.profile, userId },
     ...(state.notice ? { notice: state.notice } : {})
   });
+}
+
+async function updateDeviceVersionHeartbeat(
+  env: Env,
+  userId: string,
+  deviceId: string,
+  appVersion: string | null
+): Promise<void> {
+  const now = new Date().toISOString();
+  const heartbeat = await env.DB.prepare(
+    `UPDATE devices
+     SET last_seen_at = ?, app_version = COALESCE(?, app_version)
+     WHERE id = ?
+       AND user_id = ?
+       AND EXISTS (
+         SELECT 1 FROM users
+         WHERE users.id = devices.user_id
+           AND users.status = 'active'
+           AND users.merged_into_user_id IS NULL
+       )`
+  )
+    .bind(now, appVersion, deviceId, userId)
+    .run();
+  if (getD1Changes(heartbeat) === 0) throw new HttpError(409, 'device state changed');
 }
 
 async function getAdminConfig(env: Env): Promise<Response> {
@@ -723,6 +748,19 @@ type AdminUserNoticeRow = {
   tone: string;
   expiresAt: string;
   updatedAt: string;
+  durationMinutes: number | null;
+};
+
+type AdminUserNoticeAuditRow = {
+  requestId: string;
+  userId: string;
+  revision: number;
+  enabled: number;
+  message: string;
+  tone: string;
+  durationMinutes: number;
+  expiresAt: string;
+  updatedAt: string;
 };
 
 async function getAdminUserProfile(env: Env, userId: string): Promise<Response> {
@@ -901,39 +939,158 @@ async function getAdminUserNotice(env: Env, userId: string): Promise<Response> {
 
 async function updateAdminUserNotice(request: Request, env: Env, userId: string): Promise<Response> {
   const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserNoticeInput;
-  assertOnlyFields(input, ['enabled', 'message', 'tone', 'expiresAt'], 'unsupported notice field');
+  assertOnlyFields(input, ['enabled', 'message', 'tone', 'durationMinutes', 'requestId'], 'unsupported notice field');
   if (typeof input.enabled !== 'boolean') throw new HttpError(400, 'invalid notice enabled');
   const message = parseNoticeMessage(input.message);
   const tone = parseNoticeTone(input.tone);
-  const expiresAt = parseNoticeExpiresAt(input.expiresAt);
-  const now = new Date().toISOString();
+  const durationMinutes = parseNoticeDurationMinutes(input.durationMinutes);
+  const requestId = parseOptionalRequestId(input.requestId);
+  const recovered = await recoverAdminUserNoticeUpdate(env, userId, {
+    enabled: input.enabled,
+    message,
+    tone,
+    durationMinutes,
+    requestId
+  });
+  if (recovered) return recovered;
 
-  const results = await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO user_notices (user_id, revision, enabled, message, tone, expires_at, updated_at)
-       SELECT users.id, 1, ?, ?, ?, ?, ?
-       FROM users
-       WHERE users.id = ? AND users.status = 'active' AND users.merged_into_user_id IS NULL
-       ON CONFLICT(user_id) DO UPDATE SET
-         revision = user_notices.revision + 1,
-         enabled = excluded.enabled,
-         message = excluded.message,
-         tone = excluded.tone,
-         expires_at = excluded.expires_at,
-         updated_at = excluded.updated_at
-       WHERE user_notices.enabled <> excluded.enabled
-          OR user_notices.message <> excluded.message
-          OR user_notices.tone <> excluded.tone
-          OR user_notices.expires_at <> excluded.expires_at`
-    ).bind(input.enabled ? 1 : 0, message, tone, expiresAt, now, userId),
-    env.DB.prepare(
-      `DELETE FROM user_notice_acknowledgements
-       WHERE user_id = ?
-         AND revision <> COALESCE((SELECT revision FROM user_notices WHERE user_id = ?), -1)`
-    ).bind(userId, userId)
-  ]);
-  if (getD1Changes(results[0]) === 0) await requireKnownUser(env, userId);
-  return json({ notice: await getAdminUserNoticeRow(env, userId) });
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  const expiresAt = new Date(nowDate.getTime() + durationMinutes * 60 * 1000).toISOString();
+  const auditId = crypto.randomUUID();
+  const auditGuard = 'EXISTS (SELECT 1 FROM user_notice_audit WHERE id = ?)';
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO user_notice_audit
+           (id, request_id, user_id, revision, enabled, message, tone, duration_minutes, expires_at, updated_at)
+         SELECT ?, ?, users.id, 1, ?, ?, ?, ?, ?, ?
+         FROM users
+         WHERE users.id = ? AND users.status = 'active' AND users.merged_into_user_id IS NULL`
+      ).bind(auditId, requestId, input.enabled ? 1 : 0, message, tone, durationMinutes, expiresAt, now, userId),
+      env.DB.prepare(
+        `INSERT INTO user_notices (user_id, revision, enabled, message, tone, expires_at, updated_at)
+         SELECT users.id, 1, ?, ?, ?, ?, ?
+         FROM users
+         WHERE users.id = ?
+           AND users.status = 'active'
+           AND users.merged_into_user_id IS NULL
+           AND ${auditGuard}
+         ON CONFLICT(user_id) DO UPDATE SET
+           revision = user_notices.revision + 1,
+           enabled = excluded.enabled,
+           message = excluded.message,
+           tone = excluded.tone,
+           expires_at = excluded.expires_at,
+           updated_at = excluded.updated_at`
+      ).bind(input.enabled ? 1 : 0, message, tone, expiresAt, now, userId, auditId),
+      env.DB.prepare(
+        `UPDATE user_notice_audit
+         SET revision = (SELECT revision FROM user_notices WHERE user_id = ?)
+         WHERE id = ?
+           AND user_id = ?
+           AND EXISTS (SELECT 1 FROM user_notices WHERE user_id = ?)`
+      ).bind(userId, auditId, userId, userId),
+      env.DB.prepare(
+        `DELETE FROM user_notice_acknowledgements
+         WHERE user_id = ?
+           AND revision <> COALESCE((SELECT revision FROM user_notices WHERE user_id = ?), -1)`
+      ).bind(userId, userId)
+    ]);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      const recoveredAfterConflict = await recoverAdminUserNoticeUpdate(env, userId, {
+        enabled: input.enabled,
+        message,
+        tone,
+        durationMinutes,
+        requestId
+      });
+      if (recoveredAfterConflict) return recoveredAfterConflict;
+    }
+    throw error;
+  }
+
+  const committed = await getAdminUserNoticeAuditById(env, auditId, userId);
+  if (!committed) {
+    await requireKnownUser(env, userId);
+    throw new HttpError(409, 'notice state changed');
+  }
+  return json({
+    ok: true,
+    alreadyApplied: false,
+    requestId,
+    notice: toAdminUserNotice(committed)
+  });
+}
+
+async function recoverAdminUserNoticeUpdate(
+  env: Env,
+  userId: string,
+  expected: {
+    enabled: boolean;
+    message: string;
+    tone: 'info' | 'warning';
+    durationMinutes: number;
+    requestId: string;
+  }
+): Promise<Response | null> {
+  const audit = await env.DB.prepare(
+    `SELECT
+       request_id AS requestId,
+       user_id AS userId,
+       revision,
+       enabled,
+       message,
+       tone,
+       duration_minutes AS durationMinutes,
+       expires_at AS expiresAt,
+       updated_at AS updatedAt
+     FROM user_notice_audit
+     WHERE request_id = ?`
+  )
+    .bind(expected.requestId)
+    .first<AdminUserNoticeAuditRow>();
+  if (!audit) return null;
+  if (
+    audit.userId !== userId ||
+    (audit.enabled === 1) !== expected.enabled ||
+    audit.message !== expected.message ||
+    audit.tone !== expected.tone ||
+    audit.durationMinutes !== expected.durationMinutes
+  ) {
+    throw new HttpError(409, 'notice request conflict');
+  }
+  return json({
+    ok: true,
+    alreadyApplied: true,
+    requestId: expected.requestId,
+    notice: toAdminUserNotice(audit)
+  });
+}
+
+async function getAdminUserNoticeAuditById(
+  env: Env,
+  auditId: string,
+  userId: string
+): Promise<AdminUserNoticeAuditRow | null> {
+  return env.DB.prepare(
+    `SELECT
+       request_id AS requestId,
+       user_id AS userId,
+       revision,
+       enabled,
+       message,
+       tone,
+       duration_minutes AS durationMinutes,
+       expires_at AS expiresAt,
+       updated_at AS updatedAt
+     FROM user_notice_audit
+     WHERE id = ? AND user_id = ?`
+  )
+    .bind(auditId, userId)
+    .first<AdminUserNoticeAuditRow>();
 }
 
 async function resetAdminUserNotice(env: Env, userId: string): Promise<Response> {
@@ -953,21 +1110,42 @@ async function resetAdminUserNotice(env: Env, userId: string): Promise<Response>
 async function getAdminUserNoticeRow(
   env: Env,
   userId: string
-): Promise<(RemoteUserNotice & { enabled: boolean }) | null> {
+): Promise<(RemoteUserNotice & { enabled: boolean; durationMinutes: number }) | null> {
   const row = await env.DB.prepare(
-    `SELECT revision, enabled, message, tone, expires_at AS expiresAt, updated_at AS updatedAt
-     FROM user_notices WHERE user_id = ?`
+    `SELECT
+       user_notices.revision,
+       user_notices.enabled,
+       user_notices.message,
+       user_notices.tone,
+       user_notices.expires_at AS expiresAt,
+       user_notices.updated_at AS updatedAt,
+       user_notice_audit.duration_minutes AS durationMinutes
+     FROM user_notices
+     LEFT JOIN user_notice_audit
+       ON user_notice_audit.user_id = user_notices.user_id
+      AND user_notice_audit.revision = user_notices.revision
+     WHERE user_notices.user_id = ?`
   )
     .bind(userId)
     .first<AdminUserNoticeRow>();
   if (!row) return null;
+  return toAdminUserNotice(row);
+}
+
+function toAdminUserNotice(
+  row: Pick<
+    AdminUserNoticeRow,
+    'revision' | 'enabled' | 'message' | 'tone' | 'expiresAt' | 'updatedAt' | 'durationMinutes'
+  >
+): RemoteUserNotice & { enabled: boolean; durationMinutes: number } {
   return {
     revision: row.revision,
     enabled: row.enabled === 1,
     message: row.message,
     tone: row.tone === 'warning' ? 'warning' : 'info',
     expiresAt: row.expiresAt,
-    updatedAt: row.updatedAt
+    updatedAt: row.updatedAt,
+    durationMinutes: normalizeStoredNoticeDurationMinutes(row.durationMinutes)
   };
 }
 
@@ -1151,13 +1329,26 @@ async function mergeAdminUser(request: Request, env: Env, sourceUserId: string):
   ];
 
   if (context.sourceNotice && !context.targetNotice) {
+    const transferredNoticeAuditId = crypto.randomUUID();
+    const transferredNoticeRequestId = crypto.randomUUID();
     statements.push(
       env.DB.prepare(
         `INSERT INTO user_notices (user_id, revision, enabled, message, tone, expires_at, updated_at)
          SELECT ?, revision, enabled, message, tone, expires_at, updated_at
-         FROM user_notices
-         WHERE user_id = ? AND ${auditGuard}`
+          FROM user_notices
+          WHERE user_id = ? AND ${auditGuard}`
       ).bind(context.target.id, context.source.id, auditId),
+      env.DB.prepare(
+        `INSERT INTO user_notice_audit
+           (id, request_id, user_id, revision, enabled, message, tone, duration_minutes, expires_at, updated_at)
+         SELECT ?, ?, ?, source_audit.revision, source_audit.enabled, source_audit.message, source_audit.tone,
+                source_audit.duration_minutes, source_audit.expires_at, source_audit.updated_at
+         FROM user_notice_audit source_audit
+         INNER JOIN user_notices source_notice
+           ON source_notice.user_id = source_audit.user_id
+          AND source_notice.revision = source_audit.revision
+         WHERE source_audit.user_id = ? AND ${auditGuard}`
+      ).bind(transferredNoticeAuditId, transferredNoticeRequestId, context.target.id, context.source.id, auditId),
       env.DB.prepare(
         `INSERT OR IGNORE INTO user_notice_acknowledgements (user_id, revision, device_id, acknowledged_at)
          SELECT ?, revision, device_id, acknowledged_at
@@ -1444,14 +1635,7 @@ async function reportTraffic(request: Request, env: Env): Promise<Response> {
   if (!reportId) throw new HttpError(400, 'invalid report id');
 
   await verifyDeviceRequest(request, env, userId, deviceId, bodyText);
-  const appVersion = normalizeActivationText(
-    input.appVersion,
-    ACTIVATION_MAX_APP_VERSION_LENGTH,
-    'invalid app version'
-  );
-  if (appVersion && !/^[A-Za-z0-9][A-Za-z0-9.+_-]*$/.test(appVersion)) {
-    throw new HttpError(400, 'invalid app version');
-  }
+  const appVersion = parseAppVersion(input.appVersion);
   if (upload === 0 && download === 0) {
     const heartbeat = await env.DB.prepare(
       `UPDATE devices
@@ -2031,10 +2215,12 @@ async function listUsers(env: Env, pagination: AdminPagination): Promise<Respons
        END AS subscriptionState,
        COALESCE(device_totals.devices, 0) AS devices,
        COALESCE(device_totals.deviceRecords, 0) AS deviceRecords,
-       COALESCE(traffic_totals.uploadBytes, 0) AS uploadBytes,
-       COALESCE(traffic_totals.downloadBytes, 0) AS downloadBytes,
-       device_totals.lastSeenAt AS lastSeenAt,
-       COALESCE(anomaly_totals.anomalies, 0) AS anomalies,
+        COALESCE(traffic_totals.uploadBytes, 0) AS uploadBytes,
+        COALESCE(traffic_totals.downloadBytes, 0) AS downloadBytes,
+        device_totals.lastSeenAt AS lastSeenAt,
+        latest_version.app_version AS latestAppVersion,
+        latest_version.last_seen_at AS appVersionReportedAt,
+        COALESCE(anomaly_totals.anomalies, 0) AS anomalies,
        anomaly_totals.lastAnomalyAt AS lastAnomalyAt
      FROM users
      LEFT JOIN (
@@ -2070,8 +2256,17 @@ async function listUsers(env: Env, pagination: AdminPagination): Promise<Respons
        SELECT user_id, SUM(upload_bytes) AS uploadBytes, SUM(download_bytes) AS downloadBytes
        FROM traffic_daily
        GROUP BY user_id
-     ) traffic_totals ON traffic_totals.user_id = users.id
-      LEFT JOIN (
+      ) traffic_totals ON traffic_totals.user_id = users.id
+      LEFT JOIN devices latest_version
+        ON latest_version.id = (
+          SELECT candidate.id
+          FROM devices candidate
+          WHERE candidate.user_id = users.id
+            AND COALESCE(TRIM(candidate.app_version), '') <> ''
+          ORDER BY candidate.last_seen_at DESC, candidate.id DESC
+          LIMIT 1
+        )
+       LEFT JOIN (
         SELECT user_id, COUNT(*) AS anomalies, MAX(created_at) AS lastAnomalyAt
         FROM traffic_anomalies
         GROUP BY user_id
@@ -2641,6 +2836,14 @@ function normalizeActivationText(value: unknown, maxLength: number, errorMessage
   return text;
 }
 
+function parseAppVersion(value: unknown): string | null {
+  const appVersion = normalizeActivationText(value, ACTIVATION_MAX_APP_VERSION_LENGTH, 'invalid app version');
+  if (appVersion && !/^[A-Za-z0-9][A-Za-z0-9.+_-]*$/.test(appVersion)) {
+    throw new HttpError(400, 'invalid app version');
+  }
+  return appVersion;
+}
+
 function isBoundedText(value: string, maxLength: number): boolean {
   return Array.from(value).length <= maxLength && !hasControlCharacters(value);
 }
@@ -2840,9 +3043,34 @@ function parseNoticeTone(value: unknown): 'info' | 'warning' {
   throw new HttpError(400, 'invalid notice tone');
 }
 
-function parseNoticeExpiresAt(value: unknown): string {
-  if (typeof value !== 'string') throw new HttpError(400, 'invalid notice expiry');
-  return parseStrictIsoDateTime(value.trim(), 'invalid notice expiry');
+function parseNoticeDurationMinutes(value: unknown): number {
+  if (value === undefined) return USER_NOTICE_DEFAULT_DURATION_MINUTES;
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < USER_NOTICE_MIN_DURATION_MINUTES ||
+    value > USER_NOTICE_MAX_DURATION_MINUTES ||
+    value % USER_NOTICE_DURATION_STEP_MINUTES !== 0
+  ) {
+    throw new HttpError(400, 'invalid notice duration');
+  }
+  return value;
+}
+
+function normalizeStoredNoticeDurationMinutes(value: unknown): number {
+  return typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value >= USER_NOTICE_MIN_DURATION_MINUTES &&
+    value <= USER_NOTICE_MAX_DURATION_MINUTES &&
+    value % USER_NOTICE_DURATION_STEP_MINUTES === 0
+    ? value
+    : USER_NOTICE_DEFAULT_DURATION_MINUTES;
+}
+
+function parseOptionalRequestId(value: unknown): string {
+  const requestId = typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : crypto.randomUUID();
+  if (!isUuid(requestId)) throw new HttpError(400, 'invalid request id');
+  return requestId;
 }
 
 function parseNoticeRevision(value: unknown): number {
@@ -2925,6 +3153,7 @@ function errorCodeFor(status: number, message: string): string {
     'invalid json': 'INVALID_JSON',
     'invalid name': 'INVALID_NAME',
     'invalid notice enabled': 'INVALID_NOTICE_ENABLED',
+    'invalid notice duration': 'INVALID_NOTICE_DURATION',
     'invalid notice expiry': 'INVALID_NOTICE_EXPIRY',
     'invalid notice message': 'INVALID_NOTICE_MESSAGE',
     'invalid notice revision': 'INVALID_NOTICE_REVISION',
@@ -2953,6 +3182,7 @@ function errorCodeFor(status: number, message: string): string {
     'not found': 'NOT_FOUND',
     'name conflict': 'NAME_CONFLICT',
     'notice state changed': 'NOTICE_STATE_CHANGED',
+    'notice request conflict': 'NOTICE_REQUEST_CONFLICT',
     'profile request conflict': 'PROFILE_REQUEST_CONFLICT',
     'profile state changed': 'PROFILE_STATE_CHANGED',
     'registration conflict': 'REGISTRATION_CONFLICT',

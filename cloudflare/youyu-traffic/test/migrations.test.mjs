@@ -24,7 +24,8 @@ test('legacy database can apply every migration in order', () => {
     '2026-07-19-add-admin-traffic-limit.sql',
     '2026-07-20-add-traffic-expiry-and-trend-index.sql',
     '2026-08-01-persist-traffic-report-dedup.sql',
-    '2026-08-02-add-user-profiles-and-notices.sql'
+    '2026-08-02-add-user-profiles-and-notices.sql',
+    '2026-08-02-add-user-notice-audit.sql'
   ]) {
     database.exec(readFileSync(new URL(`migrations/${name}`, baseUrl), 'utf8'));
   }
@@ -44,7 +45,8 @@ test('legacy database can apply every migration in order', () => {
     'user_name_aliases',
     'user_profile_audit',
     'user_notices',
-    'user_notice_acknowledgements'
+    'user_notice_acknowledgements',
+    'user_notice_audit'
   ]) {
     assert.ok(tables.includes(table), `${table} should exist`);
   }

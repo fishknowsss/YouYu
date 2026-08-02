@@ -19,6 +19,12 @@ export function resolveAppVersion(options: AppVersionOptions): string {
   }
 }
 
+export function formatReportedAppVersion(version: string, buildChannel: 'standard' | 'in' | 'no'): string {
+  if (buildChannel === 'in') return `${version}-IN`;
+  if (buildChannel === 'no') return `${version}-NO`;
+  return version;
+}
+
 function normalizeVersion(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

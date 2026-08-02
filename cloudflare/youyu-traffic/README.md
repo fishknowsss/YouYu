@@ -87,6 +87,11 @@ Authorization: Bearer <ADMIN_TOKEN>
 `page.nextOffset`. The admin page follows these bounded pages instead of relying on silently truncated SQL results;
 it fails explicitly if one view would exceed its 5,000-row in-memory safety limit.
 
+Each user-list item also includes `latestAppVersion` and `appVersionReportedAt`. They come from the most recently
+seen device row that has a non-empty version, populated by activation, authenticated `GET /api/config`, or authenticated
+traffic reporting. They are inventory metadata, not a live-online signal. New desktop builds label internal and
+no-pet channels as `-IN` and `-NO`; older clients can legitimately report an unlabelled version string.
+
 ```http
 GET /api/admin/config
 POST /api/admin/config
@@ -160,16 +165,19 @@ POST /api/admin/users/<userId>/notice/reset
 Authorization: Bearer <ADMIN_TOKEN>
 Content-Type: application/json
 
-{ "enabled": true, "message": "今晚维护", "tone": "warning", "expiresAt": "2026-08-03T12:00:00.000Z" }
+{ "enabled": true, "message": "今晚维护", "tone": "warning", "durationMinutes": 10, "requestId": "<uuid>" }
 ```
 
 Messages are limited to 500 characters and are data only: no HTML, link, command, or rich-content field is accepted.
-Only `info` and `warning` tones are supported. Each save advances the revision and clears stale acknowledgements.
+Only `info` and `warning` tones are supported. `durationMinutes` defaults to 10, must be an integer multiple of 5
+from 5 through 10,080 (7 days), and is converted to `expiresAt` by the Worker clock. The old `expiresAt` input field
+is rejected. Each new save advances the revision and clears stale acknowledgements.
 Active, unexpired notices are returned only to the selected user's devices. A device acknowledges its current revision
 through signed `POST /api/notices/acknowledge`; the Worker verifies the existing per-device HMAC before storing the
-acknowledgement. Retrying an identical admin payload is a no-op that preserves the current revision, timestamp, and
-acknowledgements; changing any notice field advances the revision so the new content appears again. The reset route
-stops delivery without relying on client state.
+acknowledgement. Retrying the same `requestId` with identical data returns the original result without advancing the
+revision or resetting the server-calculated expiry; reusing that ID with different data returns a conflict. A fresh
+request ID deliberately restarts the duration and advances the revision so the new content appears again. The reset
+route stops delivery without relying on client state.
 
 User records can be previewed and merged through the authenticated admin page or these APIs:
 
@@ -181,7 +189,7 @@ Authorization: Bearer <ADMIN_TOKEN>
 
 The merge keeps every source name alias, moves its devices and traffic to the canonical target, and keeps already
 registered source devices working. If the target has no notice, the source notice and matching device acknowledgements
-move with its devices; otherwise the target notice wins and source acknowledgements cannot suppress it. Notice and
+move with its devices together with its recorded duration; otherwise the target notice wins and source acknowledgements cannot suppress it. Notice and
 configuration fingerprints are checked inside the merge batch so a concurrent admin edit aborts safely. When both users
 have different overrides, the POST body must explicitly choose
 `keep_target`, `use_source`, or `reset_to_global`; the operation is audited and idempotent. The user list reports a

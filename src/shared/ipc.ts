@@ -325,6 +325,7 @@ export type YouYuApi = {
   saveSettings: (settings: AppSettingsInput, request?: OperationRequest) => Promise<AppSnapshot>;
   registerTrafficIdentity: (input: TrafficRegistrationInput) => Promise<AppSnapshot>;
   acknowledgeUserNotice: (revision: number) => Promise<AppSnapshot>;
+  wakeRemoteConfig: () => Promise<void>;
   syncRemoteConfig: (request?: OperationRequest) => Promise<AppSnapshot>;
   exportDiagnostics: () => Promise<DiagnosticExportResult>;
   cancelOperation: (requestId: string) => Promise<boolean>;
@@ -358,6 +359,7 @@ export const ipcChannels = {
   saveSettings: 'youyu:save-settings',
   registerTrafficIdentity: 'youyu:register-traffic-identity',
   acknowledgeUserNotice: 'youyu:acknowledge-user-notice',
+  wakeRemoteConfig: 'youyu:wake-remote-config',
   syncRemoteConfig: 'youyu:sync-remote-config',
   exportDiagnostics: 'youyu:export-diagnostics',
   cancelOperation: 'youyu:cancel-operation',

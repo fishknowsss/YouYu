@@ -193,29 +193,43 @@ test('admin rename keeps the canonical identity and synchronizes the corrected n
   await assertWorkerError(conflict, 409, 'name conflict');
 });
 
-test('targeted notices are delivered as plain device-scoped state and reappear only after a new revision', async (context) => {
+test('targeted notices use server-calculated durations, are idempotent, and reappear only after a new revision', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
   const deviceSeed = '11111111-1111-4111-8111-111111111111';
   const identity = await (await activate(database, { name: 'Alice', deviceSeed })).json();
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const requestId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const createdAt = Date.now();
 
   const created = await requestAdminConfig(
     database,
     `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
-    JSON.stringify({ message: '<b>今晚维护</b>', tone: 'warning', expiresAt, enabled: true })
+    JSON.stringify({
+      message: '<b>今晚维护</b>',
+      tone: 'warning',
+      durationMinutes: 60,
+      enabled: true,
+      requestId
+    })
   );
   assert.equal(created.status, 200);
-  const createdNotice = (await created.json()).notice;
+  const createdBody = await created.json();
+  assert.equal(createdBody.ok, true);
+  assert.equal(createdBody.alreadyApplied, false);
+  assert.equal(createdBody.requestId, requestId);
+  const createdNotice = createdBody.notice;
   assert.match(createdNotice.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.ok(Date.parse(createdNotice.expiresAt) >= createdAt + 60 * 60 * 1000 - 1000);
+  assert.ok(Date.parse(createdNotice.expiresAt) <= Date.now() + 60 * 60 * 1000 + 1000);
   assert.deepEqual(
-    { ...createdNotice, updatedAt: undefined },
+    { ...createdNotice, expiresAt: undefined, updatedAt: undefined },
     {
       revision: 1,
       enabled: true,
       message: '<b>今晚维护</b>',
       tone: 'warning',
-      expiresAt,
+      durationMinutes: 60,
+      expiresAt: undefined,
       updatedAt: undefined
     }
   );
@@ -228,7 +242,7 @@ test('targeted notices are delivered as plain device-scoped state and reappear o
       revision: 1,
       message: '<b>今晚维护</b>',
       tone: 'warning',
-      expiresAt,
+      expiresAt: createdNotice.expiresAt,
       updatedAt: undefined
     }
   );
@@ -242,9 +256,20 @@ test('targeted notices are delivered as plain device-scoped state and reappear o
   const retried = await requestAdminConfig(
     database,
     `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
-    JSON.stringify({ message: '<b>今晚维护</b>', tone: 'warning', expiresAt, enabled: true })
+    JSON.stringify({
+      message: '<b>今晚维护</b>',
+      tone: 'warning',
+      durationMinutes: 60,
+      enabled: true,
+      requestId
+    })
   );
-  assert.deepEqual(await retried.json(), { notice: createdNotice });
+  assert.deepEqual(await retried.json(), {
+    ok: true,
+    alreadyApplied: true,
+    requestId,
+    notice: createdNotice
+  });
   assert.equal((await (await getClientConfig(database, identity, deviceSeed)).json()).notice, undefined);
   assert.equal(
     database.queryAll(
@@ -257,10 +282,82 @@ test('targeted notices are delivered as plain device-scoped state and reappear o
   const updated = await requestAdminConfig(
     database,
     `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
-    JSON.stringify({ message: '维护已改期', tone: 'info', expiresAt, enabled: true })
+    JSON.stringify({
+      message: '维护已改期',
+      tone: 'info',
+      durationMinutes: 10,
+      enabled: true,
+      requestId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    })
   );
   assert.equal((await updated.json()).notice.revision, 2);
   assert.equal((await (await getClientConfig(database, identity, deviceSeed)).json()).notice.message, '维护已改期');
+
+  const conflictingReplay = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
+    JSON.stringify({
+      message: '<b>今晚维护</b>',
+      tone: 'warning',
+      durationMinutes: 65,
+      enabled: true,
+      requestId
+    })
+  );
+  await assertWorkerError(conflictingReplay, 409, 'notice request conflict');
+
+  const oldExpiryInput = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
+    JSON.stringify({
+      message: '旧协议',
+      tone: 'info',
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      enabled: true,
+      requestId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    })
+  );
+  await assertWorkerError(oldExpiryInput, 400, 'unsupported notice field');
+
+  const defaultDuration = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
+    JSON.stringify({
+      message: '默认持续时间',
+      tone: 'info',
+      enabled: true,
+      requestId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+    })
+  );
+  assert.equal(defaultDuration.status, 200);
+  assert.equal((await defaultDuration.json()).notice.durationMinutes, 10);
+
+  const minimumDuration = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
+    JSON.stringify({
+      message: '最短持续时间',
+      tone: 'info',
+      durationMinutes: 5,
+      enabled: true,
+      requestId: 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+    })
+  );
+  assert.equal(minimumDuration.status, 200);
+  assert.equal((await minimumDuration.json()).notice.durationMinutes, 5);
+
+  const invalidDuration = await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(identity.userId)}/notice`,
+    JSON.stringify({
+      message: '非法时长',
+      tone: 'info',
+      durationMinutes: 6,
+      enabled: true,
+      requestId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    })
+  );
+  await assertWorkerError(invalidDuration, 400, 'invalid notice duration');
 
   await database
     .prepare('UPDATE user_notices SET expires_at = ? WHERE user_id = ?')
@@ -322,6 +419,61 @@ test('admin device totals count logical machines while retaining legacy installa
   assert.equal(users.length, 1);
   assert.equal(users[0].devices, 1);
   assert.equal(users[0].deviceRecords, 2);
+});
+
+test('signed config polling records the reported build and exposes each user latest version to admins', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const aliceSeed = '11111111-1111-4111-8111-111111111111';
+  const bobSeed = '22222222-2222-4222-8222-222222222222';
+  const alice = await (await activate(database, { name: 'Alice', deviceSeed: aliceSeed })).json();
+  const bob = await (await activate(database, { name: 'Bob', deviceSeed: bobSeed })).json();
+
+  await database
+    .prepare('UPDATE devices SET last_seen_at = ? WHERE id = ?')
+    .bind('2026-07-01T00:00:00.000Z', alice.deviceId)
+    .run();
+  const beforePoll = Date.now();
+  assert.equal((await getClientConfig(database, alice, aliceSeed, { appVersion: '1.7.1-IN' })).status, 200);
+  assert.equal((await getClientConfig(database, bob, bobSeed, { appVersion: '1.7.1-NO' })).status, 200);
+
+  const deviceRows = database.queryAll('SELECT user_id, app_version, last_seen_at FROM devices ORDER BY user_id ASC');
+  const aliceDevice = deviceRows.find((row) => row.user_id === alice.userId);
+  const bobDevice = deviceRows.find((row) => row.user_id === bob.userId);
+  assert.equal(aliceDevice.app_version, '1.7.1-IN');
+  assert.equal(bobDevice.app_version, '1.7.1-NO');
+  assert.ok(Date.parse(aliceDevice.last_seen_at) >= beforePoll - 1000);
+
+  const response = await requestAdmin(database, '/api/admin/users');
+  assert.equal(response.status, 200);
+  const usersById = new Map((await response.json()).users.map((user) => [user.id, user]));
+  assert.deepEqual(
+    {
+      latestAppVersion: usersById.get(alice.userId).latestAppVersion,
+      appVersionReportedAt: usersById.get(alice.userId).appVersionReportedAt
+    },
+    {
+      latestAppVersion: '1.7.1-IN',
+      appVersionReportedAt: aliceDevice.last_seen_at
+    }
+  );
+  assert.deepEqual(
+    {
+      latestAppVersion: usersById.get(bob.userId).latestAppVersion,
+      appVersionReportedAt: usersById.get(bob.userId).appVersionReportedAt
+    },
+    {
+      latestAppVersion: '1.7.1-NO',
+      appVersionReportedAt: bobDevice.last_seen_at
+    }
+  );
+
+  const invalidVersion = await getClientConfig(database, alice, aliceSeed, { appVersion: '1.7.1/IN' });
+  await assertWorkerError(invalidVersion, 400, 'invalid app version');
+  assert.equal(
+    database.queryAll('SELECT app_version FROM devices WHERE id = ?', alice.deviceId)[0].app_version,
+    '1.7.1-IN'
+  );
 });
 
 test('admin collection routes use bounded pages and disclose whether more rows exist', async (context) => {
@@ -479,12 +631,16 @@ test('user merge transfers source notice only when the target has none and prese
   const targetSeed = '22222222-2222-4222-8222-222222222222';
   const source = await (await activate(database, { name: 'Source', deviceSeed: sourceSeed })).json();
   const target = await (await activate(database, { name: 'Target', deviceSeed: targetSeed })).json();
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-
   await requestAdminConfig(
     database,
     `/api/admin/users/${encodeURIComponent(source.userId)}/notice`,
-    JSON.stringify({ message: '源用户通知', tone: 'info', expiresAt, enabled: true })
+    JSON.stringify({
+      message: '源用户通知',
+      tone: 'info',
+      durationMinutes: 60,
+      enabled: true,
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    })
   );
   assert.equal((await acknowledgeNotice(database, source, sourceSeed, 1)).status, 200);
 
@@ -501,6 +657,10 @@ test('user merge transfers source notice only when the target has none and prese
   assert.equal(sourceDeviceConfig.profile.name, 'Target');
   assert.equal(sourceDeviceConfig.notice, undefined);
   assert.equal(targetDeviceConfig.notice.message, '源用户通知');
+  const targetNotice = await (
+    await requestAdmin(database, `/api/admin/users/${encodeURIComponent(target.userId)}/notice`)
+  ).json();
+  assert.equal(targetNotice.notice.durationMinutes, 60);
 
   const sourceNoticeRows = database.queryAll('SELECT user_id FROM user_notices WHERE user_id = ?', source.userId);
   const targetNoticeRows = database.queryAll('SELECT user_id FROM user_notices WHERE user_id = ?', target.userId);
@@ -523,17 +683,27 @@ test('user merge keeps the target notice and never carries acknowledgements from
   const targetSeed = '22222222-2222-4222-8222-222222222222';
   const source = await (await activate(database, { name: 'Source', deviceSeed: sourceSeed })).json();
   const target = await (await activate(database, { name: 'Target', deviceSeed: targetSeed })).json();
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-
   await requestAdminConfig(
     database,
     `/api/admin/users/${encodeURIComponent(source.userId)}/notice`,
-    JSON.stringify({ message: '源通知', tone: 'warning', expiresAt, enabled: true })
+    JSON.stringify({
+      message: '源通知',
+      tone: 'warning',
+      durationMinutes: 60,
+      enabled: true,
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    })
   );
   await requestAdminConfig(
     database,
     `/api/admin/users/${encodeURIComponent(target.userId)}/notice`,
-    JSON.stringify({ message: '目标通知', tone: 'info', expiresAt, enabled: true })
+    JSON.stringify({
+      message: '目标通知',
+      tone: 'info',
+      durationMinutes: 60,
+      enabled: true,
+      requestId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    })
   );
   assert.equal((await acknowledgeNotice(database, source, sourceSeed, 1)).status, 200);
 
@@ -751,13 +921,18 @@ test('merge batch rejects a notice revision changed after conflict evaluation', 
   const target = await (
     await activate(database, { name: 'Target', deviceSeed: '22222222-2222-4222-8222-222222222222' })
   ).json();
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
   assert.equal(
     (
       await requestAdminConfig(
         database,
         `/api/admin/users/${encodeURIComponent(source.userId)}/notice`,
-        JSON.stringify({ enabled: true, message: '原通知', tone: 'info', expiresAt })
+        JSON.stringify({
+          enabled: true,
+          message: '原通知',
+          tone: 'info',
+          durationMinutes: 60,
+          requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+        })
       )
     ).status,
     200
@@ -1525,7 +1700,11 @@ test('admin page exposes the fixed-viewport management workspace without removed
   assert.match(page, /data-drawer-tab="profile">资料通知/);
   assert.match(page, /id="userProfileName"[^>]*maxlength="80"/);
   assert.match(page, /id="userNoticeMessage"[^>]*maxlength="500"/);
-  assert.match(page, /id="userNoticeExpiresAt" type="datetime-local"/);
+  assert.match(page, /id="userNoticeDuration" type="number" min="5" max="10080" step="5"/);
+  assert.match(page, /id="decreaseUserNoticeDuration" type="button"/);
+  assert.match(page, /id="increaseUserNoticeDuration" type="button"/);
+  assert.match(page, /保存并重新计时/);
+  assert.doesNotMatch(page, /userNoticeExpiresAt/);
   assert.match(page, /id="previewMerge"[^>]*>预览合并/);
   assert.doesNotMatch(page, /查看、筛选和配置(?:登记)?用户/);
   for (const removed of [
@@ -1661,6 +1840,7 @@ test('admin page edits a user profile and plain-text targeted notice end to end'
   detailButton.click();
   await waitFor(() => document.getElementById('drawerContent').hidden === false);
   assert.equal(document.getElementById('userProfileName').value, 'Alice');
+  assert.equal(document.getElementById('userNoticeDuration').value, '10');
 
   const profileInput = document.getElementById('userProfileName');
   profileInput.value = 'Alice 修正';
@@ -1677,9 +1857,11 @@ test('admin page edits a user profile and plain-text targeted notice end to end'
   document.getElementById('userNoticeMessage').value = message;
   document.getElementById('userNoticeTone').value = 'warning';
   document.getElementById('userNoticeEnabled').value = 'true';
-  document.getElementById('userNoticeExpiresAt').value = new Date(Date.now() + 8 * 60 * 60 * 1000 + 3600000)
-    .toISOString()
-    .slice(0, 16);
+  document.getElementById('increaseUserNoticeDuration').click();
+  assert.equal(document.getElementById('userNoticeDuration').value, '15');
+  document.getElementById('decreaseUserNoticeDuration').click();
+  assert.equal(document.getElementById('userNoticeDuration').value, '10');
+  document.getElementById('increaseUserNoticeDuration').click();
   document
     .getElementById('userNoticeForm')
     .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
@@ -1690,6 +1872,11 @@ test('admin page edits a user profile and plain-text targeted notice end to end'
   assert.equal(document.getElementById('userNoticeMessage').value, message);
   assert.equal(document.querySelector('img[src="x"]'), null);
   assert.equal(document.getElementById('userNoticeState').textContent, '已启用');
+  assert.equal(
+    database.queryAll('SELECT duration_minutes FROM user_notice_audit WHERE user_id = ?', identity.userId)[0]
+      ?.duration_minutes,
+    15
+  );
 });
 
 test('admin writes reject non-object JSON and bodies larger than 64 KiB', async (context) => {
@@ -2407,10 +2594,11 @@ async function activate(database, input) {
   );
 }
 
-async function getClientConfig(database, identity, deviceSeed) {
+async function getClientConfig(database, identity, deviceSeed, options = {}) {
   const url = new URL('https://worker.example/api/config');
   url.searchParams.set('userId', identity.userId);
   url.searchParams.set('deviceId', identity.deviceId);
+  if (options.appVersion !== undefined) url.searchParams.set('appVersion', options.appVersion);
   const timestamp = String(Date.now());
   const bodyHash = createHash('sha256').update('').digest('hex');
   const canonical = ['GET', `${url.pathname}${url.search}`, timestamp, bodyHash].join('\n');

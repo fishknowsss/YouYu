@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveAppVersion } from '../../src/main/appVersion';
+import { formatReportedAppVersion, resolveAppVersion } from '../../src/main/appVersion';
 
 describe('resolveAppVersion', () => {
   it('uses Electron application metadata for a packaged build', () => {
@@ -38,5 +38,13 @@ describe('resolveAppVersion', () => {
         }
       })
     ).toBe('0.0.0');
+  });
+});
+
+describe('formatReportedAppVersion', () => {
+  it('keeps the public version stable and labels private build channels for the admin inventory', () => {
+    expect(formatReportedAppVersion('1.7.1', 'standard')).toBe('1.7.1');
+    expect(formatReportedAppVersion('1.7.1', 'in')).toBe('1.7.1-IN');
+    expect(formatReportedAppVersion('1.7.1', 'no')).toBe('1.7.1-NO');
   });
 });

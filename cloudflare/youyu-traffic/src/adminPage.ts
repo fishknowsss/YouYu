@@ -217,10 +217,11 @@ export function adminPage(): string {
               </div>
               <div class="table-wrap">
                 <table class="users-table">
-                  <colgroup><col class="col-name" /><col class="col-subscription" /><col class="col-devices" /><col class="col-upload" /><col class="col-download" /><col class="col-total" /><col class="col-anomalies" /><col class="col-seen" /><col class="col-actions" /></colgroup>
+                  <colgroup><col class="col-name" /><col class="col-subscription" /><col class="col-version" /><col class="col-devices" /><col class="col-upload" /><col class="col-download" /><col class="col-total" /><col class="col-anomalies" /><col class="col-seen" /><col class="col-actions" /></colgroup>
                   <thead><tr>
                     <th><button class="sort-button" type="button" data-user-sort="name">姓名<span class="sort-mark" aria-hidden="true">↕</span></button></th>
                     <th><button class="sort-button" type="button" data-user-sort="subscriptionState">订阅<span class="sort-mark" aria-hidden="true">↕</span></button></th>
+                    <th>客户端</th>
                     <th class="num"><button class="sort-button" type="button" data-user-sort="devices">设备<span class="sort-mark" aria-hidden="true">↕</span></button></th>
                     <th class="num"><button class="sort-button" type="button" data-user-sort="uploadBytes">上传<span class="sort-mark" aria-hidden="true">↕</span></button></th>
                     <th class="num"><button class="sort-button" type="button" data-user-sort="downloadBytes">下载<span class="sort-mark" aria-hidden="true">↕</span></button></th>
@@ -275,24 +276,32 @@ export function adminPage(): string {
                   </form>
                 </section>
                 <section class="drawer-section" id="drawerProfileSection" role="tabpanel" aria-labelledby="drawerTabProfile" data-drawer-section="profile" hidden>
-                  <form id="userProfileForm">
+                  <form class="user-profile-editor" id="userProfileForm">
                     <div class="section-title"><h3>用户资料</h3></div>
-                    <div class="form-grid">
-                      <label class="field wide" for="userProfileName">用户名<input id="userProfileName" maxlength="80" autocomplete="off" aria-describedby="userProfileNameError" /></label>
-                      <div class="field-error wide" id="userProfileNameError" role="alert"></div>
+                    <div class="profile-editor-row">
+                      <label class="field" for="userProfileName">用户名<input id="userProfileName" maxlength="80" autocomplete="off" aria-describedby="userProfileNameError" /></label>
+                      <button class="button" id="saveUserProfile" type="submit">${icon('save', 'icon-sm')}保存</button>
                     </div>
-                    <div class="drawer-actions single"><button class="button" id="saveUserProfile" type="submit">${icon('save', 'icon-sm')}保存</button></div>
+                    <div class="field-error" id="userProfileNameError" role="alert"></div>
                   </form>
                   <form class="notice-editor" id="userNoticeForm">
                     <div class="section-title"><h3>定向通知</h3><span class="chip gray" id="userNoticeState">未设置</span></div>
                     <div class="form-grid">
                       <label class="field" for="userNoticeEnabled">状态<select id="userNoticeEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
                       <label class="field" for="userNoticeTone">级别<select id="userNoticeTone"><option value="info">提示</option><option value="warning">警告</option></select></label>
+                      <div class="field notice-duration-field">
+                        <span id="userNoticeDurationLabel">持续时间</span>
+                        <div class="duration-stepper" role="group" aria-labelledby="userNoticeDurationLabel">
+                          <button class="stepper-button" id="decreaseUserNoticeDuration" type="button" aria-label="减少持续时间">−</button>
+                          <input id="userNoticeDuration" type="number" min="5" max="10080" step="5" inputmode="numeric" aria-describedby="userNoticeError" />
+                          <span class="duration-unit" aria-hidden="true">分钟</span>
+                          <button class="stepper-button" id="increaseUserNoticeDuration" type="button" aria-label="增加持续时间">+</button>
+                        </div>
+                      </div>
                       <label class="field wide" for="userNoticeMessage">内容<textarea id="userNoticeMessage" maxlength="500" rows="4" aria-describedby="userNoticeError"></textarea></label>
-                      <label class="field wide" for="userNoticeExpiresAt">到期时间<input id="userNoticeExpiresAt" type="datetime-local" aria-describedby="userNoticeError" /></label>
                       <div class="field-error wide" id="userNoticeError" role="alert"></div>
                     </div>
-                    <div class="drawer-actions"><button class="button" id="saveUserNotice" type="submit">${icon('save', 'icon-sm')}保存</button><button class="button secondary" id="clearUserNotice" type="button">${icon('reset', 'icon-sm')}清除</button></div>
+                    <div class="drawer-actions"><button class="button" id="saveUserNotice" type="submit">${icon('save', 'icon-sm')}保存并重新计时</button><button class="button secondary" id="clearUserNotice" type="button">${icon('reset', 'icon-sm')}停用</button></div>
                   </form>
                 </section>
                 <section class="drawer-section" id="drawerTrafficSection" role="tabpanel" aria-labelledby="drawerTabTraffic" data-drawer-section="traffic" hidden>

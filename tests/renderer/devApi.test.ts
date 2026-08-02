@@ -89,5 +89,12 @@ describe('createDevYouYuApi', () => {
       status: 'installing',
       message: '已开始自动安装，无需操作'
     });
+
+    const notice = await createDevYouYuApi({ preset: 'readme', noticeTone: 'warning' }).getSnapshot();
+    expect(notice.userNotice).toMatchObject({
+      revision: 1,
+      tone: 'warning'
+    });
+    expect(Date.parse(notice.userNotice?.expiresAt ?? '')).toBeGreaterThan(Date.now());
   });
 });
