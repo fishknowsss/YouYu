@@ -28,6 +28,8 @@ export function parseCurlMetrics(output: string): {
   bytesPerSecond: number;
 };
 
+export function resolveGitHubApiEndpoint(value: string): string;
+
 export function preflightReleaseCdn(options?: {
   temporaryDirectory?: string;
   environment?: NodeJS.ProcessEnv;

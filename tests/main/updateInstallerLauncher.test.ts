@@ -1,14 +1,19 @@
-import type { ChildProcess } from 'node:child_process';
+import { execFile, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import {
   createUpdateInstallerLauncherScript,
   launchDownloadedUpdateInstaller,
   resolveDownloadedUpdateInstallerPath,
   resolveWindowsPowerShellPath,
+  sanitizeUpdateInstallerLauncherDiagnostic,
   updateInstallerAcknowledgementTimeoutMs,
   updateInstallerLauncherPayloadEnvironment
 } from '../../src/main/updateInstallerLauncher';
+
+const execFileAsync = promisify(execFile);
 
 const handoff = {
   path: String.raw`C:\Users\Example User\AppData\Local\Temp\youyu-update-handoff-8fb748f0-540a-4f7a-9bd2-144020b83e9b.json`,
@@ -49,13 +54,13 @@ describe('controlled Windows update installer launcher', () => {
       | {
           powershellPath: string;
           args: string[];
-          options: { windowsHide: boolean; stdio: 'ignore'; env: NodeJS.ProcessEnv };
+          options: { windowsHide: boolean; stdio: ['ignore', 'ignore', 'pipe']; env: NodeJS.ProcessEnv };
         }
       | undefined;
     const spawnLauncher = (
       powershellPath: string,
       args: string[],
-      options: { windowsHide: boolean; stdio: 'ignore'; env: NodeJS.ProcessEnv }
+      options: { windowsHide: boolean; stdio: ['ignore', 'ignore', 'pipe']; env: NodeJS.ProcessEnv }
     ) => {
       spawnCall = { powershellPath, args, options };
       return child;
@@ -77,7 +82,7 @@ describe('controlled Windows update installer launcher', () => {
     const { powershellPath, args, options } = spawnCall as NonNullable<typeof spawnCall>;
     expect(powershellPath).toBe(String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`);
     expect(args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand']);
-    expect(options).toMatchObject({ windowsHide: true, stdio: 'ignore' });
+    expect(options).toMatchObject({ windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
     expect(environment[updateInstallerLauncherPayloadEnvironment]).toBeUndefined();
     expect(options.env.KEEP).toBe('preserved');
 
@@ -143,10 +148,34 @@ describe('controlled Windows update installer launcher', () => {
     await expect(launch).rejects.toThrow('elevated update installer launch failed (exit code 1223)');
   });
 
+  it('returns a bounded sanitized launcher error instead of discarding PowerShell stderr', async () => {
+    const child = createLauncher();
+    const stderr = new PassThrough();
+    Object.assign(child, { stderr });
+    const launch = launchDownloadedUpdateInstaller({
+      installerPath: String.raw`C:\Users\Example\pending\YouYu-1.7.2-x64.exe`,
+      handoff,
+      environment: { SystemRoot: String.raw`C:\Windows` },
+      spawnLauncher: () => child
+    });
+
+    stderr.write(
+      `YouYu update launcher: failed at C:\\Users\\Example\\secret\\update.exe for ${handoff.nonce} and ${handoff.targetUserSid}`
+    );
+    stderr.end();
+    child.emit('exit', 1, null);
+
+    await expect(launch).rejects.toThrow(
+      'elevated update installer launch failed (exit code 1: YouYu update launcher: failed at <path><nonce> and <sid>)'
+    );
+  });
+
   it('generates a fixed UAC launcher that validates every payload member before Start-Process', () => {
     const script = createUpdateInstallerLauncherScript();
 
     expect(script).toContain('$arguments.Count -ne 11');
+    expect(script).toContain('function Test-FullyQualifiedWindowsPath');
+    expect(script).not.toContain('IsPathFullyQualified');
     expect(script).toContain("$arguments[5] -cne '--youyu-handoff-nonce'");
     expect(script).toContain('Start-Process -FilePath $installerPath -ArgumentList $argumentLine -Verb RunAs');
     expect(script).toContain('ConvertTo-WindowsCommandLineArgument');
@@ -165,5 +194,69 @@ describe('controlled Windows update installer launcher', () => {
     expect(script).toContain('$rules.Count -ne 1');
     expect(script).not.toContain('Invoke-Expression');
     expect(script).not.toMatch(/https?:\/\//i);
+  });
+
+  it('runs every pre-launch validation under the bundled Windows PowerShell 5.1 runtime', async () => {
+    if (process.platform !== 'win32') return;
+
+    const script = createUpdateInstallerLauncherScript();
+    const startIndex = script.indexOf('$started = Start-Process');
+    const outerCatchIndex = script.lastIndexOf('} catch {');
+    expect(startIndex).toBeGreaterThan(0);
+    expect(outerCatchIndex).toBeGreaterThan(startIndex);
+    const probeScript = `${script.slice(0, startIndex)}[Console]::Out.WriteLine('validation-pass')\n${script.slice(outerCatchIndex)}`;
+    const payload = Buffer.from(
+      JSON.stringify({
+        installerPath: String.raw`C:\Users\Example User\pending\YouYu-1.7.5-x64.exe`,
+        arguments: [
+          '--updated',
+          '/S',
+          '--force-run',
+          '--youyu-handoff-path',
+          handoff.path,
+          '--youyu-handoff-nonce',
+          handoff.nonce,
+          '--youyu-target-user-sid',
+          handoff.targetUserSid,
+          '--youyu-target-session-id',
+          String(handoff.targetSessionId)
+        ],
+        acknowledgement: {
+          path: String.raw`C:\Users\Example User\AppData\Local\Temp\youyu-update-handoff-8fb748f0-540a-4f7a-9bd2-144020b83e9b.ready.json`,
+          handoffPath: handoff.path,
+          nonce: handoff.nonce,
+          targetUserSid: handoff.targetUserSid,
+          targetSessionId: String(handoff.targetSessionId),
+          targetProcessId: handoff.targetProcessId,
+          targetExecutablePath: handoff.targetExecutablePath
+        },
+        acknowledgementTimeoutMs: updateInstallerAcknowledgementTimeoutMs
+      }),
+      'utf8'
+    ).toString('base64');
+    const { stdout, stderr } = await execFileAsync(
+      resolveWindowsPowerShellPath(process.env.SystemRoot),
+      ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(probeScript, 'utf16le').toString('base64')],
+      {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 10_000,
+        env: { ...process.env, [updateInstallerLauncherPayloadEnvironment]: payload }
+      }
+    );
+
+    expect(stderr).not.toContain('YouYu update launcher:');
+    expect(stdout.trim()).toBe('validation-pass');
+  });
+
+  it('sanitizes paths, identities, URLs, control characters, and oversized diagnostics', () => {
+    const diagnostic = sanitizeUpdateInstallerLauncherDiagnostic(
+      `failure\nC:\\Users\\Example\\secret.exe ${handoff.nonce} ${handoff.targetUserSid} https://example.com/private ${'x'.repeat(600)}`
+    );
+    expect(diagnostic).not.toContain('Example');
+    expect(diagnostic).not.toContain(handoff.nonce);
+    expect(diagnostic).not.toContain(handoff.targetUserSid);
+    expect(diagnostic).not.toContain('example.com');
+    expect(diagnostic.length).toBeLessThanOrEqual(400);
   });
 });

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -87,6 +87,14 @@ export function parseCurlMetrics(output) {
   return { httpCode: Number(match[1]), bytes: Number(match[2]), bytesPerSecond: Number(match[3]) };
 }
 
+export function resolveGitHubApiEndpoint(value) {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.hostname !== 'api.github.com' || url.username || url.password) {
+    throw new Error('GitHub API URL is invalid');
+  }
+  return `${url.pathname.replace(/^\/+/, '')}${url.search}`;
+}
+
 export async function preflightReleaseCdn({ temporaryDirectory, environment = process.env } = {}) {
   const ownedTemporaryDirectory = temporaryDirectory
     ? undefined
@@ -94,7 +102,7 @@ export async function preflightReleaseCdn({ temporaryDirectory, environment = pr
   const directory = temporaryDirectory ?? ownedTemporaryDirectory;
   try {
     const latestPath = join(directory, 'latest-release.json');
-    await downloadSmallFile(`${apiBaseUrl}/latest`, latestPath, environment);
+    await downloadGitHubApiFile(`${apiBaseUrl}/latest`, latestPath, environment);
     const latestRelease = JSON.parse(await readFile(latestPath, 'utf8'));
     const installer = latestRelease.assets?.find((asset) => /^YouYu-\d+\.\d+\.\d+-x64\.exe$/.test(asset?.name));
     if (!installer?.browser_download_url)
@@ -169,7 +177,7 @@ export async function verifyRemoteRelease({ version = packageJson.version, root 
     console.log(`CDN preflight: ${formatRate(preflight.bytesPerSecond)} via ${preflight.route}`);
 
     const releaseJsonPath = join(temporaryDirectory, 'release.json');
-    await downloadSmallFile(`${apiBaseUrl}/tags/v${version}`, releaseJsonPath);
+    await downloadGitHubApiFile(`${apiBaseUrl}/tags/v${version}`, releaseJsonPath);
     const release = JSON.parse(await readFile(releaseJsonPath, 'utf8'));
     if (release.tag_name !== `v${version}`) throw new Error(`Remote release tag is ${String(release.tag_name)}`);
     const assets = validateReleaseAssetNames(release, expectedNames);
@@ -227,6 +235,43 @@ async function downloadSmallFile(url, destination, environment = process.env) {
     ],
     environment
   );
+}
+
+async function downloadGitHubApiFile(url, destination, environment = process.env) {
+  try {
+    const result = await runGhApi(resolveGitHubApiEndpoint(url), environment);
+    await writeFile(destination, result.stdout, 'utf8');
+  } catch {
+    await downloadSmallFile(url, destination, environment);
+  }
+}
+
+async function runGhApi(endpoint, environment = process.env) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('gh', ['api', endpoint], {
+      cwd: process.cwd(),
+      env: environment,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      if (stdout.length < 8 * 1024 * 1024) stdout += chunk.slice(0, 8 * 1024 * 1024 - stdout.length);
+    });
+    child.stderr.on('data', (chunk) => {
+      if (stderr.length < 4096) stderr += chunk.slice(0, 4096 - stderr.length);
+    });
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (signal) return reject(new Error(`gh api stopped by ${signal}`));
+      if (code) return reject(new Error(`gh api exited with ${code}: ${sanitizeCurlError(stderr)}`));
+      if (!stdout.trim()) return reject(new Error('gh api returned an empty response'));
+      resolvePromise({ stdout, stderr });
+    });
+  });
 }
 
 async function downloadLargeFile(url, destination) {

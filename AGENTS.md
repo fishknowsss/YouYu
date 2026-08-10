@@ -21,6 +21,7 @@
 
 - Before coding, propose layout and component tree for UI work.
 - After coding, self-check against all forbidden UI/copy patterns.
+- Scripts launched through the canonical `WindowsPowerShell\\v1.0\\powershell.exe` path must remain compatible with Windows PowerShell 5.1 and its .NET Framework runtime. Do not use .NET Core-only APIs such as `System.IO.Path.IsPathFullyQualified`; run the real Windows PowerShell compatibility test when changing the update launcher.
 - For app code or app resource changes that are being delivered locally, read `docs/release-packaging.md`, bump the patch version, and produce the documented Windows installers unless the user explicitly says not to package.
 - For release-delivered app changes, finish the full checklist in `docs/release-packaging.md`: validation, packaging, local archive maintenance, commit, explicit tag push, GitHub Release asset upload, and remote `latest*.yml` verification.
 - Pure documentation, project-rule, or archive housekeeping changes do not require a version bump or installer rebuild.

@@ -13,7 +13,7 @@ export const updateInstallerAcknowledgementPollIntervalMs = 100;
 type SpawnLauncher = (
   command: string,
   args: string[],
-  options: { windowsHide: boolean; stdio: 'ignore'; env: NodeJS.ProcessEnv }
+  options: { windowsHide: boolean; stdio: ['ignore', 'ignore', 'pipe']; env: NodeJS.ProcessEnv }
 ) => ChildProcess;
 
 type DownloadedInstallerPathSource = {
@@ -52,11 +52,23 @@ export function resolveWindowsPowerShellPath(systemRoot = process.env.SystemRoot
 export function createUpdateInstallerLauncherScript(): string {
   return [
     "$ErrorActionPreference = 'Stop'",
+    'try {',
+    '  [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
     '$payloadText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:YOUYU_UPDATE_INSTALLER_LAUNCH_PAYLOAD))',
     '$payload = $payloadText | ConvertFrom-Json',
     "if ($null -eq $payload -or @($payload.PSObject.Properties.Name).Count -ne 4 -or $payload.PSObject.Properties.Name -notcontains 'installerPath' -or $payload.PSObject.Properties.Name -notcontains 'arguments' -or $payload.PSObject.Properties.Name -notcontains 'acknowledgement' -or $payload.PSObject.Properties.Name -notcontains 'acknowledgementTimeoutMs') { throw 'update installer launch payload is invalid' }",
+    'function Test-FullyQualifiedWindowsPath([string] $value) {',
+    '  if ([string]::IsNullOrWhiteSpace($value) -or $value.IndexOf([char] 0) -ge 0) { return $false }',
+    "  if ($value -notmatch '^(?:[A-Za-z]:[\\\\/]|\\\\\\\\)') { return $false }",
+    '  try {',
+    '    [void] [IO.Path]::GetFullPath($value)',
+    '    return $true',
+    '  } catch {',
+    '    return $false',
+    '  }',
+    '}',
     '$installerPath = [string] $payload.installerPath',
-    "if ([string]::IsNullOrWhiteSpace($installerPath) -or $installerPath.IndexOf([char] 0) -ge 0 -or -not [IO.Path]::IsPathFullyQualified($installerPath) -or [IO.Path]::GetExtension($installerPath) -ine '.exe') { throw 'update installer path is invalid' }",
+    "if (-not (Test-FullyQualifiedWindowsPath $installerPath) -or [IO.Path]::GetExtension($installerPath) -ine '.exe') { throw 'update installer path is invalid' }",
     '$installerPath = [IO.Path]::GetFullPath($installerPath)',
     '[string[]] $arguments = @($payload.arguments)',
     "if ($arguments.Count -ne 11) { throw 'update installer arguments are invalid' }",
@@ -66,11 +78,11 @@ export function createUpdateInstallerLauncherScript(): string {
     '$acknowledgement = $payload.acknowledgement',
     "if ($null -eq $acknowledgement -or @($acknowledgement.PSObject.Properties.Name).Count -ne 7 -or $acknowledgement.PSObject.Properties.Name -notcontains 'path' -or $acknowledgement.PSObject.Properties.Name -notcontains 'handoffPath' -or $acknowledgement.PSObject.Properties.Name -notcontains 'nonce' -or $acknowledgement.PSObject.Properties.Name -notcontains 'targetUserSid' -or $acknowledgement.PSObject.Properties.Name -notcontains 'targetSessionId' -or $acknowledgement.PSObject.Properties.Name -notcontains 'targetProcessId' -or $acknowledgement.PSObject.Properties.Name -notcontains 'targetExecutablePath') { throw 'update acknowledgement payload is invalid' }",
     '$acknowledgementPath = [string] $acknowledgement.path',
-    "if ([string]::IsNullOrWhiteSpace($acknowledgementPath) -or $acknowledgementPath.IndexOf([char] 0) -ge 0 -or -not [IO.Path]::IsPathFullyQualified($acknowledgementPath)) { throw 'update acknowledgement path is invalid' }",
+    "if (-not (Test-FullyQualifiedWindowsPath $acknowledgementPath)) { throw 'update acknowledgement path is invalid' }",
     '$acknowledgementPath = [IO.Path]::GetFullPath($acknowledgementPath)',
     "$expectedAcknowledgementPath = [IO.Path]::Combine([IO.Path]::GetDirectoryName($handoffPath), ('youyu-update-handoff-' + $arguments[6] + '.ready.json'))",
     '$targetExecutablePath = [string] $acknowledgement.targetExecutablePath',
-    "if ([string]::IsNullOrWhiteSpace($targetExecutablePath) -or $targetExecutablePath.IndexOf([char] 0) -ge 0 -or -not [IO.Path]::IsPathFullyQualified($targetExecutablePath) -or [IO.Path]::GetExtension($targetExecutablePath) -ine '.exe') { throw 'update acknowledgement executable path is invalid' }",
+    "if (-not (Test-FullyQualifiedWindowsPath $targetExecutablePath) -or [IO.Path]::GetExtension($targetExecutablePath) -ine '.exe') { throw 'update acknowledgement executable path is invalid' }",
     '$targetExecutablePath = [IO.Path]::GetFullPath($targetExecutablePath)',
     "if ($acknowledgementPath -ine $expectedAcknowledgementPath -or ([IO.Path]::GetFullPath([string] $acknowledgement.handoffPath)) -ine $handoffPath -or ([string] $acknowledgement.nonce).ToLowerInvariant() -cne $arguments[6] -or ([string] $acknowledgement.targetUserSid).ToUpperInvariant() -cne $arguments[8].ToUpperInvariant() -or ([string] $acknowledgement.targetSessionId) -cne $arguments[10] -or ([string] $acknowledgement.targetProcessId) -notmatch '^[1-9]\\d*$') { throw 'update acknowledgement payload does not match its handoff' }",
     "if ([string] $payload.acknowledgementTimeoutMs -notmatch '^[1-9]\\d*$') { throw 'update acknowledgement timeout is invalid' }",
@@ -101,7 +113,7 @@ export function createUpdateInstallerLauncherScript(): string {
     '    if ($null -eq $acknowledgement -or @($acknowledgement.PSObject.Properties.Name).Count -ne $required.Count) { return $false }',
     '    foreach ($property in $required) { if ($acknowledgement.PSObject.Properties.Name -notcontains $property) { return $false } }',
     "    if ([string] $acknowledgement.version -cne '1' -or ([string] $acknowledgement.nonce).ToLowerInvariant() -cne $expectedNonce -or ([IO.Path]::GetFullPath([string] $acknowledgement.handoffPath)) -ine $expectedHandoffPath -or ([string] $acknowledgement.targetUserSid).ToUpperInvariant() -cne $expectedUserSid.ToUpperInvariant() -or ([string] $acknowledgement.targetSessionId) -cne $expectedSessionId -or ([string] $acknowledgement.targetProcessId) -cne $expectedProcessId -or ([IO.Path]::GetFullPath([string] $acknowledgement.executablePath)) -ine $expectedExecutablePath) { return $false }",
-    "    if ([string] $acknowledgement.targetProcessId -notmatch '^[1-9]\\d*$' -or [string]::IsNullOrWhiteSpace([string] $acknowledgement.executablePath) -or -not [IO.Path]::IsPathFullyQualified([string] $acknowledgement.executablePath) -or [string] $acknowledgement.acknowledgedAtEpochMs -notmatch '^\\d+$' -or [string] $acknowledgement.expiresAtEpochMs -notmatch '^\\d+$') { return $false }",
+    "    if ([string] $acknowledgement.targetProcessId -notmatch '^[1-9]\\d*$' -or -not (Test-FullyQualifiedWindowsPath ([string] $acknowledgement.executablePath)) -or [string] $acknowledgement.acknowledgedAtEpochMs -notmatch '^\\d+$' -or [string] $acknowledgement.expiresAtEpochMs -notmatch '^\\d+$') { return $false }",
     '    $acknowledgedAt = [Convert]::ToInt64($acknowledgement.acknowledgedAtEpochMs, [Globalization.CultureInfo]::InvariantCulture)',
     '    $expiresAt = [Convert]::ToInt64($acknowledgement.expiresAtEpochMs, [Globalization.CultureInfo]::InvariantCulture)',
     '    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()',
@@ -126,8 +138,30 @@ export function createUpdateInstallerLauncherScript(): string {
     '  }',
     "  if ([DateTimeOffset]::UtcNow -ge $acknowledgementDeadline) { throw 'elevated update installer did not acknowledge the authenticated handoff in time' }",
     `  Start-Sleep -Milliseconds ${updateInstallerAcknowledgementPollIntervalMs}`,
+    '}',
+    '} catch {',
+    "  [Console]::Error.WriteLine(('YouYu update launcher: ' + $_.Exception.Message))",
+    '  exit 1',
     '}'
   ].join('\n');
+}
+
+export function sanitizeUpdateInstallerLauncherDiagnostic(value: string): string {
+  const marker = 'YouYu update launcher:';
+  const markerIndex = value.lastIndexOf(marker);
+  const relevant = markerIndex >= 0 ? value.slice(markerIndex) : value;
+  const withoutControlCharacters = Array.from(relevant, (character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f ? ' ' : character;
+  }).join('');
+  return withoutControlCharacters
+    .replace(/https?:\/\/\S+/gi, '<url>')
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, '<nonce>')
+    .replace(/S-1-\d+(?:-\d+){2,14}/gi, '<sid>')
+    .replace(/(?:[A-Za-z]:\\|\\\\)[^\r\n"'<>]*/g, '<path>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 400);
 }
 
 export async function launchDownloadedUpdateInstaller(options: UpdateInstallerLaunchOptions): Promise<void> {
@@ -164,8 +198,15 @@ export async function launchDownloadedUpdateInstaller(options: UpdateInstallerLa
       '-EncodedCommand',
       Buffer.from(createUpdateInstallerLauncherScript(), 'utf16le').toString('base64')
     ],
-    { windowsHide: true, stdio: 'ignore', env: environment }
+    { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], env: environment }
   );
+
+  let launcherDiagnostic = '';
+  launcher.stderr?.setEncoding('utf8');
+  launcher.stderr?.on('data', (chunk: string | Buffer) => {
+    if (launcherDiagnostic.length >= 4096) return;
+    launcherDiagnostic += chunk.toString().slice(0, 4096 - launcherDiagnostic.length);
+  });
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -180,7 +221,9 @@ export async function launchDownloadedUpdateInstaller(options: UpdateInstallerLa
         finish(resolve);
         return;
       }
-      const detail = code !== null ? `exit code ${code}` : signal ? `signal ${signal}` : 'unknown exit state';
+      const exitDetail = code !== null ? `exit code ${code}` : signal ? `signal ${signal}` : 'unknown exit state';
+      const diagnostic = sanitizeUpdateInstallerLauncherDiagnostic(launcherDiagnostic);
+      const detail = diagnostic ? `${exitDetail}: ${diagnostic}` : exitDetail;
       finish(() => reject(new Error(`elevated update installer launch failed (${detail})`)));
     });
   });

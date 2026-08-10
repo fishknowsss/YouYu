@@ -3,6 +3,7 @@ import {
   describeEffectiveProxy,
   getExpectedPublicAssetNames,
   parseCurlMetrics,
+  resolveGitHubApiEndpoint,
   validateChannelMetadata,
   validateReleaseAssetNames
 } from '../../scripts/verify-remote-release.mjs';
@@ -49,5 +50,13 @@ describe('remote release verifier', () => {
       bytes: 2097152,
       bytesPerSecond: 3041382
     });
+  });
+
+  it('accepts only credential-free HTTPS GitHub API URLs', () => {
+    expect(resolveGitHubApiEndpoint('https://api.github.com/repos/fishknowsss/YouYu/releases/latest')).toBe(
+      'repos/fishknowsss/YouYu/releases/latest'
+    );
+    expect(() => resolveGitHubApiEndpoint('https://token@api.github.com/repos/example')).toThrow('invalid');
+    expect(() => resolveGitHubApiEndpoint('https://github.com/repos/example')).toThrow('invalid');
   });
 });
