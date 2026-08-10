@@ -1043,6 +1043,58 @@ describe('createMihomoApiClient', () => {
     expect(selected).toBe('JP Tokyo 01');
   });
 
+  it('tries verified preferred nodes first, then uses a verified healthy fallback when allowed', async () => {
+    let selected = 'HK 01';
+    const nodeNames = ['HK 01', 'JP Tokyo 01'];
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: { type: 'Selector', now: selected, all: nodeNames },
+            'HK 01': {},
+            'JP Tokyo 01': {}
+          }
+        });
+      }
+      if (path.includes('/delay')) {
+        return Response.json({ delay: path.includes('JP%20Tokyo%2001') ? 90 : 60 });
+      }
+      selected = JSON.parse(String(init?.body ?? '{}')).name ?? selected;
+      return new Response(null, { status: 204 });
+    });
+    const verifyNode = vi.fn(async (name: string) => name === 'HK 01');
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(
+      api.selectBestUsableNode({
+        policy: { preferredRegion: 'jp', regionFallback: 'global' },
+        verifyNode
+      })
+    ).resolves.toBe('HK 01');
+    expect(verifyNode.mock.calls.map(([name]) => name)).toEqual(['JP Tokyo 01', 'HK 01']);
+    expect(selected).toBe('HK 01');
+  });
+
+  it('does not cross regions when a user explicitly requires a strict region', async () => {
+    let selected = 'HK 01';
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/proxies')) {
+        return Response.json({ proxies: { Main: { type: 'Selector', now: selected, all: ['HK 01'] }, 'HK 01': {} } });
+      }
+      if (path.includes('/delay')) return Response.json({ delay: 55 });
+      selected = JSON.parse(String(init?.body ?? '{}')).name ?? selected;
+      return new Response(null, { status: 204 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(
+      api.selectBestUsableNode({ policy: { preferredRegion: 'jp', regionFallback: 'strict' } })
+    ).resolves.toBeUndefined();
+    expect(selected).toBe('HK 01');
+  });
+
   it('selects the fastest usable node inside the auto strategy without leaving auto mode', async () => {
     const autoTarget = strategyTargets.auto;
     let mainNow = autoTarget;

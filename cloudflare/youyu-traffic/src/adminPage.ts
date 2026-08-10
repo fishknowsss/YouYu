@@ -264,7 +264,7 @@ export function adminPage(): string {
                   </div>
                 </div>
                 <div class="drawer-tabs" role="tablist" aria-label="用户详情分类">
-                  <button class="drawer-tab is-active" id="drawerTabConfig" type="button" role="tab" aria-controls="drawerConfigSection" aria-selected="true" data-drawer-tab="config">订阅配置</button>
+                  <button class="drawer-tab is-active" id="drawerTabConfig" type="button" role="tab" aria-controls="drawerConfigSection" aria-selected="true" data-drawer-tab="config">客户端配置</button>
                   <button class="drawer-tab" id="drawerTabProfile" type="button" role="tab" aria-controls="drawerProfileSection" aria-selected="false" data-drawer-tab="profile">资料通知</button>
                   <button class="drawer-tab" id="drawerTabTraffic" type="button" role="tab" aria-controls="drawerTrafficSection" aria-selected="false" data-drawer-tab="traffic">每日流量</button>
                   <button class="drawer-tab" id="drawerTabMerge" type="button" role="tab" aria-controls="drawerMergeSection" aria-selected="false" data-drawer-tab="merge">合并用户</button>
@@ -275,6 +275,8 @@ export function adminPage(): string {
                     <div class="form-grid">
                       <label class="field" for="userMode">模式<select id="userMode"><option value="follow">跟随全局</option><option value="custom">单独配置</option><option value="disabled">停用</option></select></label>
                       <label class="field" for="userRuleProfile">规则<select id="userRuleProfile"><option value="ruleset">智能规则</option><option value="subscription">机场规则</option></select></label>
+                      <label class="field" for="userPreferredRegion">优先地区<select id="userPreferredRegion"><option value="jp">日本</option><option value="hk">香港</option><option value="tw">台湾</option><option value="sg">新加坡</option><option value="us">美国</option><option value="kr">韩国</option><option value="auto">最低延迟</option></select></label>
+                      <label class="field" for="userRegionFallback">地区不可用<select id="userRegionFallback"><option value="global">自动切换</option><option value="strict">保持地区</option></select></label>
                       <label class="field wide" for="userSubscription">订阅链接<input id="userSubscription" placeholder="https://..." autocomplete="off" spellcheck="false" aria-describedby="userSubscriptionError" /></label>
                       <div class="field-error wide" id="userSubscriptionError" role="alert"></div>
                     </div>
@@ -346,6 +348,8 @@ export function adminPage(): string {
                     <div class="field-error wide" id="globalSubscriptionError" role="alert"></div>
                     <label class="field" for="globalEnabled">状态<select id="globalEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
                     <label class="field" for="globalRuleProfile">规则<select id="globalRuleProfile"><option value="ruleset">智能规则</option><option value="subscription">机场规则</option></select></label>
+                    <label class="field" for="globalPreferredRegion">优先地区<select id="globalPreferredRegion"><option value="jp">日本</option><option value="hk">香港</option><option value="tw">台湾</option><option value="sg">新加坡</option><option value="us">美国</option><option value="kr">韩国</option><option value="auto">最低延迟</option></select></label>
+                    <label class="field" for="globalRegionFallback">地区不可用<select id="globalRegionFallback"><option value="global">自动切换</option><option value="strict">保持地区</option></select></label>
                   </div>
                 </div>
                 <div class="config-footer"><button class="button" id="saveGlobal" type="submit">${icon('save', 'icon-sm')}保存</button><button class="button danger" id="syncGlobalUsers" type="button">${icon('reset', 'icon-sm')}清除覆盖</button></div>

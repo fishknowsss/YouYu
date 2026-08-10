@@ -418,6 +418,41 @@ describe('RemoteConfigClient cache', () => {
     });
   });
 
+  it('persists a valid per-user node-region policy and rejects unknown policy values', async () => {
+    const validConfig = {
+      version: 8,
+      enabled: true,
+      preferredRegion: 'sg',
+      regionFallback: 'strict',
+      directRules: [],
+      proxyRules: []
+    };
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ config: validConfig }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    );
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.7.3',
+      store: createRegisteredStore()
+    });
+
+    await expect(client.sync()).resolves.toMatchObject({
+      config: expect.objectContaining({ preferredRegion: 'sg', regionFallback: 'strict' })
+    });
+    fetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ config: { ...validConfig, version: 9, preferredRegion: 'uk' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    );
+    await expect(client.sync()).rejects.toThrow('remote config response invalid');
+    await expect(client.getActiveConfig()).resolves.toMatchObject({ preferredRegion: 'sg', regionFallback: 'strict' });
+  });
+
   it('synchronizes a corrected profile name and persists the current device notice without restarting config', async () => {
     const syncIdentityProfile = vi.fn(async () => true);
     const store = {

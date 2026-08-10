@@ -18,11 +18,16 @@ const migrationFiles = [
   '2026-07-20-add-traffic-expiry-and-trend-index.sql',
   '2026-08-01-persist-traffic-report-dedup.sql',
   '2026-08-02-add-user-profiles-and-notices.sql',
-  '2026-08-02-add-user-notice-audit.sql'
+  '2026-08-02-add-user-notice-audit.sql',
+  '2026-08-10-add-node-region-policy.sql'
 ].map((name) => resolve(migrationDirectory, name));
 const repairableColumns = new Map([
   ['remote_config.subscription_url', 'TEXT'],
   ['user_remote_config.subscription_url', 'TEXT'],
+  ['remote_config.preferred_region', 'TEXT'],
+  ['remote_config.region_fallback', 'TEXT'],
+  ['user_remote_config.preferred_region', 'TEXT'],
+  ['user_remote_config.region_fallback', 'TEXT'],
   ['users.merged_into_user_id', 'TEXT REFERENCES users(id)'],
   ['devices.device_key', 'TEXT'],
   ['admin_settings.traffic_expires_at', "TEXT NOT NULL DEFAULT '2026-08-11T20:00:00.000Z'"]
@@ -59,6 +64,8 @@ const requiredTableColumns = {
     'enabled',
     'subscription_url',
     'rule_profile',
+    'preferred_region',
+    'region_fallback',
     'preferred_node',
     'preferred_strategy',
     'direct_rules',
@@ -72,6 +79,8 @@ const requiredTableColumns = {
     'enabled',
     'subscription_url',
     'rule_profile',
+    'preferred_region',
+    'region_fallback',
     'preferred_node',
     'preferred_strategy',
     'direct_rules',

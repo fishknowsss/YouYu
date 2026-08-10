@@ -7,6 +7,7 @@ import type {
   StrategyKey
 } from '../../shared/ipc';
 import { isBlockedSelectableNodeName, strategyLabels, strategyTargets } from './config';
+import { isNodeInPreferredRegion, type NodeSelectionPolicy } from './nodeSelectionPolicy';
 
 type Fetcher = typeof fetch;
 
@@ -40,15 +41,22 @@ export type MihomoApiClient = {
     signal?: AbortSignal;
     onNodeTested?: (node: ProxyNode) => void | Promise<void>;
   }) => Promise<void>;
-  selectBestUsableNode: (options?: { avoidNode?: string; signal?: AbortSignal }) => Promise<string | undefined>;
+  selectBestUsableNode: (options?: BestNodeOptions) => Promise<string | undefined>;
   selectBestUsableNodeForStrategy: (
     strategy: Exclude<StrategyKey, 'manual' | 'direct'>,
-    options?: { avoidNode?: string; signal?: AbortSignal }
+    options?: BestNodeOptions
   ) => Promise<string | undefined>;
   closeConnection: (id: string) => Promise<void>;
   closeConnections: () => Promise<void>;
   flushDnsCache: () => Promise<void>;
   updateProvider: (options?: { signal?: AbortSignal }) => Promise<void>;
+};
+
+export type BestNodeOptions = {
+  avoidNode?: string;
+  signal?: AbortSignal;
+  policy?: NodeSelectionPolicy;
+  verifyNode?: (name: string, signal?: AbortSignal) => Promise<boolean>;
 };
 
 const selectorName = '节点选择';
@@ -57,6 +65,7 @@ const delayTestUrls = ['https://www.gstatic.com/generate_204', 'https://cp.cloud
 const delayTestTimeoutMs = 2000;
 const delayTestConcurrency = 6;
 const nodeDelayCache = new Map<string, number>();
+const nodeProbeSuccessCache = new Map<string, number>();
 const nodeTestStateCache = new Map<string, ProxyNode['testState']>();
 type NodeTestOwner = {
   token: symbol;
@@ -68,10 +77,10 @@ const builtInProxyNames = new Set(['COMPATIBLE', 'DIRECT', 'PASS', 'REJECT', 'RE
 const effectiveCurrentGroupNames = ['Final', 'GLOBAL', 'MESL'];
 const requiredSyncedGroupNames = new Set([selectorName, ...effectiveCurrentGroupNames]);
 const strategyTargetSet = new Set<string>([...Object.values(strategyTargets), ...builtInProxyNames]);
-const preferredJapanNodePatterns = [
-  /(?:^|[^a-z0-9])(?:jp|jpn|japan|tokyo|osaka)(?:$|[^a-z0-9])/i,
-  /(?:\u65e5\u672c|\u4e1c\u4eac|\u5927\u962a|\u{1f1ef}\u{1f1f5})/iu
-];
+const automaticNodeSelectionPolicy: NodeSelectionPolicy = {
+  preferredRegion: 'jp',
+  regionFallback: 'global'
+};
 
 type MihomoConnectionsResponse = {
   uploadTotal?: number;
@@ -485,19 +494,34 @@ export function createMihomoApiClient(options: {
     return Boolean(signal?.aborted) || (error instanceof Error && error.name === 'AbortError');
   }
 
-  function pickFastestUsableNode(nodes: ProxyNode[], avoidNode?: string): ProxyNode | undefined {
-    const usable = nodes
-      .filter((node) => typeof node.delay === 'number')
-      .sort((left, right) => (left.delay ?? Number.MAX_SAFE_INTEGER) - (right.delay ?? Number.MAX_SAFE_INTEGER));
-    if (!usable.length) return undefined;
+  function rankUsableNodes(nodes: ProxyNode[], options: BestNodeOptions): ProxyNode[] {
+    const usable = nodes.filter((node) => typeof node.delay === 'number');
+    if (!usable.length) return [];
 
-    const candidates = avoidNode ? usable.filter((node) => node.name !== avoidNode) : usable;
+    const candidates = options.avoidNode ? usable.filter((node) => node.name !== options.avoidNode) : usable;
     const targetPool = candidates.length ? candidates : usable;
-    return targetPool.find((node) => isPreferredJapanNode(node.name)) ?? targetPool[0];
+    const byHealthThenDelay = (left: ProxyNode, right: ProxyNode) => {
+      const healthDifference =
+        (nodeProbeSuccessCache.get(right.name) ?? 0) - (nodeProbeSuccessCache.get(left.name) ?? 0);
+      return healthDifference || (left.delay ?? Number.MAX_SAFE_INTEGER) - (right.delay ?? Number.MAX_SAFE_INTEGER);
+    };
+    const sorted = [...targetPool].sort(byHealthThenDelay);
+    const policy = options.policy ?? automaticNodeSelectionPolicy;
+    if (policy.preferredRegion === 'auto') return sorted;
+
+    const preferred = sorted.filter((node) => isNodeInPreferredRegion(node.name, policy.preferredRegion));
+    if (policy.regionFallback === 'strict') return preferred;
+    return [...preferred, ...sorted.filter((node) => !preferred.includes(node))];
   }
 
-  function isPreferredJapanNode(name: string): boolean {
-    return preferredJapanNodePatterns.some((pattern) => pattern.test(name));
+  async function isVerifiedCandidate(node: ProxyNode, options: BestNodeOptions): Promise<boolean> {
+    if (!options.verifyNode) return true;
+    try {
+      return await options.verifyNode(node.name, options.signal);
+    } catch (error) {
+      if (isAbortError(error, options.signal)) throw error;
+      return false;
+    }
   }
 
   async function applySelectionSteps(steps: Array<{ group: string; name: string }>): Promise<void> {
@@ -565,6 +589,7 @@ export function createMihomoApiClient(options: {
       );
 
       const delays = results.filter((delay): delay is number => typeof delay === 'number');
+      nodeProbeSuccessCache.set(name, delays.length);
       const delay = delays.length
         ? Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length)
         : undefined;
@@ -575,6 +600,7 @@ export function createMihomoApiClient(options: {
         nodeTestStateCache.set(name, 'tested');
       } else {
         nodeDelayCache.delete(name);
+        nodeProbeSuccessCache.set(name, 0);
         nodeTestStateCache.set(name, 'failed');
       }
       nodeTestOwners.delete(name);
@@ -584,6 +610,7 @@ export function createMihomoApiClient(options: {
         restoreOwnedTestState(name, owner);
       } else if (ownsNodeTest(name, owner)) {
         nodeDelayCache.delete(name);
+        nodeProbeSuccessCache.set(name, 0);
         nodeTestStateCache.set(name, 'failed');
         nodeTestOwners.delete(name);
       }
@@ -684,29 +711,30 @@ export function createMihomoApiClient(options: {
     },
     async selectBestUsableNodeForStrategy(strategy, options = {}) {
       await this.testAllNodes({ signal: options.signal });
-      const bestNode = pickFastestUsableNode(await this.listNodes(), options.avoidNode);
-      if (!bestNode) {
-        return undefined;
-      }
+      const candidates = rankUsableNodes(await this.listNodes(), options);
+      if (!candidates.length) return undefined;
 
       const data = await readProxies();
       const proxies = data.proxies ?? {};
       const targetGroup = strategyTargets[strategy];
-      const strategySteps = resolveSelectionStepsForGroup(proxies, targetGroup, bestNode.name);
       const selector = findSelector(proxies);
-      if (!strategySteps || !selector?.item.all?.includes(targetGroup)) {
-        await this.selectNode(bestNode.name);
-        return bestNode.name;
+      for (const candidate of candidates) {
+        assertNotAborted(options.signal);
+        const strategySteps = resolveSelectionStepsForGroup(proxies, targetGroup, candidate.name);
+        if (!strategySteps || !selector?.item.all?.includes(targetGroup)) {
+          await this.selectNode(candidate.name);
+        } else {
+          await applySelectionSteps(strategySteps);
+          await request(`/proxies/${encodeURIComponent(selector.name)}`, {
+            method: 'PUT',
+            headers: headers({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ name: targetGroup })
+          });
+          await waitForSelectedNode(candidate.name);
+        }
+        if (await isVerifiedCandidate(candidate, options)) return candidate.name;
       }
-
-      await applySelectionSteps(strategySteps);
-      await request(`/proxies/${encodeURIComponent(selector.name)}`, {
-        method: 'PUT',
-        headers: headers({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ name: targetGroup })
-      });
-      await waitForSelectedNode(bestNode.name);
-      return bestNode.name;
+      return undefined;
     },
     async selectStrategy(strategy: StrategyKey) {
       if (strategy === 'manual') return;
@@ -735,6 +763,7 @@ export function createMihomoApiClient(options: {
       if (isBlockedSelectableNodeName(name)) {
         nodeTestOwners.delete(name);
         nodeDelayCache.delete(name);
+        nodeProbeSuccessCache.set(name, 0);
         nodeTestStateCache.set(name, 'failed');
         return undefined;
       }
@@ -767,6 +796,7 @@ export function createMihomoApiClient(options: {
               }
               if (ownsNodeTest(node.name, owner)) {
                 nodeDelayCache.delete(node.name);
+                nodeProbeSuccessCache.set(node.name, 0);
                 nodeTestStateCache.set(node.name, 'failed');
                 nodeTestOwners.delete(node.name);
               }
@@ -781,13 +811,13 @@ export function createMihomoApiClient(options: {
     },
     async selectBestUsableNode(options = {}) {
       await this.testAllNodes({ signal: options.signal });
-      const bestNode = pickFastestUsableNode(await this.listNodes(), options.avoidNode);
-      if (!bestNode) {
-        return undefined;
+      const candidates = rankUsableNodes(await this.listNodes(), options);
+      for (const candidate of candidates) {
+        assertNotAborted(options.signal);
+        await this.selectNode(candidate.name);
+        if (await isVerifiedCandidate(candidate, options)) return candidate.name;
       }
-
-      await this.selectNode(bestNode.name);
-      return bestNode.name;
+      return undefined;
     },
     async closeConnection(id) {
       const connectionId = id.trim();
@@ -828,6 +858,7 @@ export function createMihomoApiClient(options: {
       }
 
       nodeDelayCache.clear();
+      nodeProbeSuccessCache.clear();
       nodeTestStateCache.clear();
       nodeTestOwners.clear();
       nodeProviderCache.clear();

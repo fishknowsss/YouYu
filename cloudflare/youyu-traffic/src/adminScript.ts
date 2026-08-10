@@ -215,6 +215,8 @@ export const ADMIN_SCRIPT = String.raw`
   userNoticeTone.addEventListener('change', () => { state.noticeRequestId = ''; });
   [userNoticeMessage, userNoticeDuration].forEach((element) => element.addEventListener('input', () => { state.noticeRequestId = ''; }));
   userModeEl.addEventListener('change', updateUserModeState);
+  document.getElementById('userPreferredRegion').addEventListener('change', updateUserModeState);
+  document.getElementById('globalPreferredRegion').addEventListener('change', updateGlobalRegionFallbackState);
   mergeTargetEl.addEventListener('change', resetMergePreview);
   mergeResolutionEl.addEventListener('change', updateMergeConfirmState);
   previewMergeButton.addEventListener('click', () => runAction(previewMergeButton, '预览中', previewUserMerge));
@@ -597,6 +599,9 @@ export const ADMIN_SCRIPT = String.raw`
     document.getElementById('globalEnabled').value = config.enabled === false ? 'false' : 'true';
     document.getElementById('globalSubscription').value = config.subscriptionUrl || '';
     document.getElementById('globalRuleProfile').value = normalizeRuleProfile(config.ruleProfile);
+    document.getElementById('globalPreferredRegion').value = normalizePreferredRegion(config.preferredRegion);
+    document.getElementById('globalRegionFallback').value = normalizeRegionFallback(config.regionFallback);
+    updateGlobalRegionFallbackState();
     document.getElementById('globalVersion').textContent = 'v' + (config.version || 1);
     setGlobalSubscriptionState(config);
   }
@@ -1289,7 +1294,9 @@ export const ADMIN_SCRIPT = String.raw`
     const payload = {
       enabled: document.getElementById('globalEnabled').value === 'true',
       subscriptionUrl: document.getElementById('globalSubscription').value.trim() || null,
-      ruleProfile: document.getElementById('globalRuleProfile').value
+      ruleProfile: document.getElementById('globalRuleProfile').value,
+      preferredRegion: document.getElementById('globalPreferredRegion').value,
+      regionFallback: document.getElementById('globalRegionFallback').value
     };
     const data = await api('/api/admin/config', {
       method: 'POST',
@@ -1300,6 +1307,9 @@ export const ADMIN_SCRIPT = String.raw`
     document.getElementById('globalEnabled').value = config.enabled === false ? 'false' : 'true';
     document.getElementById('globalSubscription').value = config.subscriptionUrl || '';
     document.getElementById('globalRuleProfile').value = normalizeRuleProfile(config.ruleProfile);
+    document.getElementById('globalPreferredRegion').value = normalizePreferredRegion(config.preferredRegion);
+    document.getElementById('globalRegionFallback').value = normalizeRegionFallback(config.regionFallback);
+    updateGlobalRegionFallbackState();
     document.getElementById('globalVersion').textContent = 'v' + (config.version || 1);
     setGlobalSubscriptionState(config);
     await loadUsers();
@@ -1392,7 +1402,9 @@ export const ADMIN_SCRIPT = String.raw`
     const payload = {
       enabled: mode !== 'disabled',
       subscriptionUrl: mode === 'custom' ? document.getElementById('userSubscription').value.trim() || null : null,
-      ruleProfile: document.getElementById('userRuleProfile').value
+      ruleProfile: document.getElementById('userRuleProfile').value,
+      preferredRegion: document.getElementById('userPreferredRegion').value,
+      regionFallback: document.getElementById('userRegionFallback').value
     };
     const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/config', {
       method: 'POST',
@@ -1907,6 +1919,8 @@ export const ADMIN_SCRIPT = String.raw`
   function setUserConfigFields(config) {
     document.getElementById('userSubscription').value = config.subscriptionUrl || '';
     document.getElementById('userRuleProfile').value = normalizeRuleProfile(config.ruleProfile);
+    document.getElementById('userPreferredRegion').value = normalizePreferredRegion(config.preferredRegion);
+    document.getElementById('userRegionFallback').value = normalizeRegionFallback(config.regionFallback);
   }
 
   function getUserMode() {
@@ -1927,6 +1941,14 @@ export const ADMIN_SCRIPT = String.raw`
     const editable = getUserMode() === 'custom';
     document.getElementById('userSubscription').disabled = !editable;
     document.getElementById('userRuleProfile').disabled = !editable;
+    document.getElementById('userPreferredRegion').disabled = !editable;
+    document.getElementById('userRegionFallback').disabled =
+      !editable || document.getElementById('userPreferredRegion').value === 'auto';
+  }
+
+  function updateGlobalRegionFallbackState() {
+    document.getElementById('globalRegionFallback').disabled =
+      document.getElementById('globalPreferredRegion').value === 'auto';
   }
 
   function isCurrentUserContext(userId, sequence) {
@@ -2013,6 +2035,14 @@ export const ADMIN_SCRIPT = String.raw`
 
   function normalizeRuleProfile(value) {
     return value === 'subscription' ? 'subscription' : 'ruleset';
+  }
+
+  function normalizePreferredRegion(value) {
+    return ['auto', 'jp', 'hk', 'tw', 'sg', 'us', 'kr'].includes(value) ? value : 'jp';
+  }
+
+  function normalizeRegionFallback(value) {
+    return value === 'strict' ? 'strict' : 'global';
   }
 
   function positiveNumber(value) {

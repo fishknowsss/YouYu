@@ -2171,7 +2171,7 @@ test('admin traffic limit stays out of client and per-user remote config respons
   assert.equal(Object.hasOwn(userConfigBody.override ?? {}, 'trafficExpiresAt'), false);
 });
 
-test('admin config exposes only status, subscription, and the two supported rule profiles', async (context) => {
+test('admin config exposes supported rule and node-region policies', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
   await addKnownUser(database);
@@ -2186,6 +2186,17 @@ test('admin config exposes only status, subscription, and the two supported rule
     const response = await updateAdminConfig(database, { ruleProfile });
     assert.equal(response.status, 400, ruleProfile);
     await assertWorkerError(response, 400, 'invalid rule profile');
+  }
+
+  for (const preferredRegion of ['auto', 'jp', 'hk', 'tw', 'sg', 'us', 'kr']) {
+    const response = await updateAdminConfig(database, { preferredRegion });
+    assert.equal(response.status, 200, preferredRegion);
+    assert.equal((await response.json()).config.preferredRegion, preferredRegion);
+  }
+  for (const regionFallback of ['strict', 'global']) {
+    const response = await updateAdminConfig(database, { regionFallback });
+    assert.equal(response.status, 200, regionFallback);
+    assert.equal((await response.json()).config.regionFallback, regionFallback);
   }
 
   for (const field of [
@@ -2216,7 +2227,9 @@ test('global config rejects invalid recognized fields without changing stored co
   const baselineResponse = await updateAdminConfig(database, {
     enabled: true,
     subscriptionUrl: 'https://example.com/sub',
-    ruleProfile: 'ruleset'
+    ruleProfile: 'ruleset',
+    preferredRegion: 'jp',
+    regionFallback: 'global'
   });
   assert.equal(baselineResponse.status, 200);
   const baseline = (await baselineResponse.json()).config;
@@ -2225,6 +2238,8 @@ test('global config rejects invalid recognized fields without changing stored co
     { input: { enabled: 'true' }, error: 'invalid enabled' },
     { input: { subscriptionUrl: 42 }, error: 'invalid subscription url' },
     { input: { enabled: false, ruleProfile: 'unsupported' }, error: 'invalid rule profile' },
+    { input: { preferredRegion: 'uk' }, error: 'invalid preferred region' },
+    { input: { regionFallback: 'silent' }, error: 'invalid region fallback' },
     { input: { preferredNode: 42 }, error: 'unsupported config field' },
     { input: { preferredStrategy: 'unsupported' }, error: 'unsupported config field' },
     { input: { anomalyThresholdBytes: null }, error: 'unsupported config field' }
@@ -2248,7 +2263,9 @@ test('per-user config patches preserve omitted fields and only explicit null cle
   const baselineResponse = await updateAdminUserConfig(database, 'user-1', {
     enabled: false,
     subscriptionUrl: 'https://example.com/user-sub',
-    ruleProfile: 'subscription'
+    ruleProfile: 'subscription',
+    preferredRegion: 'hk',
+    regionFallback: 'strict'
   });
   assert.equal(baselineResponse.status, 200);
 
@@ -2258,6 +2275,8 @@ test('per-user config patches preserve omitted fields and only explicit null cle
   assert.equal(patched.enabled, false);
   assert.equal(patched.subscriptionUrl, 'https://example.com/user-sub');
   assert.equal(patched.ruleProfile, 'ruleset');
+  assert.equal(patched.preferredRegion, 'hk');
+  assert.equal(patched.regionFallback, 'strict');
 
   const clearedResponse = await updateAdminUserConfig(database, 'user-1', { subscriptionUrl: null });
   assert.equal(clearedResponse.status, 200);
@@ -2282,6 +2301,8 @@ test('per-user config patches preserve omitted fields and only explicit null cle
   assert.equal(current.enabled, false);
   assert.equal('subscriptionUrl' in current, false);
   assert.equal(current.ruleProfile, 'ruleset');
+  assert.equal(current.preferredRegion, 'hk');
+  assert.equal(current.regionFallback, 'strict');
 });
 
 test('activation rejects request bodies larger than 16 KiB', async (context) => {

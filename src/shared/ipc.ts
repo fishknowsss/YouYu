@@ -3,11 +3,15 @@ export type AppBuildChannel = 'standard' | 'in' | 'no';
 export type MihomoMode = 'rule' | 'global' | 'direct';
 export type StrategyKey = 'manual' | 'auto' | 'fallback' | 'load-balance' | 'direct';
 export type RuleProfile = 'ruleset' | 'subscription';
+export type PreferredNodeRegion = 'auto' | 'jp' | 'hk' | 'tw' | 'sg' | 'us' | 'kr';
+export type RegionFallback = 'strict' | 'global';
 export type RemoteControlConfig = {
   version: number;
   enabled: boolean;
   subscriptionUrl?: string;
   ruleProfile?: RuleProfile;
+  preferredRegion?: PreferredNodeRegion;
+  regionFallback?: RegionFallback;
   preferredNode?: string;
   preferredStrategy?: StrategyKey;
   directRules: string[];
@@ -295,6 +299,10 @@ export type AppSnapshot = {
   traffic: PersistentTrafficStats;
   trafficIdentity?: TrafficIdentity;
   userNotice?: UserNotice;
+  nodeSelectionNotice?: {
+    id: number;
+    message: string;
+  };
   subscriptionUrl: string;
   remoteSubscriptionUrl?: string;
   subscriptionRevision?: number;

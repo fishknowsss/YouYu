@@ -2,7 +2,14 @@ import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import { join } from 'node:path';
-import type { RemoteControlConfig, RuleProfile, StrategyKey, UserNotice } from '../shared/ipc';
+import type {
+  PreferredNodeRegion,
+  RegionFallback,
+  RemoteControlConfig,
+  RuleProfile,
+  StrategyKey,
+  UserNotice
+} from '../shared/ipc';
 import { createDeviceAuthHeaders } from './deviceAuth';
 import {
   EXTERNAL_RESPONSE_BODY_LIMITS,
@@ -75,6 +82,8 @@ const remoteConfigFileName = 'remote-config.json';
 const validRuleProfiles: RuleProfile[] = ['ruleset', 'subscription'];
 const legacyRuleProfiles = new Set(['smart', 'global']);
 const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-balance', 'direct'];
+const validPreferredRegions: PreferredNodeRegion[] = ['auto', 'jp', 'hk', 'tw', 'sg', 'us', 'kr'];
+const validRegionFallbacks: RegionFallback[] = ['strict', 'global'];
 
 export class RemoteConfigClient {
   private readonly filePath: string;
@@ -330,6 +339,12 @@ function normalizeRemoteConfig(value: unknown): RemoteControlConfig | undefined 
   const version = Math.floor(value.version);
   const ruleProfile = normalizeRuleProfile(value.ruleProfile);
   const subscriptionUrl = normalizeSubscriptionUrl(value.subscriptionUrl);
+  const preferredRegion = validPreferredRegions.includes(value.preferredRegion as PreferredNodeRegion)
+    ? (value.preferredRegion as PreferredNodeRegion)
+    : undefined;
+  const regionFallback = validRegionFallbacks.includes(value.regionFallback as RegionFallback)
+    ? (value.regionFallback as RegionFallback)
+    : undefined;
   const updatedAt = normalizeText(value.updatedAt, 40);
 
   return {
@@ -337,6 +352,8 @@ function normalizeRemoteConfig(value: unknown): RemoteControlConfig | undefined 
     enabled: value.enabled,
     ...(subscriptionUrl ? { subscriptionUrl } : {}),
     ...(ruleProfile ? { ruleProfile } : {}),
+    ...(preferredRegion ? { preferredRegion } : {}),
+    ...(regionFallback ? { regionFallback } : {}),
     directRules: [],
     proxyRules: [],
     ...(updatedAt ? { updatedAt } : {})
@@ -409,6 +426,18 @@ function isRemoteConfigPayload(value: unknown): value is RemoteConfigPayload {
   if (
     typeof value.preferredStrategy !== 'undefined' &&
     !validStrategies.includes(value.preferredStrategy as StrategyKey)
+  ) {
+    return false;
+  }
+  if (
+    typeof value.preferredRegion !== 'undefined' &&
+    !validPreferredRegions.includes(value.preferredRegion as PreferredNodeRegion)
+  ) {
+    return false;
+  }
+  if (
+    typeof value.regionFallback !== 'undefined' &&
+    !validRegionFallbacks.includes(value.regionFallback as RegionFallback)
   ) {
     return false;
   }

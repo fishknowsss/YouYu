@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   dialog,
   Menu,
+  Notification,
   session as electronSession,
   Tray,
   ipcMain as electronIpcMain,
@@ -23,8 +24,17 @@ import { createAppRuntimeCoordinator } from './appRuntimeCoordinator';
 import { IpcOperationRegistry } from './ipcOperations';
 import { LatestOperationCoordinator } from './latestOperationCoordinator';
 import { parseIpcArguments } from './ipcSchemas';
-import { connectivityServices, testAllConnectivity, testConnectivity } from './connectivity';
+import { connectivityServices, probeProxyExitRegionCode, testAllConnectivity, testConnectivity } from './connectivity';
 import { createMihomoApiClient } from './mihomo/api';
+import {
+  detectNodeRegion,
+  expectedExitRegionCode,
+  exitRegionLabel,
+  isNodeInPreferredRegion,
+  preferredRegionLabel,
+  resolveNodeSelectionPolicy,
+  type NodeSelectionPolicy
+} from './mihomo/nodeSelectionPolicy';
 import { strategyLabels, strategyTargets } from './mihomo/config';
 import { createMihomoRuntime } from './mihomo/process';
 import { createWindowsDeviceKeyProvider } from './platform/deviceKey';
@@ -220,6 +230,7 @@ let subscriptionRevision = 0;
 const ipcOperations = new IpcOperationRegistry((error) => appendLog(`取消操作清理失败: ${formatError(error)}`));
 const runtimeIntent = createRuntimeIntentController();
 let lastError: string | undefined;
+let nodeSelectionNotice: AppSnapshot['nodeSelectionNotice'];
 const appLogs = new DiagnosticLogBuffer();
 const petFeatureEnabled = !__YOUYU_DISABLE_PET__;
 const petVisibilityController = createPetVisibilityController({
@@ -1014,6 +1025,10 @@ const subscriptionCoordinator = createSubscriptionCoordinator<
         },
         { signal }
       );
+      const refreshedSettings = await settingsStore.read();
+      if (lifecycle.getStatus() === 'running' && refreshedSettings.strategy === 'auto') {
+        await selectPreferredAutoNode({ signal });
+      }
       return { performed: true, lastErrorBeforeRefresh, issueBeforeRefresh };
     }
 
@@ -1027,6 +1042,10 @@ const subscriptionCoordinator = createSubscriptionCoordinator<
       },
       { signal }
     );
+    const refreshedSettings = await settingsStore.read();
+    if (lifecycle.getStatus() === 'running' && refreshedSettings.strategy === 'auto') {
+      await selectPreferredAutoNode({ signal });
+    }
     return { performed: true };
   },
   async onSubscriptionSuccess(result, context) {
@@ -1119,10 +1138,16 @@ const nodeHealthCoordinator = createNodeHealthCoordinator<RuntimeNodeHealthConte
   async recoverNode(context, signal) {
     const mihomoApi = createRuntimeMihomoApi({ secret: context.settings.controllerSecret });
     const selectedNode = isAutomaticStrategy(context.settings.strategy)
-      ? await mihomoApi.selectBestUsableNodeForStrategy(context.settings.strategy, {
-          avoidNode: context.nodeName,
-          signal
-        })
+      ? context.settings.strategy === 'auto'
+        ? await selectPreferredAutoNode({ avoidNode: context.nodeName, signal }).catch((error) => {
+            signal.throwIfAborted();
+            appendLog(`自动地区节点恢复失败: ${formatError(error)}`);
+            return undefined;
+          })
+        : await mihomoApi.selectBestUsableNodeForStrategy(context.settings.strategy, {
+            avoidNode: context.nodeName,
+            signal
+          })
       : await mihomoApi.selectBestUsableNode({ avoidNode: context.nodeName, signal });
     signal.throwIfAborted();
     if (!selectedNode) return undefined;
@@ -1279,6 +1304,7 @@ async function createSnapshot(): Promise<AppSnapshot> {
     traffic: trafficSnapshot.stats,
     trafficIdentity: trafficSnapshot.identity,
     userNotice,
+    nodeSelectionNotice,
     subscriptionUrl: settings.subscriptionUrl,
     remoteSubscriptionUrl: settings.remoteSubscriptionUrl,
     subscriptionRevision,
@@ -1494,6 +1520,81 @@ function createRuntimeMihomoApi(options: { secret: string }) {
   });
 }
 
+async function readNodeSelectionPolicy(): Promise<NodeSelectionPolicy> {
+  return resolveNodeSelectionPolicy(await remoteConfigClient.getActiveConfig());
+}
+
+function publishNodeSelectionNotice(message: string): void {
+  nodeSelectionNotice = { id: Date.now(), message };
+  appendLog(message);
+  if (!mainWindow?.isVisible() && Notification.isSupported()) {
+    new Notification({ title: 'YouYu 节点切换', body: message }).show();
+  }
+}
+
+async function selectPreferredAutoNode(
+  options: {
+    signal?: AbortSignal;
+    avoidNode?: string;
+    restoreNodeOnFailure?: string;
+  } = {}
+): Promise<string> {
+  const settings = await settingsStore.read();
+  const policy = await readNodeSelectionPolicy();
+  const expectedRegion = expectedExitRegionCode(policy.preferredRegion);
+  let selectedExitRegion: string | undefined;
+  const mihomoApi = createRuntimeMihomoApi({ secret: settings.controllerSecret });
+  const selectedNode = await mihomoApi.selectBestUsableNodeForStrategy('auto', {
+    avoidNode: options.avoidNode,
+    policy,
+    signal: options.signal,
+    verifyNode: async (nodeName, signal) => {
+      const actualRegion = await probeProxyExitRegionCode(runtimePorts.mixedPort, { signal }).catch((error) => {
+        signal?.throwIfAborted();
+        appendLog(`出口地区验证失败: ${nodeName} (${formatError(error)})`);
+        return undefined;
+      });
+      if (!expectedRegion) {
+        selectedExitRegion = actualRegion;
+        return true;
+      }
+      if (!isNodeInPreferredRegion(nodeName, policy.preferredRegion)) {
+        if (policy.regionFallback !== 'global') return false;
+        selectedExitRegion = actualRegion;
+        return true;
+      }
+      if (actualRegion !== expectedRegion) {
+        appendLog(`节点出口地区不符: ${nodeName} (${actualRegion ?? 'unknown'} != ${expectedRegion})`);
+        return false;
+      }
+      selectedExitRegion = actualRegion;
+      return true;
+    }
+  });
+  if (!selectedNode) {
+    if (options.restoreNodeOnFailure) {
+      await mihomoApi.selectNode(options.restoreNodeOnFailure).catch(() => undefined);
+    }
+    throw new Error(
+      policy.preferredRegion === 'auto'
+        ? '没有可用节点'
+        : policy.regionFallback === 'strict'
+          ? `没有可用的${preferredRegionLabel(policy.preferredRegion)}节点`
+          : '没有可用节点'
+    );
+  }
+  const selectedRegion = selectedExitRegion?.toLowerCase() ?? detectNodeRegion(selectedNode);
+  if (
+    policy.preferredRegion !== 'auto' &&
+    selectedRegion !== policy.preferredRegion &&
+    policy.regionFallback === 'global'
+  ) {
+    const message = `${preferredRegionLabel(policy.preferredRegion)}节点均不可用，已自动切换至${exitRegionLabel(selectedRegion)}节点`;
+    publishNodeSelectionNotice(message);
+  }
+  return selectedNode;
+}
+
 async function withTrayRefresh<T>(task: () => Promise<T>): Promise<T> {
   try {
     return await task();
@@ -1525,6 +1626,17 @@ async function performStartProxy(signal?: AbortSignal, requestedIntentGeneration
   });
   throwIfAborted(signal);
   throwIfRuntimeIntentCanceled(intentGeneration);
+  const startedSettings = await settingsStore.read();
+  if (startedSettings.strategy === 'auto') {
+    try {
+      await selectPreferredAutoNode({ signal });
+    } catch (error) {
+      await lifecycle.stop().catch((stopError) => appendLog(`地区策略失败后停止代理失败: ${formatError(stopError)}`));
+      throw error;
+    }
+  }
+  throwIfAborted(signal);
+  throwIfRuntimeIntentCanceled(intentGeneration);
   trafficTracker.start();
   trafficReporter.start();
   clearLastError();
@@ -1540,18 +1652,24 @@ async function selectBestAutoNode(signal?: AbortSignal): Promise<AppSnapshot> {
   throwIfAborted(signal);
   await requireTrafficIdentity();
   nodeHealthCoordinator.invalidate();
-  const settings = await settingsStore.update({ strategy: 'auto', selectedNode: null });
+  let settings = await settingsStore.read();
   if (lifecycle.getStatus() !== 'running') {
+    await settingsStore.update({ strategy: 'auto', selectedNode: null });
     await startProxy(signal);
+    return createSnapshot();
   }
+
+  const currentNode = await createRuntimeMihomoApi({ secret: settings.controllerSecret })
+    .getCurrentNode()
+    .catch(() => '');
+  const selectedNode = await selectPreferredAutoNode({
+    signal,
+    restoreNodeOnFailure: settings.strategy === 'manual' ? currentNode : undefined
+  });
+  throwIfAborted(signal);
+  settings = await settingsStore.update({ strategy: 'auto', selectedNode: null });
 
   const mihomoApi = createRuntimeMihomoApi({ secret: settings.controllerSecret });
-  const selectedNode = await mihomoApi.selectBestUsableNodeForStrategy('auto', { signal });
-  throwIfAborted(signal);
-  if (!selectedNode) {
-    throw new Error('没有可用节点');
-  }
-
   await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
   await mihomoApi.flushDnsCache().catch((error) => appendLog(`刷新 DNS 缓存失败: ${formatError(error)}`));
   appendLog(`已自动选择可用节点: ${selectedNode}`);

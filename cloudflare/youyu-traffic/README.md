@@ -98,11 +98,14 @@ POST /api/admin/config
 Authorization: Bearer <ADMIN_TOKEN>
 ```
 
-`POST /api/admin/config` and per-user config accept only `enabled`, `subscriptionUrl`, and `ruleProfile`. Supported
-profiles are `ruleset` (智能规则) and `subscription` (机场规则). Leave the subscription empty to avoid a remote
-subscription override. Config request bodies are limited to 64 KiB; removed controls are rejected instead of being
-silently stored. Built-in direct/proxy protections remain client-owned, and traffic anomaly detection uses the fixed
-1 GiB threshold. Compatibility responses still contain empty `directRules` / `proxyRules` arrays for older clients.
+`POST /api/admin/config` and per-user config accept `enabled`, `subscriptionUrl`, `ruleProfile`, `preferredRegion`,
+and `regionFallback`. Supported profiles are `ruleset` (智能规则) and `subscription` (机场规则). Supported regions are
+`auto`, `jp`, `hk`, `tw`, `sg`, `us`, and `kr`; `regionFallback` is `global` (try other healthy regions and notify) or
+`strict` (do not cross regions). The global default is `jp` plus `global`. A per-user `null` clears that field's
+override so it inherits the global value. Leave the subscription empty to avoid a remote subscription override.
+Config request bodies are limited to 64 KiB; removed controls are rejected instead of being silently stored. Built-in
+direct/proxy protections remain client-owned, and traffic anomaly detection uses the fixed 1 GiB threshold.
+Compatibility responses still contain empty `directRules` / `proxyRules` arrays for older clients.
 
 The cumulative traffic limit is an admin-only dashboard setting and is never included in client or per-user remote
 configuration responses. It defaults to 3148 GiB (`3380139261952` bytes):

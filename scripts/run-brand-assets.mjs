@@ -7,8 +7,8 @@ const assetScript = join(scriptDir, 'generate-brand-assets.py');
 const candidates =
   process.platform === 'win32'
     ? [
-        ['python3', [assetScript]],
         ['python', [assetScript]],
+        ['python3', [assetScript]],
         ['py', ['-3', assetScript]]
       ]
     : [

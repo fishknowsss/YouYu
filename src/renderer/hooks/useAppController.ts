@@ -126,6 +126,7 @@ export function useAppController() {
   const snapshotRef = useRef(snapshot);
   const snapshotGenerationRef = useRef(0);
   const nodeSelectionGenerationRef = useRef(0);
+  const nodeSelectionNoticeIdRef = useRef<number | undefined>(undefined);
   const switchingNodeRef = useRef('');
   const advancedUnlockClicksRef = useRef(0);
   const activeOperationRequestsRef = useRef(new Map<string, AppApi>());
@@ -278,6 +279,13 @@ export function useAppController() {
 
   useEffect(() => scheduleTransientMessageClear(message, setMessage), [message]);
   useEffect(() => scheduleTransientMessageClear(settingsMessage, setSettingsMessage), [settingsMessage]);
+
+  useEffect(() => {
+    const notice = snapshot.nodeSelectionNotice;
+    if (!notice || notice.id === nodeSelectionNoticeIdRef.current) return;
+    nodeSelectionNoticeIdRef.current = notice.id;
+    setMessage(notice.message);
+  }, [snapshot.nodeSelectionNotice]);
 
   useEffect(() => {
     if (registrationSwitchOpen || !restoreRegistrationEntryFocusRef.current) return;
@@ -546,7 +554,14 @@ export function useAppController() {
     [runAction]
   );
   const selectStrategy = useCallback(
-    (strategy: StrategyKey) => void runAction((api) => api.selectStrategy(strategy), '已切换'),
+    (strategy: StrategyKey) =>
+      void (strategy === 'auto'
+        ? runAction((api, request) => api.selectBestAutoNode(request), '已切换', {
+            workingMessage: '选择中',
+            timeoutLabel: '切换',
+            cancellable: true
+          })
+        : runAction((api) => api.selectStrategy(strategy), '已切换')),
     [runAction]
   );
   const openNodes = useCallback(() => setPage('nodes'), []);

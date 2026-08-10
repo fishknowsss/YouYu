@@ -25,7 +25,8 @@ test('legacy database can apply every migration in order', () => {
     '2026-07-20-add-traffic-expiry-and-trend-index.sql',
     '2026-08-01-persist-traffic-report-dedup.sql',
     '2026-08-02-add-user-profiles-and-notices.sql',
-    '2026-08-02-add-user-notice-audit.sql'
+    '2026-08-02-add-user-notice-audit.sql',
+    '2026-08-10-add-node-region-policy.sql'
   ]) {
     database.exec(readFileSync(new URL(`migrations/${name}`, baseUrl), 'utf8'));
   }
@@ -55,7 +56,13 @@ test('legacy database can apply every migration in order', () => {
     .all()
     .map((row) => row.name);
   assert.ok(remoteColumns.includes('subscription_url'));
+  assert.ok(remoteColumns.includes('preferred_region'));
+  assert.ok(remoteColumns.includes('region_fallback'));
   assert.ok(remoteColumns.includes('anomaly_threshold_bytes'));
+  assert.deepEqual(
+    { ...database.prepare('SELECT preferred_region, region_fallback FROM remote_config WHERE id = 1').get() },
+    { preferred_region: 'jp', region_fallback: 'global' }
+  );
   assert.equal(
     database.prepare('SELECT traffic_expires_at FROM admin_settings WHERE id = 1').get().traffic_expires_at,
     '2026-08-11T20:00:00.000Z'

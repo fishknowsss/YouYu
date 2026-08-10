@@ -61,6 +61,8 @@ type RemoteConfigInput = {
   enabled?: boolean | null;
   subscriptionUrl?: string | null;
   ruleProfile?: string | null;
+  preferredRegion?: string | null;
+  regionFallback?: string | null;
 };
 
 type UserProfileInput = {
@@ -125,6 +127,8 @@ type RemoteConfigRow = {
   enabled?: number | null;
   subscription_url?: string | null;
   rule_profile?: string | null;
+  preferred_region?: string | null;
+  region_fallback?: string | null;
   preferred_node?: string | null;
   preferred_strategy?: string | null;
   direct_rules?: string | null;
@@ -137,6 +141,8 @@ type UserRemoteConfigRow = {
   enabled?: number | null;
   subscription_url?: string | null;
   rule_profile?: string | null;
+  preferred_region?: string | null;
+  region_fallback?: string | null;
   preferred_node?: string | null;
   preferred_strategy?: string | null;
   direct_rules?: string | null;
@@ -148,6 +154,8 @@ type EffectiveDeviceConfigRow = RemoteConfigRow & {
   user_enabled?: number | null;
   user_subscription_url?: string | null;
   user_rule_profile?: string | null;
+  user_preferred_region?: string | null;
+  user_region_fallback?: string | null;
   user_updated_at?: string | null;
   user_id?: string | null;
   user_name?: string | null;
@@ -166,6 +174,8 @@ type RemoteControlConfig = {
   enabled: boolean;
   subscriptionUrl?: string;
   ruleProfile?: string;
+  preferredRegion: 'auto' | 'jp' | 'hk' | 'tw' | 'sg' | 'us' | 'kr';
+  regionFallback: 'strict' | 'global';
   directRules: string[];
   proxyRules: string[];
   anomalyThresholdBytes: number;
@@ -582,14 +592,30 @@ async function updateAdminConfig(request: Request, env: Env): Promise<Response> 
       parseNullableConfigChoice(input.ruleProfile, ['ruleset', 'subscription'], 'invalid rule profile')
     );
   }
+  if (hasOwnField(input, 'preferredRegion')) {
+    assign(
+      'preferred_region',
+      parseNullableConfigChoice(
+        input.preferredRegion,
+        ['auto', 'jp', 'hk', 'tw', 'sg', 'us', 'kr'],
+        'invalid preferred region'
+      ) ?? 'jp'
+    );
+  }
+  if (hasOwnField(input, 'regionFallback')) {
+    assign(
+      'region_fallback',
+      parseNullableConfigChoice(input.regionFallback, ['strict', 'global'], 'invalid region fallback') ?? 'global'
+    );
+  }
 
   if (assignments.length === 0) return json({ config: await getGlobalRemoteConfig(env) });
 
   const now = new Date().toISOString();
   await env.DB.prepare(
     `INSERT OR IGNORE INTO remote_config
-       (id, version, enabled, subscription_url, rule_profile, preferred_node, preferred_strategy, direct_rules, proxy_rules, anomaly_threshold_bytes, updated_at)
-     VALUES (1, 1, 1, NULL, NULL, NULL, NULL, '[]', '[]', 1073741824, ?)`
+       (id, version, enabled, subscription_url, rule_profile, preferred_region, region_fallback, preferred_node, preferred_strategy, direct_rules, proxy_rules, anomaly_threshold_bytes, updated_at)
+     VALUES (1, 1, 1, NULL, NULL, 'jp', 'global', NULL, NULL, '[]', '[]', 1073741824, ?)`
   )
     .bind(now)
     .run();
@@ -666,6 +692,22 @@ async function updateAdminUserConfig(request: Request, env: Env, userId: string)
     assign(
       'rule_profile',
       parseNullableConfigChoice(input.ruleProfile, ['ruleset', 'subscription'], 'invalid rule profile')
+    );
+  }
+  if (hasOwnField(input, 'preferredRegion')) {
+    assign(
+      'preferred_region',
+      parseNullableConfigChoice(
+        input.preferredRegion,
+        ['auto', 'jp', 'hk', 'tw', 'sg', 'us', 'kr'],
+        'invalid preferred region'
+      )
+    );
+  }
+  if (hasOwnField(input, 'regionFallback')) {
+    assign(
+      'region_fallback',
+      parseNullableConfigChoice(input.regionFallback, ['strict', 'global'], 'invalid region fallback')
     );
   }
 
@@ -1160,6 +1202,8 @@ type AdminMergeConfigRow = {
   enabled: number | null;
   subscriptionUrl: string | null;
   ruleProfile: string | null;
+  preferredRegion: string | null;
+  regionFallback: string | null;
   updatedAt: string;
 };
 
@@ -1257,12 +1301,12 @@ async function mergeAdminUser(request: Request, env: Env, sourceUserId: string):
          AND target.status = 'active'
          AND target.merged_into_user_id IS NULL
          AND COALESCE((
-           SELECT json_array(enabled, subscription_url, rule_profile, updated_at)
+           SELECT json_array(enabled, subscription_url, rule_profile, preferred_region, region_fallback, updated_at)
            FROM user_remote_config
            WHERE user_id = source.id
          ), '') = ?
           AND COALESCE((
-            SELECT json_array(enabled, subscription_url, rule_profile, updated_at)
+            SELECT json_array(enabled, subscription_url, rule_profile, preferred_region, region_fallback, updated_at)
             FROM user_remote_config
             WHERE user_id = target.id
           ), '') = ?
@@ -1370,14 +1414,16 @@ async function mergeAdminUser(request: Request, env: Env, sourceUserId: string):
       statements.push(
         env.DB.prepare(
           `INSERT INTO user_remote_config
-             (user_id, enabled, subscription_url, rule_profile, preferred_node, preferred_strategy, direct_rules, proxy_rules, updated_at)
-           SELECT ?, enabled, subscription_url, rule_profile, NULL, NULL, NULL, NULL, ?
+             (user_id, enabled, subscription_url, rule_profile, preferred_region, region_fallback, preferred_node, preferred_strategy, direct_rules, proxy_rules, updated_at)
+           SELECT ?, enabled, subscription_url, rule_profile, preferred_region, region_fallback, NULL, NULL, NULL, NULL, ?
            FROM user_remote_config
            WHERE user_id = ? AND ${auditGuard}
            ON CONFLICT(user_id) DO UPDATE SET
              enabled = excluded.enabled,
              subscription_url = excluded.subscription_url,
              rule_profile = excluded.rule_profile,
+             preferred_region = excluded.preferred_region,
+             region_fallback = excluded.region_fallback,
              preferred_node = NULL,
              preferred_strategy = NULL,
              direct_rules = NULL,
@@ -1491,7 +1537,8 @@ async function getAdminMergeUser(env: Env, userId: string): Promise<AdminMergeUs
 
 async function getAdminMergeConfig(env: Env, userId: string): Promise<AdminMergeConfigRow | null> {
   return env.DB.prepare(
-    `SELECT enabled, subscription_url AS subscriptionUrl, rule_profile AS ruleProfile, updated_at AS updatedAt
+    `SELECT enabled, subscription_url AS subscriptionUrl, rule_profile AS ruleProfile,
+            preferred_region AS preferredRegion, region_fallback AS regionFallback, updated_at AS updatedAt
      FROM user_remote_config
      WHERE user_id = ?`
   )
@@ -1548,7 +1595,16 @@ async function recoverAdminUserMerge(
 }
 
 function getAdminMergeConfigFingerprint(config: AdminMergeConfigRow | null): string {
-  return config ? JSON.stringify([config.enabled, config.subscriptionUrl, config.ruleProfile, config.updatedAt]) : '';
+  return config
+    ? JSON.stringify([
+        config.enabled,
+        config.subscriptionUrl,
+        config.ruleProfile,
+        config.preferredRegion,
+        config.regionFallback,
+        config.updatedAt
+      ])
+    : '';
 }
 
 function getAdminMergeNoticeFingerprint(notice: AdminMergeNoticeRow | null): string {
@@ -1561,7 +1617,10 @@ function sameAdminMergeConfig(left: AdminMergeConfigRow, right: AdminMergeConfig
   return (
     left.enabled === right.enabled &&
     cleanOptional(left.subscriptionUrl) === cleanOptional(right.subscriptionUrl) &&
-    normalizeOptionalRuleProfile(left.ruleProfile) === normalizeOptionalRuleProfile(right.ruleProfile)
+    normalizeOptionalRuleProfile(left.ruleProfile) === normalizeOptionalRuleProfile(right.ruleProfile) &&
+    normalizeOptionalPreferredRegion(left.preferredRegion) ===
+      normalizeOptionalPreferredRegion(right.preferredRegion) &&
+    normalizeOptionalRegionFallback(left.regionFallback) === normalizeOptionalRegionFallback(right.regionFallback)
   );
 }
 
@@ -2335,8 +2394,8 @@ async function getGlobalRemoteConfig(env: Env): Promise<RemoteControlConfig> {
     const now = new Date().toISOString();
     await env.DB.prepare(
       `INSERT OR IGNORE INTO remote_config
-       (id, version, enabled, subscription_url, rule_profile, preferred_node, preferred_strategy, direct_rules, proxy_rules, anomaly_threshold_bytes, updated_at)
-       VALUES (1, 1, 1, NULL, NULL, NULL, NULL, '[]', '[]', 1073741824, ?)`
+       (id, version, enabled, subscription_url, rule_profile, preferred_region, region_fallback, preferred_node, preferred_strategy, direct_rules, proxy_rules, anomaly_threshold_bytes, updated_at)
+       VALUES (1, 1, 1, NULL, NULL, 'jp', 'global', NULL, NULL, '[]', '[]', 1073741824, ?)`
     )
       .bind(now)
       .run();
@@ -2345,6 +2404,8 @@ async function getGlobalRemoteConfig(env: Env): Promise<RemoteControlConfig> {
       enabled: true,
       subscriptionUrl: undefined,
       ruleProfile: 'ruleset',
+      preferredRegion: 'jp',
+      regionFallback: 'global',
       directRules: [],
       proxyRules: [],
       anomalyThresholdBytes: ANOMALY_THRESHOLD_BYTES,
@@ -2365,6 +2426,8 @@ async function getUserRemoteConfig(env: Env, userId: string): Promise<Partial<Re
     enabled: typeof row.enabled === 'number' ? row.enabled === 1 : undefined,
     subscriptionUrl: normalizeStoredSubscriptionUrl(row.subscription_url),
     ruleProfile: normalizeOptionalRuleProfile(row.rule_profile),
+    preferredRegion: normalizeOptionalPreferredRegion(row.preferred_region),
+    regionFallback: normalizeOptionalRegionFallback(row.region_fallback),
     updatedAt: row.updated_at ?? undefined
   };
 }
@@ -2379,6 +2442,8 @@ async function getEffectiveRemoteConfig(env: Env, userId: string): Promise<Remot
     enabled: typeof override.enabled === 'boolean' ? override.enabled : global.enabled,
     subscriptionUrl: override.subscriptionUrl ?? global.subscriptionUrl,
     ruleProfile: override.ruleProfile ?? global.ruleProfile,
+    preferredRegion: override.preferredRegion ?? global.preferredRegion,
+    regionFallback: override.regionFallback ?? global.regionFallback,
     updatedAt: override.updatedAt ?? global.updatedAt
   };
 }
@@ -2391,10 +2456,14 @@ async function getEffectiveClientStateForDevice(env: Env, deviceId: string): Pro
        remote_config.enabled,
        remote_config.subscription_url,
        remote_config.rule_profile,
+       remote_config.preferred_region,
+       remote_config.region_fallback,
        remote_config.updated_at,
        user_remote_config.enabled AS user_enabled,
        user_remote_config.subscription_url AS user_subscription_url,
        user_remote_config.rule_profile AS user_rule_profile,
+       user_remote_config.preferred_region AS user_preferred_region,
+       user_remote_config.region_fallback AS user_region_fallback,
        user_remote_config.updated_at AS user_updated_at,
        users.id AS user_id,
        users.name AS user_name,
@@ -2434,6 +2503,8 @@ async function getEffectiveClientStateForDevice(env: Env, deviceId: string): Pro
     enabled: typeof row.user_enabled === 'number' ? row.user_enabled === 1 : global.enabled,
     subscriptionUrl: normalizeStoredSubscriptionUrl(row.user_subscription_url) ?? global.subscriptionUrl,
     ruleProfile: normalizeOptionalRuleProfile(row.user_rule_profile) ?? global.ruleProfile,
+    preferredRegion: normalizeOptionalPreferredRegion(row.user_preferred_region) ?? global.preferredRegion,
+    regionFallback: normalizeOptionalRegionFallback(row.user_region_fallback) ?? global.regionFallback,
     updatedAt: row.user_updated_at ?? global.updatedAt
   };
   const userId = cleanOptional(row.user_id);
@@ -2469,6 +2540,8 @@ function normalizeRemoteConfigRow(row: RemoteConfigRow): RemoteControlConfig {
     enabled: row.enabled !== 0,
     subscriptionUrl: normalizeStoredSubscriptionUrl(row.subscription_url),
     ruleProfile: normalizeRuleProfile(row.rule_profile),
+    preferredRegion: normalizePreferredRegion(row.preferred_region),
+    regionFallback: normalizeRegionFallback(row.region_fallback),
     directRules: [],
     proxyRules: [],
     anomalyThresholdBytes: ANOMALY_THRESHOLD_BYTES,
@@ -2996,7 +3069,7 @@ function parseNullableConfigChoice(value: unknown, choices: string[], errorMessa
 }
 
 function assertSupportedRemoteConfigInput(input: RemoteConfigInput): void {
-  const supportedFields = new Set(['enabled', 'subscriptionUrl', 'ruleProfile']);
+  const supportedFields = new Set(['enabled', 'subscriptionUrl', 'ruleProfile', 'preferredRegion', 'regionFallback']);
   if (Object.keys(input).some((field) => !supportedFields.has(field))) {
     throw new HttpError(400, 'unsupported config field');
   }
@@ -3015,6 +3088,26 @@ function normalizeOptionalRuleProfile(value: unknown): 'ruleset' | 'subscription
   const profile = cleanOptional(value);
   if (!profile) return undefined;
   return profile === 'subscription' ? 'subscription' : 'ruleset';
+}
+
+function normalizePreferredRegion(value: unknown): RemoteControlConfig['preferredRegion'] {
+  return normalizeOptionalPreferredRegion(value) ?? 'jp';
+}
+
+function normalizeOptionalPreferredRegion(value: unknown): RemoteControlConfig['preferredRegion'] | undefined {
+  const region = cleanOptional(value);
+  return region && ['auto', 'jp', 'hk', 'tw', 'sg', 'us', 'kr'].includes(region)
+    ? (region as RemoteControlConfig['preferredRegion'])
+    : undefined;
+}
+
+function normalizeRegionFallback(value: unknown): RemoteControlConfig['regionFallback'] {
+  return normalizeOptionalRegionFallback(value) ?? 'global';
+}
+
+function normalizeOptionalRegionFallback(value: unknown): RemoteControlConfig['regionFallback'] | undefined {
+  const fallback = cleanOptional(value);
+  return fallback === 'strict' || fallback === 'global' ? fallback : undefined;
 }
 
 function parseNullableSubscriptionUrl(value: unknown): string | null {
@@ -3165,6 +3258,8 @@ function errorCodeFor(status: number, message: string): string {
     'invalid report id': 'INVALID_REPORT_ID',
     'invalid reported at': 'INVALID_REPORTED_AT',
     'invalid rule profile': 'INVALID_RULE_PROFILE',
+    'invalid preferred region': 'INVALID_PREFERRED_REGION',
+    'invalid region fallback': 'INVALID_REGION_FALLBACK',
     'invalid signature': 'INVALID_SIGNATURE',
     'invalid subscription url': 'INVALID_SUBSCRIPTION_URL',
     'invalid target user': 'INVALID_TARGET_USER',

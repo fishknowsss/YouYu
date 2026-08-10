@@ -3,6 +3,7 @@ import {
   connectivityServices,
   parseCurlMetrics,
   parseTraceData,
+  probeProxyExitRegionCode,
   testAllConnectivity,
   testConnectivity
 } from '../../src/main/connectivity';
@@ -48,6 +49,24 @@ describe('parseTraceData', () => {
       loc: 'JP',
       colo: 'NRT'
     });
+  });
+});
+
+describe('probeProxyExitRegionCode', () => {
+  it('uses the active proxy path and returns a normalized exit country code', async () => {
+    const runProbe = vi.fn(async () => ({
+      body: 'ip=203.0.113.10\nloc=jp\ncolo=NRT\n',
+      httpCode: 200,
+      finalUrl: 'https://www.cloudflare.com/cdn-cgi/trace',
+      timings: {}
+    }));
+
+    await expect(probeProxyExitRegionCode(7890, { runProbe })).resolves.toBe('JP');
+    expect(runProbe).toHaveBeenCalledWith(
+      'https://www.cloudflare.com/cdn-cgi/trace',
+      7890,
+      expect.objectContaining({ captureBody: true })
+    );
   });
 });
 

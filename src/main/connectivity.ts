@@ -208,6 +208,22 @@ export type ConnectivityTestOptions = {
   runProbe?: ConnectivityProbeRunner;
 };
 
+export async function probeProxyExitRegionCode(
+  mixedPort: number,
+  options: ConnectivityTestOptions = {}
+): Promise<string | undefined> {
+  throwIfConnectivityTestAborted(options.signal);
+  const runProbe = options.runProbe ?? runCurlProbe;
+  const probe = await runProbe('https://www.cloudflare.com/cdn-cgi/trace', mixedPort, {
+    captureBody: true,
+    signal: options.signal
+  });
+  throwIfConnectivityTestAborted(options.signal);
+  if (!probe.httpCode || probe.httpCode < 200 || probe.httpCode >= 400) return undefined;
+  const region = parseTraceData(probe.body).loc?.trim().toUpperCase();
+  return region && /^[A-Z]{2}$/.test(region) ? region : undefined;
+}
+
 export async function testConnectivity(
   deps: ConnectivityDeps,
   key: ConnectivityServiceKey,
