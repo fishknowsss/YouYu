@@ -135,6 +135,26 @@ describe('update network fallback', () => {
     await expect(downloading).resolves.toEqual(['YouYu-1.6.0-x64.exe']);
   });
 
+  it('passes the selected route and attempt number to each operation', async () => {
+    const calls: string[] = [];
+    const session = createSession(calls);
+    const attempts: string[] = [];
+
+    await runUpdateDownloadWithNetworkFallback({
+      session,
+      proxyUrl: 'http://127.0.0.1:7890',
+      download: async ({ route, attempt }) => {
+        attempts.push(`${attempt}:${route}`);
+        if (attempt === 1) {
+          throw Object.assign(new Error('route health rejected'), { code: 'ERR_UPDATE_ROUTE_UNHEALTHY' });
+        }
+        return 'ok';
+      }
+    });
+
+    expect(attempts).toEqual(['1:local-proxy', '2:direct']);
+  });
+
   it('wires metadata checks to a guarded non-blocking explicit download', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
     const coordinator = await readFile('src/main/updateCoordinator.ts', 'utf8');
@@ -218,6 +238,7 @@ describe('update network fallback', () => {
     new Error('request timed out'),
     new Error('ECONNRESET'),
     Object.assign(new Error('socket closed'), { code: 'UND_ERR_SOCKET' }),
+    Object.assign(new Error('route health rejected'), { code: 'ERR_UPDATE_ROUTE_UNHEALTHY' }),
     new Error('net::ERR_TUNNEL_CONNECTION_FAILED')
   ])('recognizes recoverable update transport failures', (error) => {
     expect(isRecoverableUpdateNetworkError(error)).toBe(true);

@@ -386,6 +386,7 @@ function formatUpdateStatus(update: AppSnapshot['update']): string {
   if (update.status === 'checking') return '检查中';
   if (update.status === 'available') return update.availableVersion ? `发现 ${update.availableVersion}` : '发现更新';
   if (update.status === 'downloading') {
+    if (update.message) return update.message;
     const version = update.availableVersion ? ` ${update.availableVersion}` : '';
     if (update.downloadPhase === 'verifying') return `正在校验更新包${version}`;
     const label = update.downloadPhase === 'full-download' ? '正在下载完整更新包' : '正在下载更新包';

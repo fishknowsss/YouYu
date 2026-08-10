@@ -147,6 +147,32 @@ describe('UpdateCoordinator', () => {
     expect(harness.coordinator.inspect()).toMatchObject({ operation: 'idle', downloadInFlight: false });
   });
 
+  it('keeps an automatic route-switch notice visible while transfer progress resumes', async () => {
+    const pending = deferred<unknown>();
+    const harness = createHarness({ executeDownload: vi.fn(() => pending.promise) });
+    harness.coordinator.start({ checkImmediately: false });
+    harness.coordinator.setSnapshot({ status: 'available', availableVersion: '1.6.9' });
+
+    const downloading = harness.coordinator.download();
+    harness.coordinator.reportNetworkRetry('线路不稳定，已自动切换重试');
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      status: 'downloading',
+      message: '线路不稳定，已自动切换重试'
+    });
+
+    harness.updater.emit('download-progress', {
+      percent: 12,
+      transferred: 12,
+      total: 100,
+      bytesPerSecond: 10
+    });
+    expect(harness.coordinator.getSnapshot().message).toBe('线路不稳定，已自动切换重试');
+
+    pending.resolve([]);
+    await downloading;
+    expect(harness.coordinator.getSnapshot().message).toBeUndefined();
+  });
+
   it('refreshes a downloaded update and switches from 1.6.9 to a newly published 1.6.10', async () => {
     const pendingDownload = deferred<unknown>();
     const harness = createHarness({

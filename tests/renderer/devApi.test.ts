@@ -90,6 +90,13 @@ describe('createDevYouYuApi', () => {
       message: '已开始自动安装，无需操作'
     });
 
+    const rerouting = await createDevYouYuApi({ preset: 'readme', updateStatus: 'rerouting' }).getSnapshot();
+    expect(rerouting.update).toMatchObject({
+      status: 'downloading',
+      percent: 18,
+      message: '线路不稳定，已自动切换重试'
+    });
+
     const notice = await createDevYouYuApi({ preset: 'readme', noticeTone: 'warning' }).getSnapshot();
     expect(notice.userNotice).toMatchObject({
       revision: 1,

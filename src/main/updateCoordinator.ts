@@ -301,6 +301,13 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
     return snapshot;
   }
 
+  function reportNetworkRetry(message: string): AppUpdateSnapshot {
+    const operationGeneration = activeDownloadGeneration ?? activeCheckGeneration;
+    if (operationGeneration === undefined) return snapshot;
+    commit({ status: snapshot.status, message }, operationGeneration);
+    return snapshot;
+  }
+
   function commit(next: Partial<AppUpdateSnapshot>, expectedGeneration: number): boolean {
     if (!isCurrent(expectedGeneration)) return false;
     snapshot = normalizeUpdateSnapshot(snapshot, next, options);
@@ -478,6 +485,7 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
           commit(
             {
               status: 'downloading',
+              message: snapshot.message,
               percent,
               downloadPhase: getUpdateDownloadPhase({
                 previousPercent: snapshot.percent,
@@ -548,6 +556,7 @@ export function createUpdateCoordinator(options: UpdateCoordinatorOptions) {
     pause,
     dispose,
     setSnapshot,
+    reportNetworkRetry,
     getSnapshot: () => snapshot,
     inspect
   };

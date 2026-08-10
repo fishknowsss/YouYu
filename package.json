@@ -1,6 +1,6 @@
 {
   "name": "youyu",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "private": true,
   "author": "118 Studio",
   "description": "YouYu Windows proxy desktop app",
@@ -36,7 +36,9 @@
     "validate:release:no": "tsx scripts/validate-windows-release.ts --no-pet",
     "validate:release:in:public": "tsx scripts/validate-windows-release.ts --internal --public-update",
     "validate:release:no:public": "tsx scripts/validate-windows-release.ts --no-pet --public-update",
-    "smoke": "tsx scripts/smoke-test.ts"
+    "smoke": "tsx scripts/smoke-test.ts",
+    "release:network:preflight": "node scripts/verify-remote-release.mjs --preflight",
+    "release:verify:remote": "node scripts/verify-remote-release.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260801.1",
@@ -66,6 +68,7 @@
     "yaml": "2.8.3"
   },
   "dependencies": {
+    "builder-util-runtime": "9.7.0",
     "electron-updater": "^6.8.9"
   }
 }

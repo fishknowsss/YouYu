@@ -25,6 +25,13 @@
 - For release-delivered app changes, finish the full checklist in `docs/release-packaging.md`: validation, packaging, local archive maintenance, commit, explicit tag push, GitHub Release asset upload, and remote `latest*.yml` verification.
 - Pure documentation, project-rule, or archive housekeeping changes do not require a version bump or installer rebuild.
 
+## CDN and Release Network Rules
+
+- Before any GitHub Release upload, Electron/Mihomo cache download, or remote release verification, run `npm run release:network:preflight`. Keep the verified proxy environment for the whole operation; do not clear `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`, and do not force a direct route unless an explicit bounded comparison has already proven it healthier.
+- Never hard-code `127.0.0.1:7890` as a release or agent default. Inspect the current environment, live listener, WinINET settings, and YouYu runtime port before diagnosing or changing proxy configuration; preserve unrelated existing settings.
+- Use `npm run release:verify:remote` as the authoritative remote closure check. It must verify the exact 11 public assets, all three `latest*.yml` files, remote sizes, the complete SHA256 manifest, and local/remote manifest byte equality through the preflight-approved route. Do not replace it with ad-hoc `Invoke-WebRequest`, `gh release download`, or unbounded direct downloads.
+- Release/network diagnostics must not print OAuth tokens, proxy credentials, full authenticated URLs, or process command lines that may contain secrets. Log only sanitized route labels, bounded error details, byte counts, speed, and verification results.
+
 ## Packaging Rules
 
 - Use `npm run dist:win:local` for a local three-installer delivery. It leaves the standard installer without a bundled subscription and leaves the `-in` and `-no` installers with the private bundled subscription.

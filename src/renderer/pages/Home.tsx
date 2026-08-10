@@ -146,13 +146,15 @@ function EasyUpdateNotice({
               ? '安装未开始，请重试'
               : `已下载 ${version ?? '新版本'}`
           : downloading
-            ? verifying
-              ? '校验更新包'
-              : version
-                ? `${downloadingFullPackage ? '下载完整包' : '下载更新'} ${version}`
-                : downloadingFullPackage
-                  ? '下载完整包'
-                  : '下载更新'
+            ? update.message
+              ? update.message
+              : verifying
+                ? '校验更新包'
+                : version
+                  ? `${downloadingFullPackage ? '下载完整包' : '下载更新'} ${version}`
+                  : downloadingFullPackage
+                    ? '下载完整包'
+                    : '下载更新'
             : version
               ? `发现 ${version}`
               : '发现更新';

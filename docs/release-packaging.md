@@ -44,6 +44,26 @@
 
 升级 Electron 时，必须同时更新 `package.json`、lockfile 与该 manifest；官方 ZIP 的 SHA256 必须和同一 Release 的 `SHASUMS256.txt` 一致，并运行 Electron distribution 回归测试和 Windows 安装包验证。
 
+## GitHub CDN 路由门禁
+
+本机访问 GitHub Release CDN 时可能出现“连接仍在传输，但速度低到数小时无法完成”的路径问题。这类情况不会稳定触发普通超时，不能通过反复重跑、清空代理变量或临时强制直连处理。
+
+在 Electron/Mihomo 缓存下载、GitHub Release 上传和远端资产校验之前运行：
+
+```powershell
+npm run release:network:preflight
+```
+
+该命令通过当前进程实际继承的网络环境，从最新公开安装包读取一个有界的 2 MB 分段，检查 HTTP 状态、完整字节数和最低可用速度。它不会打印代理凭据，也不会擅自改走直连。预检失败时先检查当前 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、WinINET 和 YouYu 实际监听端口；不要写死 `7890`，不要在同一发布过程中清空已经验证可用的代理环境。
+
+远端发布完成后统一运行：
+
+```powershell
+npm run release:verify:remote
+```
+
+校验器会先重复 CDN 预检，再通过公开 GitHub API 核对精确的 11 个资产，使用 `curl.exe --ssl-no-revoke`、重试、低速中止和断点续传下载到独立临时目录，并验证三个更新描述文件、远端大小、完整十项 SHA256 清单以及本地/远端 `SHA256SUMS.txt` 逐字节一致。临时目录在成功或失败后都会清理。不要再使用手工 `Invoke-WebRequest`、`gh release download` 或无界直连下载替代这项门禁。
+
 ## Mihomo 第三方运行时
 
 `resources/mihomo/win-x64/` 是一个不可拆分的分发单元，必须同时包含：
@@ -265,6 +285,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 2. 运行本地验证。
 
    ```powershell
+   npm run release:network:preflight
    npm run validate:repo
    npm run validate:mihomo
    npm run typecheck
@@ -372,55 +393,13 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    git ls-remote --tags origin "refs/tags/v$version"
    ```
 
-   再从 GitHub 下载入口读取三个更新描述文件，确认它们都指向当前版本和正确安装包：
+   然后运行统一的远端校验器；不要用手工下载片段替代：
 
    ```powershell
-   $version = node -p "require('./package.json').version"
-   foreach ($name in @('latest.yml', 'latest-in.yml', 'latest-no.yml')) {
-     $bytes = (Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/fishknowsss/YouYu/releases/download/v$version/$name" -TimeoutSec 30).Content
-     if ($bytes -is [byte[]]) { [Text.Encoding]::UTF8.GetString($bytes) } else { $bytes }
-   }
-   $manifest = Get-Content -LiteralPath 'resources/mihomo/win-x64/manifest.json' -Raw | ConvertFrom-Json
-   $sourceName = $manifest.sourceArchive.releaseAssetNameTemplate.Replace('${appVersion}', $version)
-   $sourcePath = Join-Path 'release' $sourceName
-   if ((Get-FileHash -Algorithm SHA256 -LiteralPath $sourcePath).Hash.ToLowerInvariant() -ne $manifest.sourceArchive.sha256) {
-     throw "Local Mihomo source archive checksum mismatch: $sourceName"
-   }
-   $remoteSource = Join-Path $env:TEMP ("youyu-mihomo-source-{0}-{1}.tar.gz" -f $version, [guid]::NewGuid().ToString('N'))
-   try {
-     curl.exe --ssl-no-revoke --fail --location --retry 3 --retry-all-errors `
-       --output $remoteSource "https://github.com/fishknowsss/YouYu/releases/download/v$version/$sourceName"
-     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $remoteSource).Hash.ToLowerInvariant() -ne $manifest.sourceArchive.sha256) {
-       throw "Remote Mihomo source archive checksum mismatch: $sourceName"
-     }
-   } finally {
-     Remove-Item -LiteralPath $remoteSource -Force -ErrorAction SilentlyContinue
-   }
+   npm run release:verify:remote
    ```
 
-   最后把远端 11 个资产下载到独立临时目录，复用仓库校验器核对 `SHA256SUMS.txt` 的完整十项清单；不能只检查文件存在或只复核三个更新描述文件：
-
-   ```powershell
-   $assetNames = @((gh release view "v$version" --json assets | ConvertFrom-Json).assets.name)
-   if ($assetNames.Count -ne 11) { throw "Expected 11 release assets, found $($assetNames.Count)" }
-   $remoteRelease = Join-Path $env:TEMP ("youyu-remote-release-{0}-{1}" -f $version, [guid]::NewGuid().ToString('N'))
-   New-Item -ItemType Directory -Path $remoteRelease | Out-Null
-   try {
-     foreach ($name in $assetNames) {
-       $destination = Join-Path $remoteRelease $name
-       curl.exe --ssl-no-revoke --fail --location --retry 3 --retry-all-errors `
-         --output $destination "https://github.com/fishknowsss/YouYu/releases/download/v$version/$name"
-     }
-     node --input-type=module -e "import { verifyReleaseSha256Manifest } from './scripts/release-sha256-manifest.mjs'; const result = await verifyReleaseSha256Manifest({ releaseDir: process.argv[1], version: process.argv[2] }); if (result.assetCount !== 10) throw new Error('Expected 10 manifest entries');" $remoteRelease $version
-     if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $remoteRelease 'SHA256SUMS.txt')).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath 'release/SHA256SUMS.txt').Hash) {
-       throw 'Remote SHA256SUMS.txt differs from the locally verified manifest'
-     }
-   } finally {
-     Remove-Item -LiteralPath $remoteRelease -Recurse -Force -ErrorAction SilentlyContinue
-   }
-   ```
-
-   每个更新描述文件都必须显示 `version: <version>`，并分别指向 `YouYu-<version>-x64.exe`、`YouYu-<version>-x64-in.exe`、`YouYu-<version>-x64-no.exe`。远端 Mihomo 源码归档的字节数与 SHA256 必须和 manifest、本地文件一致；远端 `SHA256SUMS.txt` 必须与本地逐字节一致，并恰好覆盖其余十个远端资产。
+   该命令通过预检批准的当前路由完成全部 11 个资产和三个更新通道校验。每个更新描述文件都必须显示 `version: <version>`，并分别指向 `YouYu-<version>-x64.exe`、`YouYu-<version>-x64-in.exe`、`YouYu-<version>-x64-no.exe`；远端 `SHA256SUMS.txt` 必须与本地逐字节一致并恰好覆盖其余十个远端资产。
 
 9. 最终收尾。
 

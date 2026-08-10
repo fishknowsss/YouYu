@@ -12,22 +12,29 @@ export type UpdateNetworkSession = {
 
 type UpdateNetworkOperationOptions<T> = {
   session: UpdateNetworkSession;
-  operation: () => Promise<T>;
+  operation: (attempt: UpdateNetworkAttempt) => Promise<T>;
   proxyUrl?: string;
   getProxyUrl?: () => string | undefined;
   onRetry?: (route: 'direct' | 'local-proxy', detail: string) => void;
 };
 
+export type UpdateNetworkRoute = 'direct' | 'local-proxy';
+
+export type UpdateNetworkAttempt = {
+  route: UpdateNetworkRoute;
+  attempt: 1 | 2;
+};
+
 type UpdateCheckNetworkOptions<T> = Omit<UpdateNetworkOperationOptions<T>, 'operation'> & {
-  check: () => Promise<T>;
+  check: (attempt: UpdateNetworkAttempt) => Promise<T>;
 };
 
 type UpdateDownloadNetworkOptions<T> = Omit<UpdateNetworkOperationOptions<T>, 'operation'> & {
-  download: () => Promise<T>;
+  download: (attempt: UpdateNetworkAttempt) => Promise<T>;
 };
 
 const recoverableUpdateNetworkPattern =
-  /(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|EPIPE|ETIMEDOUT|UND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|SOCKET)|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ERR_ADDRESS_UNREACHABLE|ERR_CONNECTION_(?:CLOSED|REFUSED|RESET|TIMED_OUT)|ERR_(?:PROXY|TUNNEL)_CONNECTION_FAILED|fetch failed|request timed out|network timeout)/i;
+  /(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|EPIPE|ETIMEDOUT|UND_ERR_(?:CONNECT_TIMEOUT|HEADERS_TIMEOUT|SOCKET)|ERR_UPDATE_ROUTE_UNHEALTHY|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ERR_ADDRESS_UNREACHABLE|ERR_CONNECTION_(?:CLOSED|REFUSED|RESET|TIMED_OUT)|ERR_(?:PROXY|TUNNEL)_CONNECTION_FAILED|fetch failed|request timed out|network timeout)/i;
 const nonRetryableUpdateSecurityPattern =
   /(?:ERR_CERT_|ERR_SSL_|CERT_(?:HAS_EXPIRED|NOT_YET_VALID)|UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT)/i;
 
@@ -84,16 +91,17 @@ export function runUpdateDownloadWithNetworkFallback<T>(options: UpdateDownloadN
 async function runUpdateNetworkOperationWithFallback<T>(options: UpdateNetworkOperationOptions<T>): Promise<T> {
   const initialProxyUrl = resolveUpdateProxyUrl(options);
   const initialRoute = await prepareUpdateNetworkSession(options.session, initialProxyUrl);
+  let retryRoute: UpdateNetworkRoute;
   try {
-    return await options.operation();
+    return await options.operation({ route: initialRoute, attempt: 1 });
   } catch (error) {
     if (!isRecoverableUpdateNetworkError(error)) throw error;
     const retryProxyUrl = initialRoute === 'local-proxy' ? undefined : resolveUpdateProxyUrl(options);
-    const route = await prepareUpdateNetworkSession(options.session, retryProxyUrl);
-    options.onRetry?.(route, describeNetworkError(error));
+    retryRoute = await prepareUpdateNetworkSession(options.session, retryProxyUrl);
+    options.onRetry?.(retryRoute, describeNetworkError(error));
   }
 
-  return options.operation();
+  return options.operation({ route: retryRoute, attempt: 2 });
 }
 
 function resolveUpdateProxyUrl(options: Pick<UpdateNetworkOperationOptions<unknown>, 'getProxyUrl' | 'proxyUrl'>) {

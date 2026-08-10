@@ -242,6 +242,45 @@ describe('silent update installation notice', () => {
     expect(findButton(container, '安装')?.disabled).toBe(false);
   });
 
+  it('shows the automatic download route switch on both update surfaces', async () => {
+    const snapshot = await createDownloadedSnapshot();
+    snapshot.update = {
+      ...snapshot.update,
+      status: 'downloading',
+      downloadedVersion: undefined,
+      availableVersion: '1.7.4',
+      percent: 18,
+      transferredBytes: 18 * 1024 * 1024,
+      totalBytes: 100 * 1024 * 1024,
+      message: '线路不稳定，已自动切换重试'
+    };
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<Home {...createHomeProps(snapshot)} busy={false} busyLabel="" />));
+    expect(container.textContent).toContain('线路不稳定，已自动切换重试');
+    expect(container.textContent).toContain('18.0MB / 100.0MB');
+
+    await act(async () =>
+      root?.render(
+        <Settings
+          snapshot={snapshot}
+          busy={false}
+          busyLabel=""
+          message=""
+          onRepair={() => undefined}
+          onSave={() => undefined}
+          onSyncRemoteConfig={() => undefined}
+          onExportDiagnostics={() => undefined}
+          onCheckUpdate={() => undefined}
+          onInstallUpdate={() => undefined}
+        />
+      )
+    );
+    expect(container.textContent).toContain('线路不稳定，已自动切换重试');
+  });
+
   it('distinguishes a freshness-check failure from an installer launch failure', async () => {
     const snapshot = await createDownloadedSnapshot();
     snapshot.update = {

@@ -168,7 +168,7 @@ const devConnectivity: Array<{
 ];
 
 export function createDevYouYuApi(
-  options: { preset?: 'readme'; updateStatus?: 'installing'; noticeTone?: 'info' | 'warning' } = {}
+  options: { preset?: 'readme'; updateStatus?: 'installing' | 'rerouting'; noticeTone?: 'info' | 'warning' } = {}
 ): YouYuApi {
   let petState: DesktopPetState = 'idle';
   const petListeners = new Set<(state: DesktopPetState) => void>();
@@ -225,6 +225,18 @@ export function createDevYouYuApi(
       ...snapshot.update,
       status: 'installing',
       message: updateInstallingMessage
+    };
+  } else if (options.updateStatus === 'rerouting') {
+    snapshot.update = {
+      ...snapshot.update,
+      status: 'downloading',
+      availableVersion: __YOUYU_APP_VERSION__,
+      percent: 18,
+      downloadPhase: 'downloading',
+      transferredBytes: 18 * 1024 * 1024,
+      totalBytes: 100 * 1024 * 1024,
+      bytesPerSecond: 2.9 * 1024 * 1024,
+      message: '线路不稳定，已自动切换重试'
     };
   }
   if (options.noticeTone) {
@@ -661,7 +673,12 @@ export function installDevApiFallback() {
   if (import.meta.env.DEV && !window.youyu) {
     const params = new URLSearchParams(window.location.search);
     const preset = params.get('demo') === 'readme' ? 'readme' : undefined;
-    const updateStatus = params.get('update') === 'installing' ? 'installing' : undefined;
+    const updateStatus =
+      params.get('update') === 'installing'
+        ? 'installing'
+        : params.get('update') === 'rerouting'
+          ? 'rerouting'
+          : undefined;
     const noticeTone =
       params.get('notice') === 'warning' ? 'warning' : params.get('notice') === 'info' ? 'info' : undefined;
     window.youyu = createDevYouYuApi({ preset, updateStatus, noticeTone });

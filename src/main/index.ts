@@ -13,6 +13,7 @@ import {
   type SaveDialogOptions
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
+import { CancellationError, CancellationToken } from 'builder-util-runtime';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { writeFile as writeTextFile } from 'node:fs/promises';
@@ -113,9 +114,15 @@ import {
   createUpdateFeedConfig,
   prepareUpdateNetworkSession,
   runUpdateCheckWithNetworkFallback,
-  runUpdateDownloadWithNetworkFallback
+  runUpdateDownloadWithNetworkFallback,
+  type UpdateNetworkRoute
 } from './updateNetwork';
 import { createUpdateCoordinator } from './updateCoordinator';
+import {
+  createUpdateDownloadHealthMonitor,
+  UpdateRouteHealthError,
+  type UpdateDownloadHealthReason
+} from './updateDownloadHealth';
 import { formatErrorWithCause } from './errorDetails';
 import type { FetchLike } from './networkFallback';
 
@@ -320,13 +327,15 @@ const updateCoordinator = createUpdateCoordinator({
     runUpdateCheckWithNetworkFallback({
       session: autoUpdater.netSession,
       check: () => autoUpdater.checkForUpdates(),
-      getProxyUrl: getRuntimeTrafficProxyUrl
+      getProxyUrl: getRuntimeTrafficProxyUrl,
+      onRetry: (route, detail) => logUpdateNetworkRetry('check', route, detail)
     }),
   executeDownload: async () => {
     const downloadedPaths = await runUpdateDownloadWithNetworkFallback({
       session: autoUpdater.netSession,
-      download: () => autoUpdater.downloadUpdate(),
-      getProxyUrl: getRuntimeTrafficProxyUrl
+      download: ({ route, attempt }) => downloadUpdateWithHealthMonitor(route, attempt),
+      getProxyUrl: getRuntimeTrafficProxyUrl,
+      onRetry: (route, detail) => logUpdateNetworkRetry('download', route, detail)
     });
     downloadedUpdateInstallerPaths = downloadedPaths;
     return downloadedPaths;
@@ -532,6 +541,40 @@ function getUpdateChannelName(channel: AppUpdateSnapshot['buildChannel']): strin
 
 function getRuntimeTrafficProxyUrl(): string | undefined {
   return lifecycle?.getStatus() === 'running' ? `http://127.0.0.1:${runtimePorts.mixedPort}` : undefined;
+}
+
+async function downloadUpdateWithHealthMonitor(route: UpdateNetworkRoute, attempt: 1 | 2): Promise<string[]> {
+  const cancellationToken = new CancellationToken();
+  let unhealthyReason: UpdateDownloadHealthReason | undefined;
+  const monitor = createUpdateDownloadHealthMonitor({
+    source: autoUpdater,
+    route,
+    getProxyUrl: () => (attempt === 1 ? getRuntimeTrafficProxyUrl() : undefined),
+    cancel: () => cancellationToken.cancel(),
+    onUnhealthy: (reason) => {
+      unhealthyReason = reason;
+    }
+  });
+
+  try {
+    return await autoUpdater.downloadUpdate(cancellationToken);
+  } catch (error) {
+    if (unhealthyReason && cancellationToken.cancelled && error instanceof CancellationError) {
+      throw new UpdateRouteHealthError(unhealthyReason, error);
+    }
+    throw error;
+  } finally {
+    monitor.dispose();
+    cancellationToken.dispose();
+  }
+}
+
+function logUpdateNetworkRetry(context: 'check' | 'download', route: UpdateNetworkRoute, detail: string): void {
+  const routeLabel = route === 'local-proxy' ? '本地代理' : '直连';
+  appendLog(`${context === 'download' ? '更新下载' : '检查更新'}网络异常，已切换至${routeLabel}重试: ${detail}`);
+  if (context === 'download') {
+    updateCoordinator.reportNetworkRetry('线路不稳定，已自动切换重试');
+  }
 }
 
 function scheduleTrafficSnapshotBroadcast() {
