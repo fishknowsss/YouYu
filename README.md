@@ -168,7 +168,7 @@ NSIS 安装程序按计算机安装到受管理员权限保护的位置，并创
 
 公开 Release 中的三个通道都必须通过空内置订阅校验。`-in` 表示独立更新通道，不表示公开安装包携带私有订阅。
 
-本地三包交付使用 `npm run dist:win:local`。全部校验成功后，命令会自动把带本机私有订阅的当前 `-in`、`-no` 两个 EXE 放入扁平 `team-builds/`，不建立版本子目录，不复制标准版或 `.blockmap`。`.blockmap` 只服务 electron-updater 差分下载，团队成员手动运行完整 EXE 时不需要。这类私有产物不能上传到 GitHub Release、Actions artifact 或其他公开下载位置，也不能作为同名公开更新包的来源。公开 `latest-in.yml` / `latest-no.yml` 的安装包不携带私有订阅，但覆盖自动更新不会清空已保存的本地设置。
+本地私有双包交付使用 `npm run dist:win:team`；旧的 `npm run dist:win:local` 是同一流程的兼容别名。命令只构建带本机私有订阅的当前 `-in`、`-no` 两个 EXE，逐一校验并反向提取最终 EXE 核对订阅后，才原子刷新扁平 `team-builds/`，随后清理 `release/` 中的私有临时输出；不建立版本子目录，不生成本地标准版，也不复制 `.blockmap`。`.blockmap` 只服务 electron-updater 差分下载，团队成员手动运行完整 EXE 时不需要。这类私有产物不能上传到 GitHub Release、Actions artifact 或其他公开下载位置，也不能作为同名公开更新包的来源。公开 `latest-in.yml` / `latest-no.yml` 的安装包不携带私有订阅，但覆盖自动更新不会清空已保存的本地设置。
 
 ## 数据与安全
 
@@ -246,7 +246,8 @@ npm run smoke
 | `npm run dist:win` | 本地标准版安装包 |
 | `npm run dist:win:in` | 本地内部版安装包，可读取本机私有订阅 |
 | `npm run dist:win:no` | 本地无桌宠安装包，可读取本机私有订阅 |
-| `npm run dist:win:local` | 生成本地三包，并刷新 `team-builds/` 中可手动分发的两个私有 EXE |
+| `npm run dist:win:team` | 生成私有 `-in`、`-no` 双包，刷新 `team-builds/` 后清理私有临时输出 |
+| `npm run dist:win:local` | `dist:win:team` 的兼容别名 |
 | `npm run dist:win:release` | 生成包含摘要清单在内的 11 个三通道公开更新资产和版本化本地归档，全部使用空内置订阅 |
 
 `dist:win`、`dist:win:in` 和 `dist:win:no` 都会先清空 `release/`。需要保留多个本地产物时，应按发布文档的顺序打包并暂存安装包与 `.blockmap`。

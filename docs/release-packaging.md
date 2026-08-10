@@ -1,20 +1,19 @@
 # YouYu Release Packaging
 
-本地交付三包统一运行 `npm run dist:win:local`。该命令最终在 `release/` 留下标准空订阅安装包，以及内置私有订阅的 `-in`、`-no` 安装包；全部校验成功后，还会自动刷新仅供团队手动分发的扁平 `team-builds/` 双包目录。不要把 `npm run dist:win:release` 生成的同名 `-in`、`-no` 公开更新包当作本地内置版本；公开更新包按设计全部为空订阅。
+本地私有双包统一运行 `npm run dist:win:team`；`npm run dist:win:local` 是兼容别名。该流程只构建并逐一校验内置私有订阅的 `-in`、`-no` 安装包，成功后原子刷新扁平 `team-builds/` 并清理 `release/` 中的私有临时输出。公共三通道统一运行 `npm run dist:win:release`，最终公开资产全部为空订阅。两个流程不得互相借用同名 `-in`、`-no` 安装包。
 
 这份文档记录 YouYu 的打包、版本号、订阅内置和本地归档规则。以后处理打包、发布、版本号、订阅默认值时，先读这里。
 
 ## 交付原则
 
-默认每次本地交付保留三种 Windows x64 安装包：
+Windows x64 安装包按交付对象分成两个互不混用的流程：
 
-| 类型 | 命令 | 产物 | 用途 | 是否内置订阅 | 是否包含桌宠 |
-| --- | --- | --- | --- | --- | --- |
-| 标准版 | `npm run dist:win` | `release/YouYu-<version>-x64.exe` | GitHub release / Actions artifact / 公开下载 | 否 | 是 |
-| 内部版 | `npm run dist:win:in` | `release/YouYu-<version>-x64-in.exe` | 本机自用或内部分发 | 是 | 是 |
-| 无桌宠版 | `npm run dist:win:no` | `release/YouYu-<version>-x64-no.exe` | 本机自用或内部分发 | 是 | 否 |
+| 流程 | 命令 | 最终交付目录 | 产物 | 是否内置订阅 |
+| --- | --- | --- | --- | --- |
+| 团队私有双包 | `npm run dist:win:team` | `team-builds/` | `-in.exe`、`-no.exe` | 是 |
+| GitHub 公共三通道 | `npm run dist:win:release` | `release/` | 标准、`-in`、`-no` 及更新资产 | 否 |
 
-公开 GitHub release、GitHub Actions artifact 和公开下载渠道只能上传不含内置订阅的产物。标准版使用 `latest.yml` 更新；内部通道和无桌宠通道只能上传 `--public-update` 生成的更新包，分别使用 `latest-in.yml` 和 `latest-no.yml`。本地自用且内置订阅的内部版、无桌宠版可以保留在本机 `release/`，但不能上传 GitHub release。
+`npm run dist:win`、`npm run dist:win:in`、`npm run dist:win:no` 仍保留给单通道排查，不是日常团队交付入口。公开 GitHub release、GitHub Actions artifact 和公开下载渠道只能上传不含内置订阅的产物。标准版使用 `latest.yml` 更新；内部通道和无桌宠通道只能上传 `--public-update` 生成的更新包，分别使用 `latest-in.yml` 和 `latest-no.yml`。
 
 纯文档、项目规则或归档目录维护不需要递增版本号，也不需要重新打安装包。
 
@@ -81,13 +80,13 @@ SOURCE.md
 
 公开发布还必须携带对应源码快照 `YouYu-<version>-Mihomo-v<core-version>-source.tar.gz`。`dist:win:release` 会优先复用按 SHA256 命名且完整验证通过的本机 release cache；缓存缺失时才从 manifest 中固定到 commit 的官方 codeload URL 有界重试下载。无论来源，脚本都会验证大小、SHA256 及归档内的 `LICENSE`、`Makefile`、`go.mod`、`go.sum`、`main.go` 后才写入 `release/`。该源码资产不塞进安装包；安装包内的 `SOURCE.md` 同时给出上游固定 URL 和每个 YouYu Release 的源码资产命名规则。
 
-## 三包打包流程
+## 私有双包打包流程
 
 `dist:win`、`dist:win:in` 和 `dist:win:no` 都会先执行 `npm run clean:release`，所以每次打包都会清空上一次的 `release/` 输出。
 
-标准顺序是先打无桌宠版，再打内部版，最后打标准版。这样最终 `release/win-unpacked/resources/default-subscription.txt` 来自标准版，仍然为空，适合继续跑公开版 `smoke`。
+团队交付只需要无桌宠版和内部版。标准顺序是先构建并校验 `-no`，暂存完整 EXE，再构建并校验 `-in`，最后在当前内部版 `win-unpacked` 上运行通用 `smoke`。每个单通道构建都已运行对应的 `validate-windows-release.ts`：私有订阅必须非空并与 `resources/default-subscription.in.txt` 逐字一致，安装包、更新元数据、SHA512、Mihomo、生产 API 和通道特征也必须匹配。随后 `validate-team-installers.mjs` 会用 electron-builder 已缓存的 7za 反向提取两个最终 NSIS EXE，再次核对其中的订阅载荷；反向校验失败时不能刷新 `team-builds/`。
 
-通常直接运行 `npm run dist:win:local`。只有排查单个打包步骤时，才按下面的手动顺序执行；临时目录使用随机后缀，避免并行任务互相覆盖：
+通常直接运行 `npm run dist:win:team`；旧命令 `npm run dist:win:local` 只作为兼容别名。只有排查单个打包步骤时，才按下面的手动顺序执行；临时目录使用随机后缀，避免并行任务互相覆盖：
 
 ```powershell
 $version = (node -p "require('./package.json').version")
@@ -96,30 +95,24 @@ New-Item -ItemType Directory -Force -Path $archive | Out-Null
 
 npm run dist:win:no
 Copy-Item "release/YouYu-$version-x64-no.exe" "$archive/YouYu-$version-x64-no.exe" -Force
-Copy-Item "release/YouYu-$version-x64-no.exe.blockmap" "$archive/YouYu-$version-x64-no.exe.blockmap" -Force
 
 npm run dist:win:in
 Copy-Item "release/YouYu-$version-x64-in.exe" "$archive/YouYu-$version-x64-in.exe" -Force
-Copy-Item "release/YouYu-$version-x64-in.exe.blockmap" "$archive/YouYu-$version-x64-in.exe.blockmap" -Force
-
-npm run dist:win
-Copy-Item "$archive/YouYu-$version-x64-no.exe" "release/YouYu-$version-x64-no.exe" -Force
-Copy-Item "$archive/YouYu-$version-x64-no.exe.blockmap" "release/YouYu-$version-x64-no.exe.blockmap" -Force
-Copy-Item "$archive/YouYu-$version-x64-in.exe" "release/YouYu-$version-x64-in.exe" -Force
-Copy-Item "$archive/YouYu-$version-x64-in.exe.blockmap" "release/YouYu-$version-x64-in.exe.blockmap" -Force
 
 npm run smoke
 
+node scripts/validate-team-installers.mjs $archive
 node --input-type=module -e "import { refreshTeamBuilds } from './scripts/team-builds.mjs'; await refreshTeamBuilds({ root: process.cwd(), sourceDir: process.argv[1], version: process.argv[2] });" "$archive" "$version"
 
+npm run clean:release
 Remove-Item -LiteralPath $archive -Recurse -Force
 ```
 
-`release/`、`release-archive/`、`team-builds/`、遗留的 `local-subscription-builds/` 和 `resources/generated/` 都不应该提交。
+只有两个私有构建、单通道验证、`smoke` 和 `team-builds/` 原子刷新全部成功后，正式脚本才清理 `release/`。失败时可能保留当前单通道输出用于诊断，但不得分发或上传；上一组 `team-builds/` 不会被破坏。`release/`、`release-archive/`、`team-builds/`、遗留的 `local-subscription-builds/` 和 `resources/generated/` 都不应该提交。
 
 ## 私有双包留存规则
 
-每次 `npm run dist:win:local` 全部构建、校验和冒烟测试成功后，脚本会自动替换仅供团队手动分发的带订阅双包：
+每次 `npm run dist:win:team` 全部构建、校验和冒烟测试成功后，脚本会自动替换仅供团队手动分发的带订阅双包：
 
 ```text
 team-builds/YouYu-<version>-x64-in.exe
@@ -128,20 +121,12 @@ team-builds/YouYu-<version>-x64-no.exe
 
 - `team-builds/` 只表示“当前可以直接发给团队的安装包”，目录内固定只有当前版本的两个 EXE；不分版本子目录，不保留旧版本，不复制标准无后缀版。
 - `.blockmap` 是 electron-updater 差分下载使用的分块索引。团队成员手动接收并运行完整 EXE 时不需要它，因此不得复制到 `team-builds/`；公开 `release/`、`release-archive/` 和 GitHub Release 仍需保留对应 `.blockmap`。
-- 文件必须来自 `npm run dist:win:local` 暂存的私有产物，不能使用 `npm run dist:win:release` 生成的同名空订阅公开更新包。
+- 文件必须来自 `npm run dist:win:team` 暂存的私有产物，不能使用 `npm run dist:win:release` 生成的同名空订阅公开更新包。
 - 复制前应确认 `-in`、`-no` 安装包内的 `resources/default-subscription.txt` 非空，并与本机 `resources/default-subscription.in.txt` 一致。
 - `team-builds/` 整体由 `.gitignore` 排除，只在本机保存；不得提交、上传 GitHub Release、放入 Actions artifact 或作为公开更新资产来源。
 - 打包失败时不能破坏上一次可用双包；新双包准备完整后再整体替换旧目录。
 
-通常不需要手动复制；`npm run dist:win:local` 已完成留存。排查脚本时如需手动刷新，可在确认当前 `release/` 中的 `-in`、`-no` 确为私有构建后执行：
-
-```powershell
-$version = node -p "require('./package.json').version"
-$source = (Resolve-Path 'release').Path
-node --input-type=module -e "import { refreshTeamBuilds } from './scripts/team-builds.mjs'; await refreshTeamBuilds({ root: process.cwd(), sourceDir: process.argv[1], version: process.argv[2] });" "$source" "$version"
-```
-
-两处排查命令都复用正式打包脚本的原子刷新逻辑：先在仓库根目录准备完整暂存目录，再整体交换；任一源文件缺失或复制失败时不会先删除上一次可用双包。不要改回“先删 `team-builds/`、再逐个复制”的手工流程。
+通常不需要手动复制；`npm run dist:win:team` 已完成留存。正式脚本先在系统临时目录保存两个已经分别验证过的私有 EXE，再复用 `scripts/team-builds.mjs` 的原子刷新逻辑整体交换目录；任一源文件缺失、验证失败或复制失败时都不会先删除上一组可用双包。不要从只包含当前单通道输出的 `release/` 手工覆盖 `team-builds/`，也不要改回“先删目录、再逐个复制”的流程。
 
 ## 本地归档规则
 
@@ -302,13 +287,13 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
 3. 生成并留存本地私有双包，再生成公开更新资产。
 
-   先生成标准空订阅版以及带订阅的 `-in`、`-no` 本地产物：
+   先生成带订阅的 `-in`、`-no` 团队私有双包：
 
    ```powershell
-   npm run dist:win:local
+   npm run dist:win:team
    ```
 
-   该命令会在所有构建与 `smoke` 成功后，从私有临时产物自动刷新 `team-builds/`。反向确认其中两个 EXE 的内置订阅与 `resources/default-subscription.in.txt` 一致，并确认目录中没有标准版、版本子目录或 `.blockmap`。后续公开打包可以覆盖 `release/`，但不得改写 `team-builds/`。
+   该命令会分别构建和校验两个私有通道，在 `smoke` 成功后从私有临时产物原子刷新 `team-builds/`，然后清理 `release/`。确认两个 EXE 的内置订阅与 `resources/default-subscription.in.txt` 一致，并确认目录中没有标准版、版本子目录或 `.blockmap`。后续公开打包会重新创建 `release/`，但不得改写 `team-builds/`。
 
    再生成三通道公开更新资产：
 
@@ -411,17 +396,15 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
 ## 快速检查
 
-三包本地交付：
+私有双包交付：
 
 - `resources/default-subscription.txt` 为空。
 - `resources/default-subscription.in.txt` 存在，并被 `git check-ignore -v resources/default-subscription.in.txt` 命中。
-- 先运行 `npm run dist:win:no`，暂存 `-no.exe` 和 `-no.exe.blockmap`。
-- 再运行 `npm run dist:win:in`，暂存 `-in.exe` 和 `-in.exe.blockmap`。
-- 最后运行 `npm run dist:win`，把暂存的无桌宠版和内部版产物复制回 `release/`。
+- 先运行 `npm run dist:win:no`，暂存 `-no.exe`。
+- 再运行 `npm run dist:win:in`，暂存 `-in.exe`。
+- 两个私有通道都通过安装包、更新元数据、SHA512、订阅逐字一致、Mihomo、生产 API 和通道特征校验，并从最终 NSIS EXE 反向提取订阅再次核对。
 - `npm run smoke` 通过。
 - `npm run validate:mihomo` 通过，仓库与安装包内同时包含已校验的 Mihomo binary、manifest、GPL 全文和来源说明。
-- `release/YouYu-<version>-x64.exe` 存在。
-- `release/YouYu-<version>-x64-in.exe` 存在。
-- `release/YouYu-<version>-x64-no.exe` 存在。
 - `team-builds/` 中恰好只有当前版本、带订阅的 `-in` 和 `-no` 两个 EXE；没有版本子目录、标准无后缀版或 `.blockmap`。
+- 团队双包成功后 `release/` 已清理；运行 `dist:win:release` 时才重新生成公共三通道资产。
 - 上传 GitHub 时使用 `npm run dist:win:release` 生成的三通道公开更新产物，并确认 `latest.yml`、`latest-in.yml`、`latest-no.yml`、当前 YouYu 版本命名的 Mihomo 对应源码归档和覆盖全部十个公开资产的 `SHA256SUMS.txt` 都存在。

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { refreshTeamBuilds } from './team-builds.mjs';
@@ -17,26 +17,16 @@ const archive = await mkdtemp(join(tmpdir(), `youyu-local-${version}-`));
 
 try {
   await run('npm', ['run', 'dist:win:no']);
-  await keep([`YouYu-${version}-x64-no.exe`, `YouYu-${version}-x64-no.exe.blockmap`]);
+  await keep([`YouYu-${version}-x64-no.exe`]);
 
   await run('npm', ['run', 'dist:win:in']);
-  await keep([`YouYu-${version}-x64-in.exe`, `YouYu-${version}-x64-in.exe.blockmap`]);
-
-  await run('npm', ['run', 'dist:win']);
-  await restore([
-    `YouYu-${version}-x64-no.exe`,
-    `YouYu-${version}-x64-no.exe.blockmap`,
-    `YouYu-${version}-x64-in.exe`,
-    `YouYu-${version}-x64-in.exe.blockmap`
-  ]);
+  await keep([`YouYu-${version}-x64-in.exe`]);
   await run('npm', ['run', 'smoke']);
+  await run('node', ['scripts/validate-team-installers.mjs', archive]);
 
   const teamBuilds = await refreshTeamBuilds({ root, sourceDir: archive, version });
+  await run('npm', ['run', 'clean:release']);
 
-  const entries = (await readdir(releaseDir))
-    .filter((name) => name.startsWith(`YouYu-${version}-x64`) || name === 'latest.yml')
-    .sort();
-  console.log(entries.join('\n'));
   console.log(`team-builds:\n${teamBuilds.map((path) => path.slice(root.length + 1)).join('\n')}`);
 } finally {
   await rm(archive, { recursive: true, force: true });
@@ -45,12 +35,6 @@ try {
 async function keep(names) {
   for (const name of names) {
     await copyFile(join(releaseDir, name), join(archive, name));
-  }
-}
-
-async function restore(names) {
-  for (const name of names) {
-    await copyFile(join(archive, name), join(releaseDir, name));
   }
 }
 
@@ -80,6 +64,9 @@ async function run(command, args) {
 }
 
 function resolveCommand(command, args) {
+  if (command === 'node') {
+    return [process.execPath, args];
+  }
   if (command === 'npm') {
     if (!npmCli) {
       throw new Error('Missing npm_execpath; run this script through npm.');

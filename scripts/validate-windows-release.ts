@@ -125,12 +125,21 @@ if (fullscreenProbeResult.status !== 0 || fullscreenProbeResult.stdout.trim() !=
   );
 }
 
-const bundledSubscription = (await readFile(bundledSubscriptionPath, 'utf8')).trim();
+const bundledSubscriptionBytes = await readFile(bundledSubscriptionPath);
+const bundledSubscription = bundledSubscriptionBytes.toString('utf8').trim();
 if (!bundledSubscriptionBuild && bundledSubscription) {
   throw new Error('Public installer must not bundle a default subscription');
 }
 if (bundledSubscriptionBuild && !bundledSubscription) {
   throw new Error(`${internalBuild ? 'Internal' : 'No-pet'} installer is missing the bundled default subscription`);
+}
+if (bundledSubscriptionBuild) {
+  const privateSubscriptionBytes = await readFile(join(root, 'resources', 'default-subscription.in.txt'));
+  if (!bundledSubscriptionBytes.equals(privateSubscriptionBytes)) {
+    throw new Error(
+      `${internalBuild ? 'Internal' : 'No-pet'} installer subscription does not match resources/default-subscription.in.txt`
+    );
+  }
 }
 if (publicUpdateBuild && bundledSubscription) {
   throw new Error('Public update installer must not bundle a default subscription');
