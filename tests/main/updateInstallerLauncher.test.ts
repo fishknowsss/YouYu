@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
+import { createWindowsPowerShellEnvironment as createWindowsPowerShellTestEnvironment } from '../../src/main/platform/windowsPowerShell';
 import {
   createUpdateInstallerBootstrapScript,
   createElevatedUpdateInstallerScript,
@@ -27,7 +28,8 @@ import {
   updateInstallerSupervisorScriptEnvironment,
   updateInstallerSupervisorLoaderEnvironment,
   updateInstallerNodeCleanupMarginMs,
-  updateInstallerPowerShellModuleAnalysisCacheEnvironment
+  updateInstallerPowerShellModuleAnalysisCacheEnvironment,
+  updateInstallerPowerShellModulePathEnvironment
 } from '../../src/main/updateInstallerLauncher';
 import {
   resolveUpdateInstallerCancellationPath,
@@ -52,13 +54,7 @@ function createLauncher(): ChildProcess {
 
 async function runWindowsPowerShellScript(script: string, environment: NodeJS.ProcessEnv) {
   const transport = createUpdateInstallerSupervisorTransport(script);
-  const childEnvironment = { ...environment };
-  for (const key of Object.keys(childEnvironment)) {
-    if (key.toLowerCase() === updateInstallerPowerShellModuleAnalysisCacheEnvironment.toLowerCase()) {
-      delete childEnvironment[key];
-    }
-  }
-  childEnvironment[updateInstallerPowerShellModuleAnalysisCacheEnvironment] = 'NUL';
+  const childEnvironment = createWindowsPowerShellTestEnvironment(environment);
   childEnvironment[updateInstallerSupervisorScriptEnvironment] = transport.environmentValue;
   const child = spawn(
     resolveWindowsPowerShellPath(environment.SystemRoot),
@@ -76,14 +72,19 @@ async function runWindowsPowerShellScript(script: string, environment: NodeJS.Pr
   child.stdout.on('data', (chunk: string) => (stdout += chunk));
   child.stderr.on('data', (chunk: string) => (stderr += chunk));
   const exitCode = await new Promise<number | null>((resolve, reject) => {
+    let timedOut = false;
     const timeout = setTimeout(() => {
-      child.kill();
-      reject(new Error('PowerShell compatibility probe timed out'));
+      timedOut = true;
+      if (!child.kill()) reject(new Error('PowerShell compatibility probe timed out and could not be terminated'));
     }, 10_000);
-    child.once('error', reject);
+    child.once('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.once('close', (code) => {
       clearTimeout(timeout);
-      resolve(code);
+      if (timedOut) reject(new Error('PowerShell compatibility probe timed out'));
+      else resolve(code);
     });
   });
   return { stdout, stderr, exitCode };
@@ -201,7 +202,7 @@ async function runFullWindowsSupervisorScenario(scenario: SupervisorScenario) {
     '  $acl.SetAccessRuleProtection($true, $false)',
     '  $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow)',
     '  $acl.SetAccessRule($rule)',
-    '  Set-Acl -LiteralPath $path -AclObject $acl -ErrorAction Stop',
+    '  [IO.File]::SetAccessControl($path, $acl)',
     '}',
     '$initialAck = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:YOUYU_TEST_ACK_PAYLOAD))',
     '[IO.File]::WriteAllText($fixtureAcknowledgementPath, $initialAck, (New-Object Text.UTF8Encoding($false)))',
@@ -324,6 +325,7 @@ describe('controlled Windows update installer launcher', () => {
       SystemRoot: String.raw`C:\Windows`,
       KEEP: 'preserved',
       psmoduleanalysiscachepath: 'shared-cache-must-not-survive',
+      psmodulepath: 'PowerShell-7-modules-must-not-survive',
       YOUYU_UPDATE_HANDOFF_PATH: 'source-environment-must-not-be-relied-on'
     };
 
@@ -350,6 +352,11 @@ describe('controlled Windows update installer launcher', () => {
     expect(String(options.env[updateInstallerSupervisorLoaderEnvironment])).not.toContain(handoff.nonce);
     expect(options.env[updateInstallerPowerShellModuleAnalysisCacheEnvironment]).toBe('NUL');
     expect(options.env.psmoduleanalysiscachepath).toBeUndefined();
+    expect(
+      Object.keys(options.env).some(
+        (key) => key.toLowerCase() === updateInstallerPowerShellModulePathEnvironment.toLowerCase()
+      )
+    ).toBe(false);
     expect(environment[updateInstallerLauncherPayloadEnvironment]).toBeUndefined();
     expect(options.env.KEEP).toBe('preserved');
 
@@ -560,6 +567,13 @@ describe('controlled Windows update installer launcher', () => {
     );
     expect(elevatedScript).not.toContain('Import-Module');
     expect(loaderScript).not.toContain('Import-Module');
+    for (const powershellScript of [script, bootstrapScript, elevatedScript, loaderScript]) {
+      expect(powershellScript).not.toContain('Get-Acl');
+      expect(powershellScript).not.toContain('Set-Acl');
+      expect(powershellScript).not.toContain('$acl.Access');
+    }
+    expect(script).toContain('[IO.File]::GetAccessControl');
+    expect(script).toContain('[IO.File]::SetAccessControl');
     expect(elevatedScript).toContain("$taskkillArguments = '/PID ' + $rootProcessId + ' /T /F'");
     expect(elevatedScript.indexOf('$taskkill = Start-Process')).toBeLessThan(
       elevatedScript.indexOf('try { $trackedProcessIds = @(Get-ProcessTreeIds $rootProcessId)')
@@ -799,7 +813,7 @@ describe('controlled Windows update installer launcher', () => {
         '$acl.SetAccessRuleProtection($true, $false)',
         '$rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow)',
         '$acl.SetAccessRule($rule)',
-        'Set-Acl -LiteralPath $env:YOUYU_TEST_CANCEL_PATH -AclObject $acl -ErrorAction Stop'
+        '[IO.File]::SetAccessControl($env:YOUYU_TEST_CANCEL_PATH, $acl)'
       ].join('\n');
       const markerResult = await runWindowsPowerShellScript(initializeMarkerScript, {
         ...process.env,
@@ -845,12 +859,12 @@ describe('controlled Windows update installer launcher', () => {
         {
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: {
+          env: createWindowsPowerShellTestEnvironment({
             ...process.env,
             [updateElevatedInstallerPayloadEnvironment]: elevatedPayload,
             YOUYU_TEST_PARENT_PID_PATH: parentPidPath,
             YOUYU_TEST_CHILD_PID_PATH: childPidPath
-          }
+          })
         }
       );
       let wrapperStderr = '';
@@ -990,7 +1004,7 @@ describe('controlled Windows update installer launcher', () => {
       '$acl.SetAccessRuleProtection($true, $false)',
       '$rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow)',
       '$acl.SetAccessRule($rule)',
-      'Set-Acl -LiteralPath $readyPath -AclObject $acl -ErrorAction Stop',
+      '[IO.File]::SetAccessControl($readyPath, $acl)',
       '$readyAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()',
       "$ready = [pscustomobject]@{ version = '1'; nonce = $nonce; handoffPath = $handoffPath; targetUserSid = $targetUserSid; supervisorProcessId = [int] $PID; readyAtEpochMs = $readyAt; expiresAtEpochMs = $readyAt + 300000L }",
       '[IO.File]::WriteAllText($readyPath, ($ready | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))',
@@ -1029,7 +1043,7 @@ describe('controlled Windows update installer launcher', () => {
       const parent = spawn(process.execPath, ['-e', parentScript], {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
+        env: createWindowsPowerShellTestEnvironment({
           ...process.env,
           [updateInstallerBootstrapPayloadEnvironment]: bootstrapPayload,
           [updateInstallerSupervisorLoaderEnvironment]: supervisorTransport.encodedLoaderCommand,
@@ -1039,7 +1053,7 @@ describe('controlled Windows update installer launcher', () => {
           YOUYU_TEST_HANDOFF_PATH: handoffPath,
           YOUYU_TEST_NONCE: handoff.nonce,
           YOUYU_TEST_SID: identity.sid
-        }
+        })
       });
       let parentStdout = '';
       let parentStderr = '';

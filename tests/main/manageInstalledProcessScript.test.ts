@@ -947,8 +947,8 @@ async function getPrivateAcknowledgementAcl(path: string): Promise<{
   allowsFullControl: boolean;
 }> {
   const script = [
-    '$acl = Get-Acl -LiteralPath $env:YOUYU_TEST_ACKNOWLEDGEMENT_PATH -ErrorAction Stop',
-    '$rules = @($acl.Access)',
+    '$acl = [IO.File]::GetAccessControl($env:YOUYU_TEST_ACKNOWLEDGEMENT_PATH)',
+    '$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))',
     '$fullControl = [int64] [Security.AccessControl.FileSystemRights]::FullControl',
     '$rule = if ($rules.Count -eq 1) { $rules[0] } else { $null }',
     '[pscustomobject]@{',

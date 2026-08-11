@@ -21,6 +21,18 @@ describe('Windows upgrade installer safety', () => {
       'IntCmp $R2 $R5 YouYuCountHandoffArgumentsDone YouYuReadHandoffArgumentCharacter YouYuCountHandoffArgumentsDone'
     );
     expect(installer).toContain('Kernel32::SetEnvironmentVariable');
+    expect(installer).toContain('SetEnvironmentVariable(t "PSModulePath", p 0)');
+    expect(installer).toContain('SetEnvironmentVariable(t "PSModuleAnalysisCachePath", t "NUL")');
+    expect(installer.indexOf('!insertmacro YouYuPrepareWindowsPowerShellEnvironment')).toBeLessThan(
+      installer.indexOf('Call YouYuApplyUpdateHandoffArguments')
+    );
+    const customCheckAppRunning = installer.slice(
+      installer.indexOf('!macro customCheckAppRunning'),
+      installer.indexOf('!macroend', installer.indexOf('!macro customCheckAppRunning'))
+    );
+    expect(customCheckAppRunning).toMatch(
+      /!ifdef BUILD_UNINSTALLER[\s\S]*?!insertmacro YouYuPrepareWindowsPowerShellEnvironment[\s\S]*?Call un\.YouYuValidateInstallBoundary/
+    );
     expect(installer).toContain('Call YouYuConsumeInstallHandoff');
     expect(installer).toContain('manage-installed-process.ps1');
     expect(installer).toContain('-Action WaitForExit');
@@ -65,6 +77,12 @@ describe('Windows upgrade installer safety', () => {
     expect(processScript).toContain('function Wait-ForAuthenticatedProcessExit');
     expect(processScript).toContain("if ($Action -eq 'AcknowledgeAndWait')");
     expect(processScript).toContain('SetAccessRuleProtection($true, $false)');
+    expect(processScript).toContain('[IO.File]::GetAccessControl');
+    expect(processScript).toContain('[IO.File]::SetAccessControl');
+    expect(processScript).not.toContain('Get-Acl');
+    expect(processScript).not.toContain('Set-Acl');
+    expect(processScript).not.toContain('Import-Module');
+    expect(processScript).not.toContain('$acl.Access');
     expect(processScript).toContain('Remove-AuthenticatedUpdateAcknowledgement $Boundary');
     expect(implicitHandoffLookup.indexOf('$candidateItems.Count -eq 0')).toBeLessThan(
       implicitHandoffLookup.indexOf('$identity = Get-CurrentInstallerBoundaryIdentity')
@@ -73,7 +91,7 @@ describe('Windows upgrade installer safety', () => {
       implicitHandoffLookup.indexOf('$identity = Get-CurrentInstallerBoundaryIdentity')
     );
     expect(implicitHandoffLookup.indexOf('$identity = Get-CurrentInstallerBoundaryIdentity')).toBeLessThan(
-      implicitHandoffLookup.indexOf('Get-Acl -LiteralPath $item.FullName')
+      implicitHandoffLookup.indexOf('[IO.File]::GetAccessControl($item.FullName)')
     );
     expect(processScript).not.toMatch(/HKCU|\$env:LOCALAPPDATA/i);
     expect(processScript).not.toContain('Get-ChildItem C:\\Users');

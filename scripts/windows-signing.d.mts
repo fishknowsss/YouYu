@@ -7,6 +7,9 @@ export type AuthenticodeRecord = WindowsSigningTarget & {
 };
 
 export const windowsTimestampServer: string;
+export function createWindowsPowerShellEnvironment(
+  source?: NodeJS.ProcessEnv | Record<string, string | undefined>
+): NodeJS.ProcessEnv;
 export function assertWindowsSigningEnvironment(env: NodeJS.ProcessEnv | Record<string, string | undefined>): {
   required: boolean;
   publisherName?: string;

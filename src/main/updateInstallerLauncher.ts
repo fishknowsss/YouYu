@@ -5,6 +5,12 @@ import { win32 } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { resumeProxyAfterRelaunchArgument, updateInstallFailedRelaunchArgument } from './appRelaunch';
 import {
+  createWindowsPowerShellEnvironment,
+  resolveWindowsPowerShellPath,
+  windowsPowerShellModuleAnalysisCacheEnvironment,
+  windowsPowerShellModulePathEnvironment
+} from './platform/windowsPowerShell';
+import {
   createUpdateInstallerHandoffArguments,
   resolveUpdateInstallerCancellationPath,
   resolveUpdateInstallerHandoffAcknowledgementPath,
@@ -29,7 +35,8 @@ export const updateInstallerBootstrapCleanupGraceMs = 40_000;
 export const updateInstallerNodeCleanupMarginMs = 10_000;
 export const updateInstallerExecutionTimeoutMs = 10 * 60 * 1000;
 export const updateElevatedInstallerPayloadEnvironment = 'YOUYU_UPDATE_ELEVATED_INSTALL_PAYLOAD';
-export const updateInstallerPowerShellModuleAnalysisCacheEnvironment = 'PSModuleAnalysisCachePath';
+export const updateInstallerPowerShellModuleAnalysisCacheEnvironment = windowsPowerShellModuleAnalysisCacheEnvironment;
+export const updateInstallerPowerShellModulePathEnvironment = windowsPowerShellModulePathEnvironment;
 
 type SpawnLauncher = (
   command: string,
@@ -65,13 +72,7 @@ export function resolveDownloadedUpdateInstallerPath(source: DownloadedInstaller
   throw new Error('downloaded update installer path is unavailable');
 }
 
-export function resolveWindowsPowerShellPath(systemRoot = process.env.SystemRoot): string {
-  const root = (systemRoot ?? 'C:\\Windows').trim();
-  if (!root || root.includes('\0') || !win32.isAbsolute(root)) {
-    throw new Error('Windows system root path is invalid');
-  }
-  return win32.join(win32.normalize(root), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-}
+export { resolveWindowsPowerShellPath } from './platform/windowsPowerShell';
 
 export function resolveUpdateInstallerSupervisorReadyPath(
   handoff: Pick<UpdateInstallerHandoffLease, 'path' | 'nonce'>
@@ -150,10 +151,10 @@ export function createElevatedUpdateInstallerScript(): string {
     '    try {',
     '      $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop',
     '      if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -le 0 -or $item.Length -gt 4096) { return $false }',
-    '      $acl = Get-Acl -LiteralPath $path -ErrorAction Stop',
+    '      $acl = [IO.File]::GetAccessControl($path)',
     '      $expectedSid = $expectedUserSid.ToUpperInvariant()',
     '      if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant() -cne $expectedSid -or -not $acl.AreAccessRulesProtected) { return $false }',
-    '      $rules = @($acl.Access)',
+    '      $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))',
     '      if ($rules.Count -ne 1 -or $rules[0].IsInherited -or $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { return $false }',
     '      $ruleSid = $rules[0].IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant()',
     '      $fullControl = [int64] [Security.AccessControl.FileSystemRights]::FullControl',
@@ -389,9 +390,9 @@ export function createUpdateInstallerBootstrapScript(): string {
     '    try {',
     '      $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop',
     '      if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -le 0 -or $item.Length -gt 4096) { return $false }',
-    '      $acl = Get-Acl -LiteralPath $path -ErrorAction Stop',
+    '      $acl = [IO.File]::GetAccessControl($path)',
     '      if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant() -cne $expectedUserSid -or -not $acl.AreAccessRulesProtected) { return $false }',
-    '      $rules = @($acl.Access)',
+    '      $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))',
     '      if ($rules.Count -ne 1 -or $rules[0].IsInherited -or $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { return $false }',
     '      $ruleSid = $rules[0].IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant()',
     '      $fullControl = [int64] [Security.AccessControl.FileSystemRights]::FullControl',
@@ -414,9 +415,9 @@ export function createUpdateInstallerBootstrapScript(): string {
     '    try {',
     '      $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop',
     '      if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -le 0 -or $item.Length -gt 4096) { return $false }',
-    '      $acl = Get-Acl -LiteralPath $path -ErrorAction Stop',
+    '      $acl = [IO.File]::GetAccessControl($path)',
     '      if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant() -cne $expectedUserSid -or -not $acl.AreAccessRulesProtected) { return $false }',
-    '      $rules = @($acl.Access)',
+    '      $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))',
     '      if ($rules.Count -ne 1 -or $rules[0].IsInherited -or $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { return $false }',
     '      $ruleSid = $rules[0].IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant()',
     '      $fullControl = [int64] [Security.AccessControl.FileSystemRights]::FullControl',
@@ -553,10 +554,10 @@ export function createUpdateInstallerLauncherScript(): string {
     '  try {',
     '    $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop',
     '    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -le 0 -or $item.Length -gt 4096) { return $false }',
-    '    $acl = Get-Acl -LiteralPath $path -ErrorAction Stop',
+    '    $acl = [IO.File]::GetAccessControl($path)',
     '    $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant()',
     '    if ($ownerSid -cne $expectedUserSid.ToUpperInvariant() -or -not $acl.AreAccessRulesProtected) { return $false }',
-    '    $rules = @($acl.Access)',
+    '    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))',
     '    if ($rules.Count -ne 1 -or $rules[0].IsInherited -or $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { return $false }',
     '    $ruleSid = $rules[0].IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant()',
     '    $fullControl = [int64] [Security.AccessControl.FileSystemRights]::FullControl',
@@ -580,10 +581,10 @@ export function createUpdateInstallerLauncherScript(): string {
     '  try {',
     '    $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop',
     '    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 4096 -or (-not $allowEmpty -and $item.Length -le 0)) { return $false }',
-    '    $acl = Get-Acl -LiteralPath $path -ErrorAction Stop',
+    '    $acl = [IO.File]::GetAccessControl($path)',
     '    $expectedSid = $expectedUserSid.ToUpperInvariant()',
     '    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant() -cne $expectedSid -or -not $acl.AreAccessRulesProtected) { return $false }',
-    '    $rules = @($acl.Access)',
+    '    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))',
     '    if ($rules.Count -ne 1 -or $rules[0].IsInherited -or $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { return $false }',
     '    $ruleSid = $rules[0].IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant()',
     '    $fullControl = [int64] [Security.AccessControl.FileSystemRights]::FullControl',
@@ -602,7 +603,7 @@ export function createUpdateInstallerLauncherScript(): string {
     '  $acl.SetAccessRuleProtection($true, $false)',
     '  $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow)',
     '  $acl.SetAccessRule($rule)',
-    '  Set-Acl -LiteralPath $path -AclObject $acl -ErrorAction Stop',
+    '  [IO.File]::SetAccessControl($path, $acl)',
     '  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()',
     "  $control = [pscustomobject]@{ version = '1'; nonce = $nonce; targetUserSid = $expectedUserSid; state = 'armed'; updatedAtEpochMs = $now }",
     '  [IO.File]::WriteAllText($path, (($control | ConvertTo-Json -Compress) + [Environment]::NewLine), (New-Object Text.UTF8Encoding($false)))',
@@ -635,7 +636,7 @@ export function createUpdateInstallerLauncherScript(): string {
     '  $acl.SetAccessRuleProtection($true, $false)',
     '  $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow)',
     '  $acl.SetAccessRule($rule)',
-    '  Set-Acl -LiteralPath $path -AclObject $acl -ErrorAction Stop',
+    '  [IO.File]::SetAccessControl($path, $acl)',
     '  $readyAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()',
     "  $ready = [pscustomobject]@{ version = '1'; nonce = $nonce; handoffPath = $handoffPathValue; targetUserSid = $expectedUserSid; supervisorProcessId = [int] $PID; readyAtEpochMs = $readyAt; expiresAtEpochMs = $readyAt + 300000L }",
     '  [IO.File]::WriteAllText($path, ($ready | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))',
@@ -651,7 +652,7 @@ export function createUpdateInstallerLauncherScript(): string {
     '  $acl.SetAccessRuleProtection($true, $false)',
     '  $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow)',
     '  $acl.SetAccessRule($rule)',
-    '  Set-Acl -LiteralPath $path -AclObject $acl -ErrorAction Stop',
+    '  [IO.File]::SetAccessControl($path, $acl)',
     "  if (-not (Test-PrivateUserFile $path $expectedUserSid $true)) { throw 'update relaunch challenge permissions are invalid' }",
     '}',
     'function Test-AuthenticatedUpdateRelaunchAcknowledgement([string] $path, [string] $expectedNonce, [string] $expectedVersion, [string] $expectedExecutablePath, [string] $expectedUserSid, [string] $expectedSessionId, [int64] $notBeforeEpochMs) {',
@@ -875,17 +876,7 @@ export async function launchDownloadedUpdateInstaller(options: UpdateInstallerLa
     }),
     'utf8'
   ).toString('base64');
-  const environment: NodeJS.ProcessEnv = { ...(options.environment ?? process.env) };
-  for (const key of Object.keys(environment)) {
-    if (key.toLowerCase() === updateInstallerPowerShellModuleAnalysisCacheEnvironment.toLowerCase()) {
-      delete environment[key];
-    }
-  }
-  // Set this before the first Windows PowerShell process starts. The value is inherited by the
-  // bootstrap, supervisor and elevated installer, so concurrent clean-user launches never share
-  // the asynchronously written PS5.1 module-analysis file. Keep normal module auto-discovery:
-  // explicitly importing inbox modules can duplicate TypeData on Windows Server 2025 runners.
-  environment[updateInstallerPowerShellModuleAnalysisCacheEnvironment] = 'NUL';
+  const environment = createWindowsPowerShellEnvironment(options.environment ?? process.env);
   environment[updateInstallerLauncherPayloadEnvironment] = payload;
   const supervisorTransport = createUpdateInstallerSupervisorTransport(createUpdateInstallerLauncherScript());
   environment[updateInstallerSupervisorScriptEnvironment] = supervisorTransport.environmentValue;

@@ -266,6 +266,47 @@ describe('elevated mihomo process script', () => {
 });
 
 describe('managed elevated process cancellation', () => {
+  it('starts the outer launcher at the canonical PS5 path with an isolated module environment', async () => {
+    const launcher = createStalledLauncher();
+    const pipe = createStalledPipeConnection();
+    const spawnLauncher = vi.fn(() => launcher as never);
+    const originalModuleEntries = Object.entries(process.env).filter(([key]) =>
+      ['psmodulepath', 'psmoduleanalysiscachepath'].includes(key.toLowerCase())
+    );
+    for (const [key] of originalModuleEntries) delete process.env[key];
+    process.env.pSmOdUlEpAtH = 'PowerShell-7-modules-must-not-survive';
+    process.env.pSmOdUlEaNaLySiScAcHePaTh = 'shared-cache-must-not-survive';
+
+    const elevated = spawnWindowsElevatedProcess('C:\\Program Files\\YouYu\\helper.exe', [], {
+      resolveUserIdentity: async () => ({ userSid: binding.targetUserSid, sessionId: binding.targetSessionId }),
+      spawnLauncher,
+      createPipeConnection: vi.fn(() => pipe as never)
+    });
+
+    try {
+      await vi.waitFor(() => expect(spawnLauncher).toHaveBeenCalledOnce());
+      const [launcherPath, , launcherOptions] = spawnLauncher.mock.calls[0] as unknown as [
+        string,
+        string[],
+        { env: NodeJS.ProcessEnv }
+      ];
+      expect(launcherPath).toBe(
+        win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+      );
+      expect(Object.keys(launcherOptions.env).some((key) => key.toLowerCase() === 'psmodulepath')).toBe(false);
+      expect(
+        Object.keys(launcherOptions.env).filter((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')
+      ).toEqual(['PSModuleAnalysisCachePath']);
+      expect(launcherOptions.env.PSModuleAnalysisCachePath).toBe('NUL');
+    } finally {
+      elevated.kill();
+      for (const key of Object.keys(process.env)) {
+        if (['psmodulepath', 'psmoduleanalysiscachepath'].includes(key.toLowerCase())) delete process.env[key];
+      }
+      for (const [key, value] of originalModuleEntries) process.env[key] = value;
+    }
+  });
+
   it('binds a trusted bare PowerShell command to the absolute System32 executable', async () => {
     const launcher = createStalledLauncher();
     const pipe = createStalledPipeConnection();

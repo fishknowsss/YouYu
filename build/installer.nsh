@@ -34,8 +34,25 @@ Var YouYuHandoffValidated
   Var YouYuInitialBoundaryWaited
 !endif
 
+!macro YouYuPrepareWindowsPowerShellEnvironment
+  # Never pass a PowerShell 7 module path through NSIS into Windows PowerShell 5.1.
+  System::Call 'Kernel32::SetEnvironmentVariable(t "PSModulePath", p 0) i.r0'
+  ${If} $0 == 0
+    DetailPrint "Unable to initialize the Windows PowerShell module boundary."
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
+  System::Call 'Kernel32::SetEnvironmentVariable(t "PSModuleAnalysisCachePath", t "NUL") i.r0'
+  ${If} $0 == 0
+    DetailPrint "Unable to initialize the Windows PowerShell cache boundary."
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
+!macroend
+
 !macro customInit
   InitPluginsDir
+  !insertmacro YouYuPrepareWindowsPowerShellEnvironment
   StrCpy $YouYuHandoffValidated "0"
   !ifndef BUILD_UNINSTALLER
     StrCpy $YouYuIsUpdateInstall "0"
@@ -64,6 +81,9 @@ Var YouYuHandoffValidated
 
 !macro customCheckAppRunning
   !ifdef BUILD_UNINSTALLER
+    # un.onInit checks the running app before customUnInit, so establish the
+    # Windows PowerShell 5.1 module boundary at this first uninstall hook too.
+    !insertmacro YouYuPrepareWindowsPowerShellEnvironment
     Call un.YouYuValidateInstallBoundary
   !else
     ${If} $YouYuInitialBoundaryWaited != "1"

@@ -12,6 +12,7 @@ export default defineConfig({
     __YOUYU_DISABLE_PET__: JSON.stringify(false)
   },
   test: {
+    setupFiles: ['./tests/setup/windowsPowerShellEnvironment.ts'],
     hookTimeout: 15_000,
     testTimeout: 15_000,
     exclude: [...configDefaults.exclude, 'cloudflare/youyu-traffic/test/**']

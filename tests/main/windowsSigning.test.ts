@@ -1,11 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertWindowsSigningEnvironment,
+  createWindowsPowerShellEnvironment,
   createWindowsSigningTargets,
   validateAuthenticodeRecords
 } from '../../scripts/windows-signing.mjs';
 
 describe('Windows code-signing gate', () => {
+  it('starts Windows PowerShell without an inherited PowerShell 7 module path', () => {
+    const environment = createWindowsPowerShellEnvironment({
+      KEEP: 'preserved',
+      PSModulePath: 'PowerShell-7-modules',
+      psmodulepath: 'case-variant-must-also-go',
+      psmoduleanalysiscachepath: 'shared-cache'
+    });
+
+    expect(environment.KEEP).toBe('preserved');
+    expect(environment.PSModuleAnalysisCachePath).toBe('NUL');
+    expect(Object.keys(environment).some((key) => key.toLowerCase() === 'psmodulepath')).toBe(false);
+    expect(Object.keys(environment).filter((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toEqual([
+      'PSModuleAnalysisCachePath'
+    ]);
+  });
+
   it('requires an explicit certificate source and publisher when enforcement is enabled', () => {
     expect(() => assertWindowsSigningEnvironment({ YOUYU_REQUIRE_CODE_SIGNING: '1' })).toThrow(/CSC_LINK/);
     expect(() =>

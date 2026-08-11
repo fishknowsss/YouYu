@@ -199,7 +199,7 @@ function Find-ImplicitUpdateHandoff([string] $ExpectedExecutablePath) {
     $item = $candidate.Item
     $candidateNonce = $candidate.Nonce
     try {
-      $acl = Get-Acl -LiteralPath $item.FullName
+      $acl = [IO.File]::GetAccessControl($item.FullName)
       $ownerSid = Normalize-UserSid $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
       if ($ownerSid -ine $identity.UserSid) { continue }
 
@@ -307,7 +307,7 @@ function Get-HandoffBoundary([string] $ExpectedExecutablePath) {
   if ($item.Length -le 0 -or $item.Length -gt 8192) { throw 'Update handoff file size is invalid.' }
 
   if (-not $SkipFileOwnerCheck) {
-    $acl = Get-Acl -LiteralPath $fullHandoffPath
+    $acl = [IO.File]::GetAccessControl($fullHandoffPath)
     $ownerSid = Normalize-UserSid $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
     if ($ownerSid -ine $expectedSid) { throw 'Update handoff file belongs to a different user SID.' }
   }
@@ -392,11 +392,11 @@ function Set-PrivateUpdateAcknowledgementAcl([string] $Path, [string] $UserSid) 
 }
 
 function Assert-PrivateUpdateAcknowledgementAcl([string] $Path, [string] $UserSid) {
-  $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+  $acl = [IO.File]::GetAccessControl($Path)
   $ownerSid = Normalize-UserSid $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
   if ($ownerSid -ine $UserSid) { throw 'Update acknowledgement belongs to a different user SID.' }
   if (-not $acl.AreAccessRulesProtected) { throw 'Update acknowledgement ACL is not protected.' }
-  $rules = @($acl.Access)
+  $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
   if ($rules.Count -ne 1) { throw 'Update acknowledgement ACL is not user-only.' }
   $rule = $rules[0]
   if ($rule.IsInherited -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) {

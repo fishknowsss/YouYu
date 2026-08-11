@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createWindowsPowerShellEnvironment, resolveWindowsPowerShellPath } from './windowsPowerShell';
 
 const execFileAsync = promisify(execFile);
 
@@ -68,9 +69,9 @@ export async function resolveCurrentWindowsUserIdentity(
 
 async function defaultRunPowerShell(script: string): Promise<string> {
   const { stdout } = await execFileAsync(
-    'powershell.exe',
+    resolveWindowsPowerShellPath(),
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned', '-Command', script],
-    { windowsHide: true, timeout: 5000 }
+    { windowsHide: true, timeout: 5000, env: createWindowsPowerShellEnvironment() }
   );
   return String(stdout);
 }

@@ -1,9 +1,10 @@
 import type { SystemProxyAdapter } from '../lifecycle';
 import { RuntimeOperationError } from '../runtimeRecoveryPolicy';
 import { execFile } from 'node:child_process';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 import { promisify } from 'node:util';
 import { readJsonFile, removeJsonFile, writeJsonFileAtomic } from '../storage/jsonFile';
+import { createWindowsPowerShellEnvironment, resolveWindowsPowerShellPath } from './windowsPowerShell';
 
 const execFileAsync = promisify(execFile);
 const internetSettingsKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
@@ -111,9 +112,15 @@ foreach ($name in $names) {
 `;
 
 async function defaultRunCommand(command: SystemProxyCommand): Promise<string> {
-  const { stdout } = await execFileAsync(command.file, command.args, {
-    windowsHide: true
-  });
+  const isWindowsPowerShell = win32.basename(command.file).toLowerCase() === 'powershell.exe';
+  const { stdout } = await execFileAsync(
+    isWindowsPowerShell ? resolveWindowsPowerShellPath() : command.file,
+    command.args,
+    {
+      windowsHide: true,
+      ...(isWindowsPowerShell ? { env: createWindowsPowerShellEnvironment() } : {})
+    }
+  );
   return stdout;
 }
 

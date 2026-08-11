@@ -24,10 +24,10 @@ try {
     try {
       $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
       if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -le 0 -or $item.Length -gt 4096) { return $false }
-      $acl = Get-Acl -LiteralPath $path -ErrorAction Stop
+      $acl = [IO.File]::GetAccessControl($path)
       $expectedSid = $expectedUserSid.ToUpperInvariant()
       if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant() -cne $expectedSid -or -not $acl.AreAccessRulesProtected) { return $false }
-      $rules = @($acl.Access)
+      $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
       if ($rules.Count -ne 1 -or $rules[0].IsInherited -or $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { return $false }
       $ruleSid = $rules[0].IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value.ToUpperInvariant()
       $fullControl = [int64] [Security.AccessControl.FileSystemRights]::FullControl

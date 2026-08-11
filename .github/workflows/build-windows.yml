@@ -55,8 +55,9 @@ jobs:
             electron-builder-${{ runner.os }}-
 
       - name: Test
-        # PowerShell 5.1 writes its user-scoped module analysis cache asynchronously.
-        # Disable that shared file cache so parallel clean-runner fixtures scan modules independently.
+        # Avoid passing PowerShell 7's PSModulePath through npm/Node into Windows PowerShell 5.1.
+        # The product/test launcher also scrubs it; the cache setting is a separate parallel-run guard.
+        shell: cmd
         env:
           PSModuleAnalysisCachePath: NUL
         run: npm test
@@ -90,18 +91,7 @@ jobs:
         run: npm run format:check --if-present
 
       - name: Build update installers
-        run: |
-          $maxAttempts = 3
-          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            npm run dist:win:release
-            if ($LASTEXITCODE -eq 0) {
-              exit 0
-            }
-            if ($attempt -eq $maxAttempts) {
-              exit $LASTEXITCODE
-            }
-            Start-Sleep -Seconds (20 * $attempt)
-          }
+        run: npm run dist:win:release
 
       - name: Smoke packaged output
         run: npm run smoke

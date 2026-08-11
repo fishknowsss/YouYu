@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { join } from 'node:path';
+import { createWindowsPowerShellEnvironment, resolveWindowsPowerShellPath } from './windowsPowerShell';
 import { gzipSync } from 'node:zlib';
 
 type ProcessSpawner<TResult> = (binaryPath: string, args: string[]) => TResult;
@@ -410,19 +410,17 @@ export function spawnWindowsJobProcess(
     parentPid: options.parentPid ?? process.pid,
     pollIntervalMs: options.pollIntervalMs ?? 250
   });
-  const powershellPath = join(
-    process.env.SystemRoot ?? 'C:\\Windows',
-    'System32',
-    'WindowsPowerShell',
-    'v1.0',
-    'powershell.exe'
-  );
+  const powershellPath = resolveWindowsPowerShellPath();
   const encodedCommand = encodeCompressedPowerShellCommand(script);
   if (encodedCommand.length > 28_000) throw new Error('Windows Job Object helper exceeds the command-line limit');
   return (options.spawnHost ?? spawn)(
     powershellPath,
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedCommand],
-    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+    {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: createWindowsPowerShellEnvironment()
+    }
   );
 }
 

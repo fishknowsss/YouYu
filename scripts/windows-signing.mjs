@@ -1,9 +1,21 @@
 import { spawnSync } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const windowsTimestampServer = 'http://timestamp.digicert.com';
+
+export function createWindowsPowerShellEnvironment(source = process.env) {
+  const environment = { ...source };
+  for (const key of Object.keys(environment)) {
+    const normalizedKey = key.toLowerCase();
+    if (normalizedKey === 'psmodulepath' || normalizedKey === 'psmoduleanalysiscachepath') {
+      delete environment[key];
+    }
+  }
+  environment.PSModuleAnalysisCachePath = 'NUL';
+  return environment;
+}
 
 export function assertWindowsSigningEnvironment(env) {
   const enforcement = normalizeOptionalString(env.YOUYU_REQUIRE_CODE_SIGNING);
@@ -76,13 +88,16 @@ foreach ($target in @($targets)) {
 ConvertTo-Json -InputObject @($results) -Compress -Depth 4
 `;
   const result = spawnSync(
-    'powershell.exe',
+    win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command],
     {
       encoding: 'utf8',
       windowsHide: true,
       timeout: 120_000,
-      env: { ...process.env, YOUYU_SIGNING_TARGETS_JSON: JSON.stringify(targets) }
+      env: createWindowsPowerShellEnvironment({
+        ...process.env,
+        YOUYU_SIGNING_TARGETS_JSON: JSON.stringify(targets)
+      })
     }
   );
   if (result.error || result.status !== 0) {

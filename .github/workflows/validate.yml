@@ -43,8 +43,9 @@ jobs:
         run: npm run typecheck
 
       - name: Test
-        # PowerShell 5.1 writes its user-scoped module analysis cache asynchronously.
-        # Disable that shared file cache so parallel clean-runner fixtures scan modules independently.
+        # Avoid passing PowerShell 7's PSModulePath through npm/Node into Windows PowerShell 5.1.
+        # The product/test launcher also scrubs it; the cache setting is a separate parallel-run guard.
+        shell: cmd
         env:
           PSModuleAnalysisCachePath: NUL
         run: npm test

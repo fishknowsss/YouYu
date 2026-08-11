@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createConnection, type Socket } from 'node:net';
 import { win32 } from 'node:path';
+import { createWindowsPowerShellEnvironment } from './windowsPowerShell';
 import {
   normalizeWindowsUserSid,
   resolveCurrentWindowsUserIdentity,
@@ -797,7 +798,7 @@ export function spawnWindowsElevatedProcess(
       launcher = (options.spawnLauncher ?? spawn)(
         powershellPath,
         ['-NoProfile', '-NonInteractive', '-Command', outerCommand, innerEncoded],
-        { windowsHide: true, stdio: 'ignore' }
+        { windowsHide: true, stdio: 'ignore', env: createWindowsPowerShellEnvironment() }
       );
       launcherErrorListener = fail;
       launcherExitListener = (code, signal) => {

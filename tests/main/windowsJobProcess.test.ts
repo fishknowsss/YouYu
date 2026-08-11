@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildWindowsJobProcessScript,
@@ -9,6 +9,38 @@ import {
 } from '../../src/main/platform/windowsJobProcess';
 
 describe('Windows Job Object process host', () => {
+  it('starts the host at the canonical PS5 path with an isolated module environment', () => {
+    const spawnHost = vi.fn(() => ({}) as never);
+    const originalModuleEntries = Object.entries(process.env).filter(([key]) =>
+      ['psmodulepath', 'psmoduleanalysiscachepath'].includes(key.toLowerCase())
+    );
+    for (const [key] of originalModuleEntries) delete process.env[key];
+    process.env.pSmOdUlEpAtH = 'PowerShell-7-modules-must-not-survive';
+    process.env.pSmOdUlEaNaLySiScAcHePaTh = 'shared-cache-must-not-survive';
+
+    try {
+      spawnWindowsJobProcess('C:\\Program Files\\YouYu\\mihomo.exe', [], { spawnHost });
+      const [hostPath, , hostOptions] = spawnHost.mock.calls[0] as unknown as [
+        string,
+        string[],
+        { env: NodeJS.ProcessEnv }
+      ];
+      expect(hostPath).toBe(
+        win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+      );
+      expect(Object.keys(hostOptions.env).some((key) => key.toLowerCase() === 'psmodulepath')).toBe(false);
+      expect(Object.keys(hostOptions.env).filter((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toEqual([
+        'PSModuleAnalysisCachePath'
+      ]);
+      expect(hostOptions.env.PSModuleAnalysisCachePath).toBe('NUL');
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (['psmodulepath', 'psmoduleanalysiscachepath'].includes(key.toLowerCase())) delete process.env[key];
+      }
+      for (const [key, value] of originalModuleEntries) process.env[key] = value;
+    }
+  });
+
   it('compiles the native Job Object and bounded-frame bridge on supported Windows PowerShell', () => {
     const source = [
       ...windowsJobNativeTypePowerShell(),

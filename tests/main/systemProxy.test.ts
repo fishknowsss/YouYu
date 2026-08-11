@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSystemProxyAdapter } from '../../src/main/platform/systemProxy';
+import {
+  createWindowsPowerShellEnvironment,
+  resolveWindowsPowerShellPath
+} from '../../src/main/platform/windowsPowerShell';
 import { classifyRuntimeFailure } from '../../src/main/runtimeRecoveryPolicy';
 
 const installedStorePackageFamilies = [
@@ -11,6 +15,31 @@ const installedStorePackageFamilies = [
 ].join('\n');
 
 describe('createSystemProxyAdapter', () => {
+  it('locks the default command boundary to canonical PS5 with an isolated module environment', async () => {
+    const source = await readFile('src/main/platform/systemProxy.ts', 'utf8');
+    const defaultRunner = source.slice(
+      source.indexOf('async function defaultRunCommand'),
+      source.indexOf('function parseEnabled')
+    );
+    const environment = createWindowsPowerShellEnvironment({
+      KEEP: 'preserved',
+      pSmOdUlEpAtH: 'PowerShell-7-modules-must-not-survive',
+      pSmOdUlEaNaLySiScAcHePaTh: 'shared-cache-must-not-survive'
+    });
+
+    expect(defaultRunner).toContain('isWindowsPowerShell ? resolveWindowsPowerShellPath() : command.file');
+    expect(defaultRunner).toContain('isWindowsPowerShell ? { env: createWindowsPowerShellEnvironment() } : {}');
+    expect(resolveWindowsPowerShellPath(String.raw`C:\Windows`)).toBe(
+      String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+    );
+    expect(environment.KEEP).toBe('preserved');
+    expect(Object.keys(environment).some((key) => key.toLowerCase() === 'psmodulepath')).toBe(false);
+    expect(Object.keys(environment).filter((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toEqual([
+      'PSModuleAnalysisCachePath'
+    ]);
+    expect(environment.PSModuleAnalysisCachePath).toBe('NUL');
+  });
+
   it('does not run Windows proxy commands on macOS', async () => {
     const runCommand = vi.fn();
     const proxy = createSystemProxyAdapter({ platform: 'darwin', runCommand });
