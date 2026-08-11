@@ -1,8 +1,4 @@
 $ErrorActionPreference = 'Stop'
-Import-Module Microsoft.PowerShell.Management -ErrorAction Stop
-Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
-Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
-Import-Module CimCmdlets -ErrorAction Stop
 $cancellationPath = $null
 $installer = $null
 $installerBoundaryClosed = $false

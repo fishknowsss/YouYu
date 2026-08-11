@@ -31,13 +31,6 @@ export const updateInstallerExecutionTimeoutMs = 10 * 60 * 1000;
 export const updateElevatedInstallerPayloadEnvironment = 'YOUYU_UPDATE_ELEVATED_INSTALL_PAYLOAD';
 export const updateInstallerPowerShellModuleAnalysisCacheEnvironment = 'PSModuleAnalysisCachePath';
 
-const updateInstallerPowerShellModuleImports = [
-  'Import-Module Microsoft.PowerShell.Management -ErrorAction Stop',
-  'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop',
-  'Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop',
-  'Import-Module CimCmdlets -ErrorAction Stop'
-] as const;
-
 type SpawnLauncher = (
   command: string,
   args: string[],
@@ -132,7 +125,6 @@ export function signalUpdateInstallerCancellation(
 export function createElevatedUpdateInstallerScript(): string {
   return [
     "$ErrorActionPreference = 'Stop'",
-    ...updateInstallerPowerShellModuleImports,
     '$cancellationPath = $null',
     '$installer = $null',
     '$installerBoundaryClosed = $false',
@@ -304,7 +296,6 @@ function createUpdateInstallerPowerShellTransport(
   const environmentValue = gzipSync(scriptBytes, { level: 9 }).toString('base64');
   const loaderScript = [
     "$ErrorActionPreference = 'Stop'",
-    ...updateInstallerPowerShellModuleImports,
     '$compressedStream = $null',
     '$gzipStream = $null',
     '$reader = $null',
@@ -890,6 +881,10 @@ export async function launchDownloadedUpdateInstaller(options: UpdateInstallerLa
       delete environment[key];
     }
   }
+  // Set this before the first Windows PowerShell process starts. The value is inherited by the
+  // bootstrap, supervisor and elevated installer, so concurrent clean-user launches never share
+  // the asynchronously written PS5.1 module-analysis file. Keep normal module auto-discovery:
+  // explicitly importing inbox modules can duplicate TypeData on Windows Server 2025 runners.
   environment[updateInstallerPowerShellModuleAnalysisCacheEnvironment] = 'NUL';
   environment[updateInstallerLauncherPayloadEnvironment] = payload;
   const supervisorTransport = createUpdateInstallerSupervisorTransport(createUpdateInstallerLauncherScript());

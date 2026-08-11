@@ -24,10 +24,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Import-Module Microsoft.PowerShell.Management -ErrorAction Stop
-Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
-Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
-Import-Module CimCmdlets -ErrorAction Stop
 Set-StrictMode -Version 2.0
 $handoffLifetimeLimitMs = 900000L
 $implicitHandoffDiscoveryLifetimeMs = 300000L

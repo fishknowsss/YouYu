@@ -558,12 +558,8 @@ describe('controlled Windows update installer launcher', () => {
     expect(elevatedScript).toContain(
       'Start-Process -FilePath $installerPath -ArgumentList $argumentLine -WindowStyle Hidden -PassThru'
     );
-    expect(elevatedScript).toContain('Import-Module Microsoft.PowerShell.Security -ErrorAction Stop');
-    expect(elevatedScript).toContain('Import-Module CimCmdlets -ErrorAction Stop');
-    expect(loaderScript).toContain('Import-Module Microsoft.PowerShell.Management -ErrorAction Stop');
-    expect(loaderScript).toContain('Import-Module Microsoft.PowerShell.Security -ErrorAction Stop');
-    expect(loaderScript).toContain('Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop');
-    expect(loaderScript).toContain('Import-Module CimCmdlets -ErrorAction Stop');
+    expect(elevatedScript).not.toContain('Import-Module');
+    expect(loaderScript).not.toContain('Import-Module');
     expect(elevatedScript).toContain("$taskkillArguments = '/PID ' + $rootProcessId + ' /T /F'");
     expect(elevatedScript.indexOf('$taskkill = Start-Process')).toBeLessThan(
       elevatedScript.indexOf('try { $trackedProcessIds = @(Get-ProcessTreeIds $rootProcessId)')
