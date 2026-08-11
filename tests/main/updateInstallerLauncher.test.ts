@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import { createWindowsPowerShellEnvironment as createWindowsPowerShellTestEnvironment } from '../../src/main/platform/windowsPowerShell';
+import { createWindowsPowerShellEnvironment } from '../../src/main/platform/windowsPowerShell';
+import { createWindowsPowerShellFixtureEnvironment } from '../helpers/windowsPowerShellEnvironment';
 import {
   createUpdateInstallerBootstrapScript,
   createElevatedUpdateInstallerScript,
@@ -52,9 +53,16 @@ function createLauncher(): ChildProcess {
   return child;
 }
 
-async function runWindowsPowerShellScript(script: string, environment: NodeJS.ProcessEnv) {
+async function runWindowsPowerShellScript(
+  script: string,
+  environment: NodeJS.ProcessEnv,
+  environmentMode: 'fixture' | 'production' = 'fixture'
+) {
   const transport = createUpdateInstallerSupervisorTransport(script);
-  const childEnvironment = createWindowsPowerShellTestEnvironment(environment);
+  const childEnvironment =
+    environmentMode === 'production'
+      ? createWindowsPowerShellEnvironment(environment)
+      : createWindowsPowerShellFixtureEnvironment(environment);
   childEnvironment[updateInstallerSupervisorScriptEnvironment] = transport.environmentValue;
   const child = spawn(
     resolveWindowsPowerShellPath(environment.SystemRoot),
@@ -682,10 +690,16 @@ describe('controlled Windows update installer launcher', () => {
       }),
       'utf8'
     ).toString('base64');
-    const { stdout, stderr, exitCode } = await runWindowsPowerShellScript(probeScript, {
-      ...process.env,
-      [updateInstallerLauncherPayloadEnvironment]: payload
-    });
+    const { stdout, stderr, exitCode } = await runWindowsPowerShellScript(
+      probeScript,
+      {
+        ...process.env,
+        PSModulePath: String.raw`C:\Program Files\PowerShell\7\Modules`,
+        PSModuleAnalysisCachePath: 'NUL',
+        [updateInstallerLauncherPayloadEnvironment]: payload
+      },
+      'production'
+    );
 
     expect(exitCode, stderr).toBe(0);
     expect(stderr).not.toContain('YouYu update launcher:');
@@ -862,7 +876,7 @@ describe('controlled Windows update installer launcher', () => {
         {
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: createWindowsPowerShellTestEnvironment({
+          env: createWindowsPowerShellFixtureEnvironment({
             ...process.env,
             [updateElevatedInstallerPayloadEnvironment]: elevatedPayload,
             YOUYU_TEST_PARENT_PID_PATH: parentPidPath,
@@ -1046,7 +1060,7 @@ describe('controlled Windows update installer launcher', () => {
       const parent = spawn(process.execPath, ['-e', parentScript], {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: createWindowsPowerShellTestEnvironment({
+        env: createWindowsPowerShellFixtureEnvironment({
           ...process.env,
           [updateInstallerBootstrapPayloadEnvironment]: bootstrapPayload,
           [updateInstallerSupervisorLoaderEnvironment]: supervisorTransport.encodedLoaderCommand,

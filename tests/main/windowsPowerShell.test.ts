@@ -5,6 +5,10 @@ import {
   resolveWindowsPowerShellPath,
   windowsPowerShellModuleAnalysisCacheEnvironment
 } from '../../src/main/platform/windowsPowerShell';
+import {
+  createWindowsPowerShellFixtureEnvironment,
+  isReusableWindowsPowerShellAnalysisCachePath
+} from '../helpers/windowsPowerShellEnvironment';
 
 describe('Windows PowerShell 5.1 process environment', () => {
   it('removes every inherited PowerShell module-path and cache override', () => {
@@ -33,6 +37,42 @@ describe('Windows PowerShell 5.1 process environment', () => {
       String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
     );
     expect(() => resolveWindowsPowerShellPath('relative')).toThrow('Windows system root path is invalid');
+  });
+
+  it('lets repeated fixtures reuse only an existing absolute analysis-cache file', () => {
+    const cachePath = String.raw`C:\PSModuleAnalysisCachePath\ModuleAnalysisCache`;
+    const existingFile = (path: string) => path === cachePath;
+
+    expect(isReusableWindowsPowerShellAnalysisCachePath(cachePath, existingFile)).toBe(true);
+    expect(isReusableWindowsPowerShellAnalysisCachePath('NUL', existingFile)).toBe(false);
+    expect(isReusableWindowsPowerShellAnalysisCachePath('relative-cache', existingFile)).toBe(false);
+    expect(isReusableWindowsPowerShellAnalysisCachePath(String.raw`C:\missing\ModuleAnalysisCache`, existingFile)).toBe(
+      false
+    );
+
+    const cachedEnvironment = createWindowsPowerShellFixtureEnvironment(
+      {
+        KEEP: 'preserved',
+        PSModulePath: String.raw`C:\Program Files\PowerShell\7\Modules`,
+        PSModuleAnalysisCachePath: cachePath
+      },
+      existingFile
+    );
+    expect(cachedEnvironment.KEEP).toBe('preserved');
+    expect(Object.keys(cachedEnvironment).some((key) => key.toLowerCase() === 'psmodulepath')).toBe(false);
+    expect(
+      Object.entries(cachedEnvironment).some(
+        ([key, value]) => key.toLowerCase() === 'psmoduleanalysiscachepath' && value === cachePath
+      )
+    ).toBe(true);
+
+    const duplicateCacheEnvironment = createWindowsPowerShellFixtureEnvironment(
+      { PSModuleAnalysisCachePath: cachePath, psmoduleanalysiscachepath: cachePath },
+      existingFile
+    );
+    expect(
+      Object.keys(duplicateCacheEnvironment).some((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')
+    ).toBe(false);
   });
 
   it.runIf(process.platform === 'win32')(

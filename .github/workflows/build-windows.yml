@@ -55,10 +55,23 @@ jobs:
             electron-builder-${{ runner.os }}-
 
       - name: Test
-        # Avoid passing PowerShell 7's PSModulePath through npm/Node into Windows PowerShell 5.1.
-        # Product/test launchers also scrub inherited module and cache overrides before PS5.1 starts.
+        # Avoid a PowerShell 7 module path while retaining the runner's prewarmed PS5 analysis cache.
+        # Production launchers still scrub both settings; a dedicated poisoned-parent probe covers it.
         shell: cmd
-        run: npm test
+        run: |
+          if not defined PSModuleAnalysisCachePath (
+            echo ERROR: GitHub runner PS5 analysis cache is unavailable.
+            exit /b 1
+          )
+          if /I "%PSModuleAnalysisCachePath%"=="NUL" (
+            echo ERROR: GitHub runner PS5 analysis cache is disabled.
+            exit /b 1
+          )
+          if not exist "%PSModuleAnalysisCachePath%" (
+            echo ERROR: GitHub runner PS5 analysis cache file does not exist.
+            exit /b 1
+          )
+          npm test
 
       - name: Test Worker maintenance
         run: npm run test:worker
