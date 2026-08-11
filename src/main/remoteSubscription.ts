@@ -1,13 +1,15 @@
-import type { RemoteControlConfig } from '../shared/ipc';
+import type { RemoteControlConfig, RuleProfile } from '../shared/ipc';
 import type { ActiveRemoteConfigSnapshot } from './remoteConfig';
 
 type RemoteSubscriptionSettings = {
   remoteSubscriptionUrl?: string;
+  ruleProfile?: RuleProfile;
 };
 
 export function createRemoteSubscriptionCoordinator(deps: {
   readSettings: () => Promise<RemoteSubscriptionSettings>;
   updateRemoteSubscription: (value: string | null) => Promise<unknown>;
+  updateRuleProfile: (value: RuleProfile) => Promise<unknown>;
   isSnapshotCurrent: (snapshot: ActiveRemoteConfigSnapshot) => Promise<boolean>;
   getActiveSnapshot: () => Promise<ActiveRemoteConfigSnapshot>;
   onChanged?: (url: string) => void;
@@ -16,11 +18,17 @@ export function createRemoteSubscriptionCoordinator(deps: {
 
   async function write(config?: RemoteControlConfig): Promise<boolean> {
     const nextUrl = config?.enabled ? (config.subscriptionUrl?.trim() ?? '') : '';
+    const nextRuleProfile = config?.enabled ? config.ruleProfile : undefined;
     const settings = await deps.readSettings();
-    if ((settings.remoteSubscriptionUrl ?? '') === nextUrl) return false;
+    const subscriptionChanged = (settings.remoteSubscriptionUrl ?? '') !== nextUrl;
+    const ruleProfileChanged = nextRuleProfile !== undefined && settings.ruleProfile !== nextRuleProfile;
+    if (!subscriptionChanged && !ruleProfileChanged) return false;
 
-    await deps.updateRemoteSubscription(nextUrl || null);
-    deps.onChanged?.(nextUrl);
+    if (subscriptionChanged) {
+      await deps.updateRemoteSubscription(nextUrl || null);
+      deps.onChanged?.(nextUrl);
+    }
+    if (ruleProfileChanged) await deps.updateRuleProfile(nextRuleProfile);
     return true;
   }
 

@@ -65,6 +65,13 @@ type RemoteConfigInput = {
   regionFallback?: string | null;
 };
 
+type ClientConfigUpdateInput = {
+  userId?: unknown;
+  deviceId?: unknown;
+  subscriptionUrl?: unknown;
+  ruleProfile?: unknown;
+};
+
 type UserProfileInput = {
   name?: unknown;
   requestId?: unknown;
@@ -172,6 +179,7 @@ type EffectiveDeviceConfigRow = RemoteConfigRow & {
 type RemoteControlConfig = {
   version: number;
   enabled: boolean;
+  configSource: 'global' | 'user';
   subscriptionUrl?: string;
   ruleProfile?: string;
   preferredRegion: 'auto' | 'jp' | 'hk' | 'tw' | 'sg' | 'us' | 'kr';
@@ -289,6 +297,7 @@ async function dispatchRequest(request: Request, env: Env, url: URL): Promise<Re
     return acknowledgeUserNotice(request, env);
   }
   if (request.method === 'GET' && url.pathname === '/api/config') return getClientConfig(request, env);
+  if (request.method === 'POST' && url.pathname === '/api/config') return updateClientConfig(request, env);
   if (request.method === 'GET' && url.pathname === '/api/admin/users') {
     await requireAdmin(request, env);
     return listUsers(env, parseAdminPagination(url, ADMIN_USERS_DEFAULT_PAGE_SIZE));
@@ -541,6 +550,74 @@ async function getClientConfig(request: Request, env: Env): Promise<Response> {
   });
 }
 
+async function updateClientConfig(request: Request, env: Env): Promise<Response> {
+  await requireJsonMediaType(request);
+  const bodyText = await readRequestTextWithLimit(request, JSON_REQUEST_MAX_BODY_BYTES);
+  const parsed = safeParseJson(bodyText);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new HttpError(400, 'invalid json');
+  const input = parsed as ClientConfigUpdateInput;
+  assertOnlyFields(input, ['userId', 'deviceId', 'subscriptionUrl', 'ruleProfile'], 'unsupported client config field');
+  const userId = cleanOptional(input.userId);
+  const deviceId = cleanOptional(input.deviceId);
+  if (!userId || !deviceId) throw new HttpError(400, 'missing identity');
+  if (!hasOwnField(input, 'subscriptionUrl') && !hasOwnField(input, 'ruleProfile')) {
+    throw new HttpError(400, 'missing client config');
+  }
+
+  const canonicalUserId = await verifyDeviceRequest(request, env, userId, deviceId, bodyText);
+  const global = await getGlobalRemoteConfig(env);
+  const columns: string[] = [];
+  const bindings: unknown[] = [];
+  if (hasOwnField(input, 'subscriptionUrl')) {
+    const desired = parseNullableSubscriptionUrl(input.subscriptionUrl);
+    columns.push('subscription_url');
+    bindings.push(desired === (global.subscriptionUrl ?? null) ? null : desired);
+  }
+  if (hasOwnField(input, 'ruleProfile')) {
+    const desired = parseNullableConfigChoice(input.ruleProfile, ['ruleset', 'subscription'], 'invalid rule profile');
+    if (!desired) throw new HttpError(400, 'invalid rule profile');
+    columns.push('rule_profile');
+    bindings.push(desired === global.ruleProfile ? null : desired);
+  }
+
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare(
+    `INSERT INTO user_remote_config (user_id, ${columns.join(', ')}, updated_at)
+     SELECT users.id, ${columns.map(() => '?').join(', ')}, ?
+     FROM users
+     WHERE users.id = ? AND users.status = 'active' AND users.merged_into_user_id IS NULL
+     ON CONFLICT(user_id) DO UPDATE SET
+       ${columns.map((column) => `${column} = excluded.${column}`).join(', ')},
+       updated_at = excluded.updated_at`
+  )
+    .bind(...bindings, now, canonicalUserId)
+    .run();
+  if (getD1Changes(result) === 0) throw new HttpError(409, 'device state changed');
+
+  await env.DB.prepare(
+    `DELETE FROM user_remote_config
+     WHERE user_id = ?
+       AND enabled IS NULL
+       AND subscription_url IS NULL
+       AND rule_profile IS NULL
+       AND preferred_region IS NULL
+       AND region_fallback IS NULL
+       AND preferred_node IS NULL
+       AND preferred_strategy IS NULL
+       AND direct_rules IS NULL
+       AND proxy_rules IS NULL`
+  )
+    .bind(canonicalUserId)
+    .run();
+
+  const state = await getEffectiveClientStateForDevice(env, deviceId);
+  return json({
+    config: state.config,
+    profile: { ...state.profile, userId },
+    ...(state.notice ? { notice: state.notice } : {})
+  });
+}
+
 async function updateDeviceVersionHeartbeat(
   env: Env,
   userId: string,
@@ -746,20 +823,17 @@ async function syncGlobalConfigToUsers(env: Env): Promise<Response> {
 }
 
 async function resetAdminUserConfig(env: Env, userId: string): Promise<Response> {
-  const [knownUser] = await env.DB.batch([
-    env.DB.prepare("SELECT id FROM users WHERE id = ? AND status = 'active' AND merged_into_user_id IS NULL").bind(
-      userId
-    ),
-    env.DB.prepare(
-      `DELETE FROM user_remote_config
-         WHERE user_id = ?
-           AND EXISTS (
-             SELECT 1 FROM users
-             WHERE id = ? AND status = 'active' AND merged_into_user_id IS NULL
-           )`
-    ).bind(userId, userId)
-  ]);
-  if (!hasD1Rows(knownUser)) throw new HttpError(404, 'unknown user');
+  await requireKnownUser(env, userId);
+  await env.DB.prepare(
+    `DELETE FROM user_remote_config
+       WHERE user_id = ?
+         AND EXISTS (
+           SELECT 1 FROM users
+           WHERE id = ? AND status = 'active' AND merged_into_user_id IS NULL
+         )`
+  )
+    .bind(userId, userId)
+    .run();
   const effective = await getEffectiveRemoteConfig(env, userId);
   await requireKnownUser(env, userId);
   return json({
@@ -2001,11 +2075,6 @@ function getD1Changes(result: unknown): number {
   return typeof changes === 'number' && Number.isFinite(changes) && changes > 0 ? Math.floor(changes) : 0;
 }
 
-function hasD1Rows(result: unknown): boolean {
-  const rows = (result as { results?: unknown[] } | null)?.results;
-  return Array.isArray(rows) && rows.length > 0;
-}
-
 async function getAdminTrafficLimitSummary(env: Env): Promise<AdminTrafficLimitSummary> {
   let row = await queryAdminTrafficLimitSummary(env);
   if (!row) {
@@ -2402,6 +2471,7 @@ async function getGlobalRemoteConfig(env: Env): Promise<RemoteControlConfig> {
     return {
       version: 1,
       enabled: true,
+      configSource: 'global',
       subscriptionUrl: undefined,
       ruleProfile: 'ruleset',
       preferredRegion: 'jp',
@@ -2444,7 +2514,8 @@ async function getEffectiveRemoteConfig(env: Env, userId: string): Promise<Remot
     ruleProfile: override.ruleProfile ?? global.ruleProfile,
     preferredRegion: override.preferredRegion ?? global.preferredRegion,
     regionFallback: override.regionFallback ?? global.regionFallback,
-    updatedAt: override.updatedAt ?? global.updatedAt
+    updatedAt: override.updatedAt ?? global.updatedAt,
+    configSource: 'user'
   };
 }
 
@@ -2505,7 +2576,8 @@ async function getEffectiveClientStateForDevice(env: Env, deviceId: string): Pro
     ruleProfile: normalizeOptionalRuleProfile(row.user_rule_profile) ?? global.ruleProfile,
     preferredRegion: normalizeOptionalPreferredRegion(row.user_preferred_region) ?? global.preferredRegion,
     regionFallback: normalizeOptionalRegionFallback(row.user_region_fallback) ?? global.regionFallback,
-    updatedAt: row.user_updated_at ?? global.updatedAt
+    updatedAt: row.user_updated_at ?? global.updatedAt,
+    configSource: row.user_updated_at ? ('user' as const) : ('global' as const)
   };
   const userId = cleanOptional(row.user_id);
   const name = cleanOptional(row.user_name);
@@ -2538,6 +2610,7 @@ function normalizeRemoteConfigRow(row: RemoteConfigRow): RemoteControlConfig {
   return {
     version: typeof row.version === 'number' && row.version > 0 ? row.version : 1,
     enabled: row.enabled !== 0,
+    configSource: 'global',
     subscriptionUrl: normalizeStoredSubscriptionUrl(row.subscription_url),
     ruleProfile: normalizeRuleProfile(row.rule_profile),
     preferredRegion: normalizePreferredRegion(row.preferred_region),

@@ -271,6 +271,133 @@ describe('app actions', () => {
     expect(start).toHaveBeenCalledOnce();
   });
 
+  it('publishes changed managed settings before persisting and restarting the local runtime', async () => {
+    const order: string[] = [];
+    const updateRemote = vi.fn(async () => {
+      order.push('remote-update');
+      return {
+        version: 4,
+        enabled: true,
+        configSource: 'user' as const,
+        subscriptionUrl: 'https://example.com/alice',
+        ruleProfile: 'subscription' as const,
+        directRules: [],
+        proxyRules: []
+      };
+    });
+    const updateLocal = vi.fn(async () => {
+      order.push('local-update');
+      return makeSettings({
+        subscriptionUrl: 'https://example.com/alice',
+        ruleProfile: 'subscription'
+      });
+    });
+    const restart = vi.fn(async () => {
+      order.push('restart');
+    });
+
+    await saveSubscriptionSettings(
+      {
+        settingsStore: { read: vi.fn(), update: updateLocal },
+        lifecycle: makeLifecycle(),
+        runtime: { start: vi.fn(async () => undefined), restart },
+        remoteConfig: {
+          read: async () => ({
+            version: 3,
+            enabled: true,
+            configSource: 'global',
+            subscriptionUrl: 'https://example.com/global',
+            ruleProfile: 'ruleset',
+            directRules: [],
+            proxyRules: []
+          }),
+          update: updateRemote,
+          apply: async () => {
+            order.push('remote-apply');
+          }
+        },
+        createSnapshot: async () => makeSnapshot()
+      } as Parameters<typeof saveSubscriptionSettings>[0],
+      {
+        subscriptionUrl: ' https://example.com/alice ',
+        ruleProfile: 'subscription'
+      }
+    );
+
+    expect(updateRemote).toHaveBeenCalledWith(
+      {
+        subscriptionUrl: 'https://example.com/alice',
+        ruleProfile: 'subscription'
+      },
+      undefined
+    );
+    expect(order).toEqual(['remote-update', 'remote-apply', 'local-update', 'restart']);
+  });
+
+  it('does not create a user override when only local settings changed', async () => {
+    const updateRemote = vi.fn();
+    const updateLocal = vi.fn(async () => makeSettings({ tunEnabled: true }));
+
+    await saveSubscriptionSettings(
+      {
+        settingsStore: { read: vi.fn(), update: updateLocal },
+        lifecycle: makeLifecycle({ getStatus: () => 'stopped' }),
+        remoteConfig: {
+          read: async () => ({
+            version: 3,
+            enabled: true,
+            configSource: 'global',
+            subscriptionUrl: 'https://example.com/global',
+            ruleProfile: 'ruleset',
+            directRules: [],
+            proxyRules: []
+          }),
+          update: updateRemote,
+          apply: vi.fn()
+        },
+        createSnapshot: async () => makeSnapshot()
+      },
+      {
+        subscriptionUrl: 'https://example.com/global',
+        ruleProfile: 'ruleset',
+        tunEnabled: true
+      }
+    );
+
+    expect(updateRemote).not.toHaveBeenCalled();
+    expect(updateLocal).toHaveBeenCalledOnce();
+  });
+
+  it('does not persist a conflicting local managed value when the cloud write fails', async () => {
+    const updateLocal = vi.fn();
+    await expect(
+      saveSubscriptionSettings(
+        {
+          settingsStore: { read: vi.fn(), update: updateLocal },
+          lifecycle: makeLifecycle(),
+          remoteConfig: {
+            read: async () => ({
+              version: 3,
+              enabled: true,
+              configSource: 'global',
+              ruleProfile: 'ruleset',
+              directRules: [],
+              proxyRules: []
+            }),
+            update: async () => {
+              throw new Error('cloud unavailable');
+            },
+            apply: vi.fn()
+          },
+          createSnapshot: async () => makeSnapshot()
+        },
+        { ruleProfile: 'subscription' }
+      )
+    ).rejects.toThrow('cloud unavailable');
+
+    expect(updateLocal).not.toHaveBeenCalled();
+  });
+
   it('delegates a running subscription fallback to the intent-aware runtime restart', async () => {
     const updateProvider = vi.fn(async () => {
       throw new Error('missing provider');

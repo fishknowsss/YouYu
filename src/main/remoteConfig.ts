@@ -34,6 +34,11 @@ type SyncOptions = {
   signal?: AbortSignal;
 };
 
+export type RemoteUserConfigInput = {
+  subscriptionUrl?: string | null;
+  ruleProfile?: RuleProfile;
+};
+
 type JsonResponse = {
   ok: boolean;
   status: number;
@@ -120,6 +125,15 @@ export class RemoteConfigClient {
     const run = this.queue.then(
       () => this.performSync(options),
       () => this.performSync(options)
+    );
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  async updateUserConfig(input: RemoteUserConfigInput, options: SyncOptions = {}): Promise<RemoteConfigSyncResult> {
+    const run = this.queue.then(
+      () => this.performUserConfigUpdate(input, options),
+      () => this.performUserConfigUpdate(input, options)
     );
     this.queue = run.catch(() => undefined);
     return run;
@@ -212,6 +226,57 @@ export class RemoteConfigClient {
       throw new Error(`remote config failed: ${response.status} (${responseRouteDetails(response)})`);
     }
 
+    return this.commitConfigResponse(response, cached, identity);
+  }
+
+  private async performUserConfigUpdate(
+    input: RemoteUserConfigInput,
+    options: SyncOptions
+  ): Promise<RemoteConfigSyncResult> {
+    const endpoint = normalizeEndpoint(this.options.endpoint);
+    const cached = await this.readCached();
+    const identity = await this.getCurrentIdentity();
+    if (!identity) throw new Error('remote config identity missing');
+    if (!endpoint) throw new Error('remote config endpoint not configured');
+    if (typeof input.subscriptionUrl === 'undefined' && typeof input.ruleProfile === 'undefined') {
+      throw new Error('remote config update missing');
+    }
+    const secret = await this.options.store.getDeviceSecret();
+    if (!secret) throw new Error('remote config device secret missing');
+    const url = `${endpoint}/api/config`;
+    const bodyText = JSON.stringify({
+      userId: identity.userId,
+      deviceId: identity.deviceId,
+      ...(typeof input.subscriptionUrl !== 'undefined'
+        ? { subscriptionUrl: input.subscriptionUrl?.trim() || null }
+        : {}),
+      ...(typeof input.ruleProfile !== 'undefined' ? { ruleProfile: input.ruleProfile } : {})
+    });
+    const response = await requestJson(
+      url,
+      'POST',
+      bodyText,
+      {
+        'content-type': 'application/json',
+        ...createDeviceAuthHeaders('POST', url, bodyText, secret)
+      },
+      options.proxyUrl,
+      this.options.requestTimeoutMs,
+      options.signal,
+      this.options.fetch
+    );
+    if (!response.ok) {
+      throw new Error(`remote config update failed: ${response.status} (${responseRouteDetails(response)})`);
+    }
+    return this.commitConfigResponse(response, cached, identity);
+  }
+
+  private async commitConfigResponse(
+    response: JsonResponse,
+    cached: RemoteConfigCache | undefined,
+    identity: RemoteConfigIdentity
+  ): Promise<RemoteConfigSyncResult> {
+    const current = configForIdentity(cached, identity);
     const envelope = isRecord(response.body) ? response.body : undefined;
     const body = envelope && isRecord(envelope.config) ? envelope.config : response.body;
     const next = normalizeRemoteConfig(body);
@@ -346,10 +411,13 @@ function normalizeRemoteConfig(value: unknown): RemoteControlConfig | undefined 
     ? (value.regionFallback as RegionFallback)
     : undefined;
   const updatedAt = normalizeText(value.updatedAt, 40);
+  const configSource =
+    value.configSource === 'global' || value.configSource === 'user' ? value.configSource : undefined;
 
   return {
     version,
     enabled: value.enabled,
+    ...(configSource ? { configSource } : {}),
     ...(subscriptionUrl ? { subscriptionUrl } : {}),
     ...(ruleProfile ? { ruleProfile } : {}),
     ...(preferredRegion ? { preferredRegion } : {}),
@@ -450,6 +518,9 @@ function isRemoteConfigPayload(value: unknown): value is RemoteConfigPayload {
     return false;
   }
   if (typeof value.updatedAt !== 'undefined' && typeof value.updatedAt !== 'string') return false;
+  if (typeof value.configSource !== 'undefined' && value.configSource !== 'global' && value.configSource !== 'user') {
+    return false;
+  }
   return true;
 }
 

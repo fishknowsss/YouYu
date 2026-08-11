@@ -1207,7 +1207,7 @@ export const ADMIN_SCRIPT = String.raw`
   function renderUserConfig(name, data) {
     const override = data.override || null;
     const effective = data.effective || {};
-    setUserConfigFields(override || effective);
+    setUserConfigFields(effective);
     setUserMode(getUserModeFromConfig(override));
     setUserSubscriptionState(effective, override);
   }

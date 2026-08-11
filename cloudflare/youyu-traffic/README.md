@@ -107,6 +107,25 @@ Config request bodies are limited to 64 KiB; removed controls are rejected inste
 direct/proxy protections remain client-owned, and traffic anomaly detection uses the fixed 1 GiB threshold.
 Compatibility responses still contain empty `directRules` / `proxyRules` arrays for older clients.
 
+Authenticated clients can save the two settings exposed in professional mode through the same signed config endpoint:
+
+```http
+POST /api/config
+Content-Type: application/json
+X-YouYu-Timestamp: <milliseconds>
+X-YouYu-Signature: <device HMAC>
+
+{ "userId": "...", "deviceId": "...", "subscriptionUrl": "https://...", "ruleProfile": "subscription" }
+```
+
+The Worker verifies the body-bound device signature and only accepts `subscriptionUrl` and `ruleProfile`; status,
+region policy, and other admin-owned fields cannot be changed by a client. A differing value becomes a per-user
+override immediately, so the admin user drawer reports `单独配置`. A value equal to the current global value clears
+that field's override. Resetting the user to `跟随全局` removes the override, and the next automatic or manual client
+sync applies the current global config. Concurrent admin and client actions use the order in which D1 successfully
+commits them; the last successful write is authoritative. Client responses include `configSource` as `global` or
+`user`, allowing the desktop UI to show the same ownership that the Worker and Mihomo runtime actually use.
+
 The cumulative traffic limit is an admin-only dashboard setting and is never included in client or per-user remote
 configuration responses. It defaults to 3148 GiB (`3380139261952` bytes):
 

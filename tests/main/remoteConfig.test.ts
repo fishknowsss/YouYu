@@ -45,7 +45,8 @@ function createRegisteredStore(): TrafficStore {
     getSnapshot: async () => ({
       identity: registeredIdentity
     }),
-    getDeviceSecret: async () => 'device-secret'
+    getDeviceSecret: async () => 'device-secret',
+    syncIdentityProfile: async () => false
   } as unknown as TrafficStore;
 }
 
@@ -327,6 +328,18 @@ describe('RemoteConfigClient cache', () => {
     );
   });
 
+  it('renders the effective remote rule and ownership instead of stale local settings', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const snapshot = source.slice(
+      source.indexOf('async function createSnapshot'),
+      source.indexOf('function sendSnapshotToWindows')
+    );
+
+    expect(snapshot).toContain('remoteConfigClient.getActiveConfigSnapshot()');
+    expect(snapshot).toContain('ruleProfile: remoteConfigSnapshot.config?.ruleProfile ?? settings.ruleProfile');
+    expect(snapshot).toContain("configSource: remoteConfigSnapshot.config?.configSource ?? 'local'");
+  });
+
   it('clears a persisted remote subscription when traffic identity ownership changes', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
     const invalidation = source.slice(
@@ -568,6 +581,63 @@ describe('RemoteConfigClient cache', () => {
     expect(acknowledgement?.init?.method).toBe('POST');
     expect(acknowledgement?.init?.body).toBe(JSON.stringify({ userId: 'user-1', deviceId: 'device-1', revision: 1 }));
     expect(new Headers(acknowledgement?.init?.headers).get('x-youyu-signature')).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('saves user-managed config through a signed request and commits the canonical server response', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init });
+      return new Response(
+        JSON.stringify({
+          config: {
+            version: 7,
+            enabled: true,
+            configSource: 'user',
+            subscriptionUrl: 'https://example.com/alice',
+            ruleProfile: 'subscription',
+            directRules: [],
+            proxyRules: [],
+            updatedAt: '2026-08-11T12:00:00.000Z'
+          },
+          profile: { userId: 'user-1', name: 'Alice' }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    });
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.7.6',
+      store: createRegisteredStore(),
+      fetch
+    });
+
+    await expect(
+      client.updateUserConfig({
+        subscriptionUrl: ' https://example.com/alice ',
+        ruleProfile: 'subscription'
+      })
+    ).resolves.toMatchObject({
+      changed: true,
+      config: {
+        configSource: 'user',
+        subscriptionUrl: 'https://example.com/alice',
+        ruleProfile: 'subscription'
+      }
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe('https://config.example.com/api/config');
+    expect(requests[0]?.init?.method).toBe('POST');
+    expect(requests[0]?.init?.body).toBe(
+      JSON.stringify({
+        userId: 'user-1',
+        deviceId: 'device-1',
+        subscriptionUrl: 'https://example.com/alice',
+        ruleProfile: 'subscription'
+      })
+    );
+    expect(new Headers(requests[0]?.init?.headers).get('x-youyu-signature')).toMatch(/^[0-9a-f]{64}$/);
+    await expect(client.getActiveConfig()).resolves.toMatchObject({ configSource: 'user' });
   });
 
   it('serializes notice acknowledgement behind an in-flight sync so stale config cannot restore it', async () => {

@@ -52,7 +52,6 @@ function SettingsView({
   );
   const [settingsDirty, setSettingsDirty] = useState(false);
   const pendingSettingsKey = useRef<string | undefined>(undefined);
-  const remoteManaged = Boolean(snapshot.remoteSubscriptionUrl);
   const saving = busy && busyLabel === '保存中';
   const syncing = busy && busyLabel === '同步中';
   const repairing = busy && busyLabel === '修复中';
@@ -90,6 +89,7 @@ function SettingsView({
 
   function save() {
     const nextSettings: AppSettingsInput = {
+      subscriptionUrl: subscriptionUrl.trim(),
       ruleProfile,
       systemProxyEnabled: true,
       dnsEnhanced: true,
@@ -98,9 +98,6 @@ function SettingsView({
       strictRouteEnabled: true,
       subscriptionRefreshIntervalHours
     };
-    if (!remoteManaged) {
-      nextSettings.subscriptionUrl = subscriptionUrl.trim();
-    }
     pendingSettingsKey.current = getInputSettingsKey({
       ...nextSettings,
       subscriptionUrl: subscriptionUrl.trim()
@@ -115,10 +112,10 @@ function SettingsView({
         <div className="settings-form-grid">
           <div className="settings-row settings-subscription-row">
             <label className="field settings-subscription-field">
-              <span>订阅</span>
+              <span>订阅 · {formatConfigSource(snapshot.configSource)}</span>
               <input
                 value={subscriptionUrl}
-                disabled={busy || remoteManaged}
+                disabled={busy}
                 onChange={(event) => {
                   setSettingsDirty(true);
                   setSubscriptionUrl(event.target.value);
@@ -250,6 +247,8 @@ export function getSettingsRenderKey(snapshot: AppSnapshot): string {
     subscriptionUrl: snapshot.subscriptionUrl,
     remoteSubscriptionUrl: snapshot.remoteSubscriptionUrl ?? '',
     ruleProfile: snapshot.ruleProfile,
+    configSource: snapshot.configSource ?? 'local',
+    configUpdatedAt: snapshot.configUpdatedAt ?? '',
     features: {
       systemProxyEnabled: snapshot.features.systemProxyEnabled,
       dnsEnhanced: snapshot.features.dnsEnhanced,
@@ -267,6 +266,12 @@ export function getSettingsRenderKey(snapshot: AppSnapshot): string {
 
 function formatEnabled(enabled: boolean): string {
   return enabled ? '开启' : '关闭';
+}
+
+function formatConfigSource(source: AppSnapshot['configSource']): string {
+  if (source === 'user') return '单独配置';
+  if (source === 'global') return '跟随全局';
+  return '仅本机';
 }
 
 function getDiagnosticIssueCopy(issueKind: AppSnapshot['diagnostics']['issueKind']): string {

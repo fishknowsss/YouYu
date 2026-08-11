@@ -365,6 +365,7 @@ const remoteConfigClient = new RemoteConfigClient({
 const remoteSubscriptionCoordinator = createRemoteSubscriptionCoordinator({
   readSettings: () => settingsStore.read(),
   updateRemoteSubscription: (value) => settingsStore.update({ remoteSubscriptionUrl: value }),
+  updateRuleProfile: (value) => settingsStore.update({ ruleProfile: value }),
   isSnapshotCurrent: (snapshot) => remoteConfigClient.isActiveConfigSnapshotCurrent(snapshot),
   getActiveSnapshot: () => remoteConfigClient.getActiveConfigSnapshot(),
   onChanged: (url) => {
@@ -1319,9 +1320,10 @@ async function createSnapshot(): Promise<AppSnapshot> {
         strategyTargets[settings.strategy === 'manual' ? 'auto' : settings.strategy]
       ];
   const activeStrategy = strategies.find((strategy) => strategy.active)?.key ?? settings.strategy;
-  const [trafficSnapshot, userNotice] = await Promise.all([
+  const [trafficSnapshot, userNotice, remoteConfigSnapshot] = await Promise.all([
     trafficStore.getSnapshot(),
-    remoteConfigClient.getActiveNotice()
+    remoteConfigClient.getActiveNotice(),
+    remoteConfigClient.getActiveConfigSnapshot()
   ]);
   const nodeHealth = await getCurrentNodeHealthSnapshot(currentNode, running, settings);
 
@@ -1333,7 +1335,9 @@ async function createSnapshot(): Promise<AppSnapshot> {
     strategies,
     mode: settings.mode,
     strategy: activeStrategy,
-    ruleProfile: settings.ruleProfile,
+    ruleProfile: remoteConfigSnapshot.config?.ruleProfile ?? settings.ruleProfile,
+    configSource: remoteConfigSnapshot.config?.configSource ?? 'local',
+    configUpdatedAt: remoteConfigSnapshot.config?.updatedAt,
     features: {
       systemProxyEnabled: settings.systemProxyEnabled,
       dnsEnhanced: settings.dnsEnhanced,
@@ -2351,7 +2355,26 @@ function registerIpc() {
           const issueBeforeSave = classifyDiagnosticIssue(lastErrorBeforeSave);
           try {
             await saveSubscriptionSettings(
-              { settingsStore, lifecycle, runtime: userRuntimeActions, createSnapshot },
+              {
+                settingsStore,
+                lifecycle,
+                runtime: userRuntimeActions,
+                remoteConfig: {
+                  read: () => remoteConfigClient.getActiveConfig(),
+                  update: async (input, updateSignal) =>
+                    (
+                      await remoteConfigClient.updateUserConfig(input, {
+                        proxyUrl: getRuntimeTrafficProxyUrl(),
+                        signal: updateSignal
+                      })
+                    ).config,
+                  apply: async () => {
+                    const snapshot = await remoteConfigClient.getActiveConfigSnapshot();
+                    await applyRemoteSubscription(snapshot.config, snapshot);
+                  }
+                },
+                createSnapshot
+              },
               settings,
               { signal }
             );

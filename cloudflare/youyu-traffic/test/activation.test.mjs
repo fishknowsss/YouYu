@@ -2606,6 +2606,89 @@ test('explicit null clears nullable global choices and restores the default rule
   assert.equal('subscriptionUrl' in config, false);
 });
 
+test('a signed client config save becomes a user override and an admin reset restores global ownership', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const activation = await activate(database, { name: 'Alice', deviceSeed });
+  assert.equal(activation.status, 200);
+  const identity = await activation.json();
+
+  const global = await updateAdminConfig(database, {
+    subscriptionUrl: 'https://example.com/global',
+    ruleProfile: 'ruleset'
+  });
+  assert.equal(global.status, 200);
+
+  const saved = await updateClientConfig(database, identity, deviceSeed, {
+    subscriptionUrl: 'https://example.com/alice',
+    ruleProfile: 'subscription'
+  });
+  assert.equal(saved.status, 200);
+  const savedBody = await saved.json();
+  assert.equal(savedBody.config.configSource, 'user');
+  assert.equal(savedBody.config.subscriptionUrl, 'https://example.com/alice');
+  assert.equal(savedBody.config.ruleProfile, 'subscription');
+
+  const adminView = await getAdminUserConfig(database, identity.userId);
+  assert.equal(adminView.status, 200);
+  const adminBody = await adminView.json();
+  assert.equal(adminBody.override.subscriptionUrl, 'https://example.com/alice');
+  assert.equal(adminBody.override.ruleProfile, 'subscription');
+  assert.equal(adminBody.effective.configSource, 'user');
+
+  const reset = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(identity.userId)}/config/reset`, {
+    method: 'POST'
+  });
+  assert.equal(reset.status, 200, await reset.clone().text());
+
+  const synchronized = await getClientConfig(database, identity, deviceSeed);
+  assert.equal(synchronized.status, 200);
+  const synchronizedBody = await synchronized.json();
+  assert.equal(synchronizedBody.config.configSource, 'global');
+  assert.equal(synchronizedBody.config.subscriptionUrl, 'https://example.com/global');
+  assert.equal(synchronizedBody.config.ruleProfile, 'ruleset');
+
+  const laterClientSave = await updateClientConfig(database, identity, deviceSeed, {
+    ruleProfile: 'subscription'
+  });
+  assert.equal(laterClientSave.status, 200);
+  const laterClientBody = await laterClientSave.json();
+  assert.equal(laterClientBody.config.configSource, 'user');
+  assert.equal(laterClientBody.config.subscriptionUrl, 'https://example.com/global');
+  assert.equal(laterClientBody.config.ruleProfile, 'subscription');
+
+  const finalReset = await requestAdmin(
+    database,
+    `/api/admin/users/${encodeURIComponent(identity.userId)}/config/reset`,
+    { method: 'POST' }
+  );
+  assert.equal(finalReset.status, 200);
+  const finalState = await getClientConfig(database, identity, deviceSeed);
+  assert.equal((await finalState.json()).config.configSource, 'global');
+});
+
+test('client config writes require the current device signature and reject admin-owned fields', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const identity = await (await activate(database, { name: 'Alice', deviceSeed })).json();
+
+  const invalidSignature = await updateClientConfig(database, identity, 'wrong-device-secret', {
+    ruleProfile: 'subscription'
+  });
+  await assertWorkerError(invalidSignature, 401, 'invalid signature', 'INVALID_SIGNATURE');
+
+  const adminOwnedField = await updateClientConfig(database, identity, deviceSeed, {
+    enabled: false,
+    ruleProfile: 'subscription'
+  });
+  await assertWorkerError(adminOwnedField, 400, 'unsupported client config field', 'REQUEST_REJECTED');
+
+  const adminView = await getAdminUserConfig(database, identity.userId);
+  assert.equal((await adminView.json()).override, null);
+});
+
 async function activate(database, input) {
   return worker.fetch(
     new Request('https://worker.example/api/activate', {
@@ -2656,6 +2739,34 @@ async function acknowledgeNotice(database, identity, deviceSeed, revision) {
     userId: identity.userId,
     deviceId: identity.deviceId,
     revision
+  });
+  const timestamp = String(Date.now());
+  const bodyHash = createHash('sha256').update(body).digest('hex');
+  const canonical = ['POST', url.pathname, timestamp, bodyHash].join('\n');
+  const signature = createHmac('sha256', deviceSeed).update(canonical).digest('hex');
+  return worker.fetch(
+    new Request(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-youyu-timestamp': timestamp,
+        'x-youyu-signature': signature
+      },
+      body
+    }),
+    {
+      DB: database,
+      REGISTRATION_PASSPHRASE: registrationPassphrase
+    }
+  );
+}
+
+async function updateClientConfig(database, identity, deviceSeed, config) {
+  const url = new URL('https://worker.example/api/config');
+  const body = JSON.stringify({
+    userId: identity.userId,
+    deviceId: identity.deviceId,
+    ...config
   });
   const timestamp = String(Date.now());
   const bodyHash = createHash('sha256').update(body).digest('hex');

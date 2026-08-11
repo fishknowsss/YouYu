@@ -7,6 +7,7 @@ const identityAConfig: RemoteControlConfig = {
   version: 1,
   enabled: true,
   subscriptionUrl: 'https://identity-a.example/new',
+  ruleProfile: 'subscription',
   directRules: [],
   proxyRules: []
 };
@@ -22,14 +23,18 @@ const snapshotB: ActiveRemoteConfigSnapshot = {
 
 describe('createRemoteSubscriptionCoordinator', () => {
   it('rejects a stale identity result queued after the new identity cleanup', async () => {
-    const settings: { remoteSubscriptionUrl?: string } = {
-      remoteSubscriptionUrl: 'https://identity-a.example/old'
+    const settings: { remoteSubscriptionUrl?: string; ruleProfile?: 'ruleset' | 'subscription' } = {
+      remoteSubscriptionUrl: 'https://identity-a.example/old',
+      ruleProfile: 'ruleset'
     };
     const onChanged = vi.fn();
     const coordinator = createRemoteSubscriptionCoordinator({
       readSettings: async () => ({ ...settings }),
       updateRemoteSubscription: async (value) => {
         settings.remoteSubscriptionUrl = value ?? undefined;
+      },
+      updateRuleProfile: async (value) => {
+        settings.ruleProfile = value;
       },
       isSnapshotCurrent: async (snapshot) => snapshot.binding === snapshotB.binding,
       getActiveSnapshot: async () => snapshotB,
@@ -39,16 +44,20 @@ describe('createRemoteSubscriptionCoordinator', () => {
     await Promise.all([coordinator.apply(undefined), coordinator.apply(identityAConfig, snapshotA)]);
 
     expect(settings.remoteSubscriptionUrl).toBeUndefined();
+    expect(settings.ruleProfile).toBe('ruleset');
     expect(onChanged).toHaveBeenCalledTimes(1);
     expect(onChanged).toHaveBeenCalledWith('');
   });
 
   it('serializes an identity cleanup after an older valid write', async () => {
-    const settings: { remoteSubscriptionUrl?: string } = {};
+    const settings: { remoteSubscriptionUrl?: string; ruleProfile?: 'ruleset' | 'subscription' } = {};
     const coordinator = createRemoteSubscriptionCoordinator({
       readSettings: async () => ({ ...settings }),
       updateRemoteSubscription: async (value) => {
         settings.remoteSubscriptionUrl = value ?? undefined;
+      },
+      updateRuleProfile: async (value) => {
+        settings.ruleProfile = value;
       },
       isSnapshotCurrent: async () => true,
       getActiveSnapshot: async () => snapshotA
@@ -60,7 +69,7 @@ describe('createRemoteSubscriptionCoordinator', () => {
   });
 
   it('repairs the setting when identity changes during the persisted write', async () => {
-    const settings: { remoteSubscriptionUrl?: string } = {};
+    const settings: { remoteSubscriptionUrl?: string; ruleProfile?: 'ruleset' | 'subscription' } = {};
     let current = snapshotA;
     const writes: Array<string | null> = [];
     const coordinator = createRemoteSubscriptionCoordinator({
@@ -70,6 +79,9 @@ describe('createRemoteSubscriptionCoordinator', () => {
         settings.remoteSubscriptionUrl = value ?? undefined;
         if (writes.length === 1) current = snapshotB;
       },
+      updateRuleProfile: async (value) => {
+        settings.ruleProfile = value;
+      },
       isSnapshotCurrent: async (snapshot) => snapshot.binding === current.binding,
       getActiveSnapshot: async () => current
     });
@@ -78,5 +90,27 @@ describe('createRemoteSubscriptionCoordinator', () => {
 
     expect(writes).toEqual(['https://identity-a.example/new', null]);
     expect(settings.remoteSubscriptionUrl).toBeUndefined();
+  });
+
+  it('persists the effective remote rule profile for restart and offline fallback', async () => {
+    const settings: { remoteSubscriptionUrl?: string; ruleProfile?: 'ruleset' | 'subscription' } = {
+      remoteSubscriptionUrl: identityAConfig.subscriptionUrl,
+      ruleProfile: 'ruleset'
+    };
+    const coordinator = createRemoteSubscriptionCoordinator({
+      readSettings: async () => ({ ...settings }),
+      updateRemoteSubscription: async (value) => {
+        settings.remoteSubscriptionUrl = value ?? undefined;
+      },
+      updateRuleProfile: async (value) => {
+        settings.ruleProfile = value;
+      },
+      isSnapshotCurrent: async () => true,
+      getActiveSnapshot: async () => snapshotA
+    });
+
+    await expect(coordinator.apply(identityAConfig, snapshotA)).resolves.toBe(true);
+
+    expect(settings.ruleProfile).toBe('subscription');
   });
 });

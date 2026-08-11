@@ -126,6 +126,21 @@ describe('settings diagnostic export', () => {
     expect(html).not.toContain('class="settings-action-status is-error"');
   });
 
+  it.each([
+    ['global', '跟随全局'],
+    ['user', '单独配置'],
+    ['local', '仅本机']
+  ] as const)('shows the effective config ownership without locking professional edits: %s', (configSource, label) => {
+    const snapshot = createSnapshot(0);
+    snapshot.configSource = configSource;
+    snapshot.remoteSubscriptionUrl = configSource === 'local' ? undefined : snapshot.subscriptionUrl;
+    const html = renderSettings('', snapshot);
+
+    expect(html).toContain(`订阅 · ${label}`);
+    expect(html).toContain(`value="${snapshot.subscriptionUrl}"`);
+    expect(html).not.toMatch(new RegExp(`value="${snapshot.subscriptionUrl}"[^>]*disabled`));
+  });
+
   it.each(['net::ERR_NAME_NOT_RESOLVED', 'fetch failed (ENOTFOUND)'])(
     'shows a concise GitHub connection failure for update transport error: %s',
     (message) => {

@@ -1,4 +1,12 @@
-import type { AppSettingsInput, AppSnapshot, MihomoMode, ProxyNode, StrategyKey } from '../shared/ipc';
+import type {
+  AppSettingsInput,
+  AppSnapshot,
+  MihomoMode,
+  ProxyNode,
+  RemoteControlConfig,
+  RuleProfile,
+  StrategyKey
+} from '../shared/ipc';
 import type { LifecycleController } from './lifecycle';
 import type { MihomoApiClient } from './mihomo/api';
 import { runRuntimeOperationWithSafeRetry } from './runtimeRecoveryPolicy';
@@ -33,12 +41,20 @@ type AppActionDeps = {
     start: (signal?: AbortSignal) => Promise<void>;
     restart: (signal?: AbortSignal) => Promise<void>;
   };
+  remoteConfig?: {
+    read: () => Promise<RemoteControlConfig | undefined>;
+    update: (
+      input: { subscriptionUrl?: string | null; ruleProfile?: RuleProfile },
+      signal?: AbortSignal
+    ) => Promise<RemoteControlConfig | undefined>;
+    apply: (config?: RemoteControlConfig) => Promise<void>;
+  };
   createMihomoApi: CreateMihomoApi;
   createSnapshot: () => Promise<AppSnapshot>;
 };
 
 export async function saveSubscriptionSettings(
-  deps: Pick<AppActionDeps, 'settingsStore' | 'lifecycle' | 'runtime' | 'createSnapshot'>,
+  deps: Pick<AppActionDeps, 'settingsStore' | 'lifecycle' | 'runtime' | 'remoteConfig' | 'createSnapshot'>,
   settings: AppSettingsInput | string,
   options: { signal?: AbortSignal } = {}
 ): Promise<AppSnapshot> {
@@ -49,12 +65,41 @@ export async function saveSubscriptionSettings(
     subscriptionUrl: typeof input.subscriptionUrl === 'string' ? input.subscriptionUrl.trim() : undefined
   };
 
+  await publishManagedSettings(deps.remoteConfig, next, options.signal);
+  options.signal?.throwIfAborted();
   await deps.settingsStore.update(next);
   options.signal?.throwIfAborted();
   if (deps.lifecycle.getStatus() === 'running') {
     await restartWithSafeRetry(deps, options.signal);
   }
   return deps.createSnapshot();
+}
+
+async function publishManagedSettings(
+  remoteConfig: AppActionDeps['remoteConfig'],
+  input: AppSettingsInput,
+  signal?: AbortSignal
+): Promise<void> {
+  if (!remoteConfig) return;
+  const current = await remoteConfig.read();
+  signal?.throwIfAborted();
+  if (!current) return;
+
+  const update: { subscriptionUrl?: string | null; ruleProfile?: RuleProfile } = {};
+  if (typeof input.subscriptionUrl === 'string') {
+    const desiredSubscription = input.subscriptionUrl.trim();
+    if (desiredSubscription !== (current.subscriptionUrl ?? '')) {
+      update.subscriptionUrl = desiredSubscription || null;
+    }
+  }
+  if (input.ruleProfile && input.ruleProfile !== current.ruleProfile) {
+    update.ruleProfile = input.ruleProfile;
+  }
+  if (typeof update.subscriptionUrl === 'undefined' && typeof update.ruleProfile === 'undefined') return;
+
+  const applied = await remoteConfig.update(update, signal);
+  signal?.throwIfAborted();
+  await remoteConfig.apply(applied);
 }
 
 export async function updateSubscriptionNodes(

@@ -8,6 +8,7 @@ export type RegionFallback = 'strict' | 'global';
 export type RemoteControlConfig = {
   version: number;
   enabled: boolean;
+  configSource?: 'global' | 'user';
   subscriptionUrl?: string;
   ruleProfile?: RuleProfile;
   preferredRegion?: PreferredNodeRegion;
@@ -294,6 +295,8 @@ export type AppSnapshot = {
   mode: MihomoMode;
   strategy: StrategyKey;
   ruleProfile: RuleProfile;
+  configSource?: 'local' | 'global' | 'user';
+  configUpdatedAt?: string;
   features: FeatureSettings;
   runtime: RuntimeStats;
   traffic: PersistentTrafficStats;
