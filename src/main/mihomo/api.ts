@@ -57,6 +57,7 @@ export type BestNodeOptions = {
   signal?: AbortSignal;
   policy?: NodeSelectionPolicy;
   verifyNode?: (name: string, signal?: AbortSignal) => Promise<boolean>;
+  verifyFallbackNode?: (name: string, signal?: AbortSignal) => Promise<boolean>;
 };
 
 const selectorName = '节点选择';
@@ -524,6 +525,16 @@ export function createMihomoApiClient(options: {
     }
   }
 
+  async function isVerifiedFallbackCandidate(node: ProxyNode, options: BestNodeOptions): Promise<boolean> {
+    if (!options.verifyFallbackNode) return false;
+    try {
+      return await options.verifyFallbackNode(node.name, options.signal);
+    } catch (error) {
+      if (isAbortError(error, options.signal)) throw error;
+      return false;
+    }
+  }
+
   async function applySelectionSteps(steps: Array<{ group: string; name: string }>): Promise<void> {
     for (const step of steps) {
       await request(`/proxies/${encodeURIComponent(step.group)}`, {
@@ -531,6 +542,39 @@ export function createMihomoApiClient(options: {
         headers: headers({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ name: step.name })
       });
+    }
+  }
+
+  function rememberSelectionChoices(
+    proxies: Record<string, MihomoProxyItem>,
+    steps: Array<{ group: string; name: string }>,
+    remembered: Map<string, string>
+  ): void {
+    for (const step of steps) {
+      const current = proxies[step.group]?.now;
+      if (typeof current === 'string' && current && !remembered.has(step.group)) {
+        remembered.set(step.group, current);
+      }
+    }
+  }
+
+  function rememberWrittenChoices(steps: Array<{ group: string; name: string }>, written: Map<string, string>): void {
+    for (const step of steps) written.set(step.group, step.name);
+  }
+
+  async function restoreSelectionChoices(remembered: Map<string, string>, written: Map<string, string>): Promise<void> {
+    if (!remembered.size) return;
+    for (const [group, name] of remembered) {
+      const operationChoice = written.get(group);
+      if (!operationChoice) continue;
+      const currentChoice = (await readProxies()).proxies?.[group]?.now;
+      if (currentChoice !== operationChoice || currentChoice === name) continue;
+      await request(`/proxies/${encodeURIComponent(group)}`, {
+        method: 'PUT',
+        headers: headers({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name })
+      });
+      await waitForSelectorChoice(group, name);
     }
   }
 
@@ -718,23 +762,57 @@ export function createMihomoApiClient(options: {
       const proxies = data.proxies ?? {};
       const targetGroup = strategyTargets[strategy];
       const selector = findSelector(proxies);
-      for (const candidate of candidates) {
-        assertNotAborted(options.signal);
-        const strategySteps = resolveSelectionStepsForGroup(proxies, targetGroup, candidate.name);
-        if (!strategySteps || !selector?.item.all?.includes(targetGroup)) {
-          await this.selectNode(candidate.name);
-        } else {
-          await applySelectionSteps(strategySteps);
-          await request(`/proxies/${encodeURIComponent(selector.name)}`, {
-            method: 'PUT',
-            headers: headers({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ name: targetGroup })
-          });
-          await waitForSelectedNode(candidate.name);
+      const rememberedChoices = new Map<string, string>();
+      const writtenChoices = new Map<string, string>();
+      try {
+        const selectCandidate = async (candidate: ProxyNode) => {
+          assertNotAborted(options.signal);
+          const strategySteps = resolveSelectionStepsForGroup(proxies, targetGroup, candidate.name);
+          if (!strategySteps || !selector?.item.all?.includes(targetGroup)) {
+            const primarySteps = selector ? resolveSelectionSteps(proxies, selector, candidate.name) : null;
+            if (primarySteps) {
+              const syncedSteps = collectSyncedSelectionSteps(proxies, candidate.name, primarySteps);
+              rememberSelectionChoices(proxies, syncedSteps, rememberedChoices);
+              rememberWrittenChoices(syncedSteps, writtenChoices);
+            }
+            await this.selectNode(candidate.name);
+          } else {
+            rememberSelectionChoices(proxies, strategySteps, rememberedChoices);
+            rememberSelectionChoices(proxies, [{ group: selector.name, name: targetGroup }], rememberedChoices);
+            rememberWrittenChoices(strategySteps, writtenChoices);
+            rememberWrittenChoices([{ group: selector.name, name: targetGroup }], writtenChoices);
+            await applySelectionSteps(strategySteps);
+            await request(`/proxies/${encodeURIComponent(selector.name)}`, {
+              method: 'PUT',
+              headers: headers({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({ name: targetGroup })
+            });
+            await waitForSelectedNode(candidate.name);
+          }
+        };
+        const rejectedCandidates: ProxyNode[] = [];
+        for (const candidate of candidates) {
+          await selectCandidate(candidate);
+          if (await isVerifiedCandidate(candidate, options)) return candidate.name;
+          rejectedCandidates.push(candidate);
         }
-        if (await isVerifiedCandidate(candidate, options)) return candidate.name;
+        for (const candidate of rejectedCandidates) {
+          if (!options.verifyFallbackNode) break;
+          await selectCandidate(candidate);
+          if (await isVerifiedFallbackCandidate(candidate, options)) return candidate.name;
+        }
+        await restoreSelectionChoices(rememberedChoices, writtenChoices);
+        return undefined;
+      } catch (error) {
+        try {
+          await restoreSelectionChoices(rememberedChoices, writtenChoices);
+        } catch (restoreError) {
+          throw new AggregateError([error, restoreError], 'mihomo node selection failed and could not be restored', {
+            cause: restoreError
+          });
+        }
+        throw error;
       }
-      return undefined;
     },
     async selectStrategy(strategy: StrategyKey) {
       if (strategy === 'manual') return;

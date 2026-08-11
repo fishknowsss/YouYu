@@ -101,6 +101,7 @@ export const ADMIN_SCRIPT = String.raw`
   const globalSubscriptionState = document.getElementById('globalSubscriptionState');
   const userSubscriptionState = document.getElementById('userSubscriptionState');
   const userModeEl = document.getElementById('userMode');
+  const userCanEditManagedConfigEl = document.getElementById('userCanEditManagedConfig');
   const userProfileNameEl = document.getElementById('userProfileName');
   const userProfileNameError = document.getElementById('userProfileNameError');
   const userNoticeTone = document.getElementById('userNoticeTone');
@@ -215,6 +216,9 @@ export const ADMIN_SCRIPT = String.raw`
   userNoticeTone.addEventListener('change', () => { state.noticeRequestId = ''; });
   [userNoticeMessage, userNoticeDuration].forEach((element) => element.addEventListener('input', () => { state.noticeRequestId = ''; }));
   userModeEl.addEventListener('change', updateUserModeState);
+  userCanEditManagedConfigEl.addEventListener('change', () =>
+    runAction(null, '保存中', saveUserManagedConfigPermission)
+  );
   document.getElementById('userPreferredRegion').addEventListener('change', updateUserModeState);
   document.getElementById('globalPreferredRegion').addEventListener('change', updateGlobalRegionFallbackState);
   mergeTargetEl.addEventListener('change', resetMergePreview);
@@ -1207,6 +1211,9 @@ export const ADMIN_SCRIPT = String.raw`
   function renderUserConfig(name, data) {
     const override = data.override || null;
     const effective = data.effective || {};
+    const canEditManagedConfig = data.canEditManagedConfig === true;
+    userCanEditManagedConfigEl.value = canEditManagedConfig ? 'true' : 'false';
+    userCanEditManagedConfigEl.dataset.savedValue = userCanEditManagedConfigEl.value;
     setUserConfigFields(effective);
     setUserMode(getUserModeFromConfig(override));
     setUserSubscriptionState(effective, override);
@@ -1417,6 +1424,35 @@ export const ADMIN_SCRIPT = String.raw`
     renderAll();
     setStatus(userName + ' 已保存');
     showToast(userName + ' 配置已保存');
+  }
+
+  async function saveUserManagedConfigPermission() {
+    if (!state.activeUserId) return;
+    const userId = state.activeUserId;
+    const userName = state.activeUserName;
+    const sequence = state.userLoadSequence;
+    const previousValue = userCanEditManagedConfigEl.dataset.savedValue === 'true' ? 'true' : 'false';
+    const canEditManagedConfig = userCanEditManagedConfigEl.value === 'true';
+    try {
+      const data = await api(
+        '/api/admin/users/' + encodeURIComponent(userId) + '/config-permission',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ canEditManagedConfig: canEditManagedConfig })
+        }
+      );
+      if (!isCurrentUserContext(userId, sequence)) return;
+      const accepted = data.canEditManagedConfig === true;
+      userCanEditManagedConfigEl.value = accepted ? 'true' : 'false';
+      userCanEditManagedConfigEl.dataset.savedValue = userCanEditManagedConfigEl.value;
+      const message = userName + (accepted ? ' 已允许自行配置' : ' 已禁止自行配置');
+      setStatus(message);
+      showToast(message);
+    } catch (error) {
+      if (isCurrentUserContext(userId, sequence)) userCanEditManagedConfigEl.value = previousValue;
+      throw error;
+    }
   }
 
   async function resetUserConfig() {

@@ -21,6 +21,7 @@ const requiredPaths = [
   'build/tray-icon.png',
   'build/installerSidebar.bmp',
   'build/installer.nsh',
+  'build/update-elevated-installer.ps1',
   'resources/generated/default-subscription.txt',
   'resources/generated/windows-fullscreen-probe.exe',
   'resources/mihomo/win-x64/mihomo.exe'
@@ -54,6 +55,7 @@ if (await exists(unpackedDir)) {
     'release/win-unpacked/resources/app.asar',
     'release/win-unpacked/resources/default-subscription.txt',
     'release/win-unpacked/resources/windows-fullscreen-probe.exe',
+    'release/win-unpacked/resources/update-elevated-installer.ps1',
     'release/win-unpacked/resources/assets/icon.png',
     'release/win-unpacked/resources/assets/tray-icon.png',
     'release/win-unpacked/resources/mihomo/win-x64/mihomo.exe'

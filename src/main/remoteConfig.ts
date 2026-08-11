@@ -80,6 +80,8 @@ type RemoteConfigSyncResult = {
 export type ActiveRemoteConfigSnapshot = {
   binding?: string;
   revision: string;
+  ready: boolean;
+  canEditManagedConfig: boolean;
   config?: RemoteControlConfig;
 };
 
@@ -112,6 +114,8 @@ export class RemoteConfigClient {
     return {
       binding: identityBinding(identity),
       revision: JSON.stringify(config ?? null),
+      ready: Boolean(config),
+      canEditManagedConfig: config?.canEditManagedConfig === true,
       config: config?.enabled ? config : undefined
     };
   }
@@ -237,6 +241,9 @@ export class RemoteConfigClient {
     const cached = await this.readCached();
     const identity = await this.getCurrentIdentity();
     if (!identity) throw new Error('remote config identity missing');
+    const current = configForIdentity(cached, identity);
+    if (!current) throw new Error('remote config sync required');
+    if (current.canEditManagedConfig !== true) throw new Error('managed config editing forbidden');
     if (!endpoint) throw new Error('remote config endpoint not configured');
     if (typeof input.subscriptionUrl === 'undefined' && typeof input.ruleProfile === 'undefined') {
       throw new Error('remote config update missing');
@@ -411,13 +418,17 @@ function normalizeRemoteConfig(value: unknown): RemoteControlConfig | undefined 
     ? (value.regionFallback as RegionFallback)
     : undefined;
   const updatedAt = normalizeText(value.updatedAt, 40);
-  const configSource =
-    value.configSource === 'global' || value.configSource === 'user' ? value.configSource : undefined;
+  // Every payload normalized here came from the signed cloud endpoint or its
+  // identity-bound cache. Older payloads omitted ownership; treating those as
+  // global avoids presenting an active cloud policy as a local configuration.
+  const configSource = value.configSource === 'user' ? 'user' : 'global';
+  const canEditManagedConfig = typeof value.canEditManagedConfig === 'boolean' ? value.canEditManagedConfig : undefined;
 
   return {
     version,
     enabled: value.enabled,
-    ...(configSource ? { configSource } : {}),
+    ...(typeof canEditManagedConfig === 'boolean' ? { canEditManagedConfig } : {}),
+    configSource,
     ...(subscriptionUrl ? { subscriptionUrl } : {}),
     ...(ruleProfile ? { ruleProfile } : {}),
     ...(preferredRegion ? { preferredRegion } : {}),
@@ -519,6 +530,9 @@ function isRemoteConfigPayload(value: unknown): value is RemoteConfigPayload {
   }
   if (typeof value.updatedAt !== 'undefined' && typeof value.updatedAt !== 'string') return false;
   if (typeof value.configSource !== 'undefined' && value.configSource !== 'global' && value.configSource !== 'user') {
+    return false;
+  }
+  if (typeof value.canEditManagedConfig !== 'undefined' && typeof value.canEditManagedConfig !== 'boolean') {
     return false;
   }
   return true;

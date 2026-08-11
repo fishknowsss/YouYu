@@ -6,6 +6,37 @@ import { Settings } from '../../src/renderer/pages/Settings';
 import { readRendererStyles } from './helpers/rendererStyles';
 
 describe('settings diagnostic export', () => {
+  it('renders cloud-managed fields as read-only when the account lacks permission', () => {
+    const snapshot = createSnapshot(0);
+    snapshot.trafficIdentity = {
+      userId: 'user-1',
+      deviceId: 'device-1',
+      name: '测试用户',
+      registeredAt: '2026-08-11T00:00:00.000Z'
+    };
+    snapshot.configSource = 'global';
+    snapshot.remoteConfigReady = true;
+    snapshot.canEditManagedConfig = false;
+
+    const html = renderSettings('', snapshot);
+
+    expect(html).toContain('订阅 · 跟随全局 · 只读');
+    expect(html).toContain('规则来源 · 只读');
+    expect(html).toMatch(/<input[^>]*disabled=""[^>]*placeholder="https:\/\/\.\.\."/);
+  });
+
+  it('asks a registered account to sync before editing when no current cloud cache exists', () => {
+    const snapshot = createSnapshot(0);
+    snapshot.trafficIdentity = {
+      userId: 'user-1',
+      deviceId: 'device-1',
+      name: '测试用户',
+      registeredAt: '2026-08-11T00:00:00.000Z'
+    };
+    snapshot.remoteConfigReady = false;
+
+    expect(renderSettings('', snapshot)).toContain('订阅 · 先同步');
+  });
   it('places the exportable log count to the left of a concise export button', () => {
     const html = renderToStaticMarkup(
       <Settings

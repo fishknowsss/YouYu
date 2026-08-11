@@ -11,6 +11,6 @@ describe('legacy NSIS update elevation metadata', () => {
     expect(validator).toContain('metadataFile.isAdminRightsRequired !== true');
     expect(validator).toContain('legacy NSIS update route');
     expect(appSource).toContain('autoUpdater.autoInstallOnAppQuit = false');
-    expect(appSource).toContain('launchDownloadedUpdateInstaller({ installerPath, handoff })');
+    expect(appSource).toContain('await launchDownloadedUpdateInstaller({');
   });
 });

@@ -22,6 +22,7 @@ type HomeProps = {
   onStrategyChange: (strategy: StrategyKey) => void;
   onOpenNodes: () => void;
   onUsageModeChange: (mode: UsageMode) => void;
+  onCheckUpdate?: () => void;
   onInstallUpdate: () => void;
 };
 
@@ -96,6 +97,7 @@ function EasyHome(props: HomeProps) {
             snapshot={props.snapshot}
             busy={props.busy}
             busyLabel={props.busyLabel}
+            onCheckUpdate={props.onCheckUpdate}
             onInstallUpdate={props.onInstallUpdate}
           />
         </div>
@@ -108,11 +110,13 @@ function EasyUpdateNotice({
   snapshot,
   busy,
   busyLabel,
+  onCheckUpdate,
   onInstallUpdate
 }: {
   snapshot: AppSnapshot;
   busy: boolean;
   busyLabel: string;
+  onCheckUpdate?: () => void;
   onInstallUpdate: () => void;
 }) {
   const update = snapshot.update;
@@ -121,7 +125,8 @@ function EasyUpdateNotice({
     update.status === 'available' ||
     update.status === 'downloading' ||
     update.status === 'downloaded' ||
-    update.status === 'installing';
+    update.status === 'installing' ||
+    update.status === 'failed';
   if (!visible) return null;
 
   const installing = update.status === 'installing';
@@ -129,6 +134,7 @@ function EasyUpdateNotice({
   const downloaded = update.status === 'downloaded' && !installing && !confirming;
   const downloading = update.status === 'downloading';
   const checking = update.status === 'checking';
+  const failed = update.status === 'failed';
   const active = checking || confirming || downloading || installing;
   const version = update.downloadedVersion || update.availableVersion;
   const verifying = update.downloadPhase === 'verifying';
@@ -155,9 +161,11 @@ function EasyUpdateNotice({
                   : downloadingFullPackage
                     ? '下载完整包'
                     : '下载更新'
-            : version
-              ? `发现 ${version}`
-              : '发现更新';
+            : failed
+              ? '安装未完成，请重新检查'
+              : version
+                ? `发现 ${version}`
+                : '发现更新';
   const progress = getDisplayUpdateProgress(update);
   const noticeClass = installing
     ? 'is-installing'
@@ -165,9 +173,11 @@ function EasyUpdateNotice({
       ? 'is-checking'
       : downloaded
         ? 'is-ready'
-        : downloading
-          ? 'is-downloading'
-          : 'is-available';
+        : failed
+          ? 'is-failed'
+          : downloading
+            ? 'is-downloading'
+            : 'is-available';
   const stateLabel = installing
     ? '即将重启'
     : confirming
@@ -204,7 +214,11 @@ function EasyUpdateNotice({
       )}
       <div className="easy-update-action">
         {active && <span className="update-activity-spinner" aria-hidden="true" />}
-        {downloaded ? (
+        {failed ? (
+          <button className="wide-button" disabled={busy || !onCheckUpdate} onClick={onCheckUpdate}>
+            重新检查
+          </button>
+        ) : downloaded ? (
           <button className="wide-button" disabled={busy} onClick={onInstallUpdate}>
             安装
           </button>

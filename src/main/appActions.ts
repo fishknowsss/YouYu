@@ -5,6 +5,7 @@ import type {
   ProxyNode,
   RemoteControlConfig,
   RuleProfile,
+  SettingsSaveIntent,
   StrategyKey
 } from '../shared/ipc';
 import type { LifecycleController } from './lifecycle';
@@ -42,7 +43,12 @@ type AppActionDeps = {
     restart: (signal?: AbortSignal) => Promise<void>;
   };
   remoteConfig?: {
-    read: () => Promise<RemoteControlConfig | undefined>;
+    readSnapshot: () => Promise<{
+      binding?: string;
+      ready: boolean;
+      canEditManagedConfig: boolean;
+      config?: RemoteControlConfig;
+    }>;
     update: (
       input: { subscriptionUrl?: string | null; ruleProfile?: RuleProfile },
       signal?: AbortSignal
@@ -56,7 +62,7 @@ type AppActionDeps = {
 export async function saveSubscriptionSettings(
   deps: Pick<AppActionDeps, 'settingsStore' | 'lifecycle' | 'runtime' | 'remoteConfig' | 'createSnapshot'>,
   settings: AppSettingsInput | string,
-  options: { signal?: AbortSignal } = {}
+  options: { signal?: AbortSignal; intent?: SettingsSaveIntent } = {}
 ): Promise<AppSnapshot> {
   options.signal?.throwIfAborted();
   const input = typeof settings === 'string' ? { subscriptionUrl: settings } : settings;
@@ -65,9 +71,15 @@ export async function saveSubscriptionSettings(
     subscriptionUrl: typeof input.subscriptionUrl === 'string' ? input.subscriptionUrl.trim() : undefined
   };
 
-  await publishManagedSettings(deps.remoteConfig, next, options.signal);
+  const managedByCloud = await publishManagedSettings(
+    deps.remoteConfig,
+    next,
+    options.intent ?? 'advanced-save',
+    options.signal
+  );
   options.signal?.throwIfAborted();
-  await deps.settingsStore.update(next);
+  const localSettings = managedByCloud ? omitManagedSettings(next) : next;
+  await deps.settingsStore.update(localSettings);
   options.signal?.throwIfAborted();
   if (deps.lifecycle.getStatus() === 'running') {
     await restartWithSafeRetry(deps, options.signal);
@@ -78,28 +90,40 @@ export async function saveSubscriptionSettings(
 async function publishManagedSettings(
   remoteConfig: AppActionDeps['remoteConfig'],
   input: AppSettingsInput,
+  intent: SettingsSaveIntent,
   signal?: AbortSignal
-): Promise<void> {
-  if (!remoteConfig) return;
-  const current = await remoteConfig.read();
+): Promise<boolean> {
+  if (!remoteConfig || intent !== 'advanced-save') return false;
+  const hasManagedInput = typeof input.subscriptionUrl === 'string' || typeof input.ruleProfile !== 'undefined';
+  if (!hasManagedInput) return false;
+  const snapshot = await remoteConfig.readSnapshot();
   signal?.throwIfAborted();
-  if (!current) return;
+  if (!snapshot.binding) return false;
+  if (!snapshot.ready) throw new Error('请先同步云端配置');
+  if (!snapshot.canEditManagedConfig) throw new Error('此账号未获配置修改权限');
+  const current = snapshot.config;
 
   const update: { subscriptionUrl?: string | null; ruleProfile?: RuleProfile } = {};
   if (typeof input.subscriptionUrl === 'string') {
     const desiredSubscription = input.subscriptionUrl.trim();
-    if (desiredSubscription !== (current.subscriptionUrl ?? '')) {
+    if (desiredSubscription !== (current?.subscriptionUrl ?? '')) {
       update.subscriptionUrl = desiredSubscription || null;
     }
   }
-  if (input.ruleProfile && input.ruleProfile !== current.ruleProfile) {
+  if (input.ruleProfile && input.ruleProfile !== current?.ruleProfile) {
     update.ruleProfile = input.ruleProfile;
   }
-  if (typeof update.subscriptionUrl === 'undefined' && typeof update.ruleProfile === 'undefined') return;
+  if (typeof update.subscriptionUrl === 'undefined' && typeof update.ruleProfile === 'undefined') return true;
 
   const applied = await remoteConfig.update(update, signal);
   signal?.throwIfAborted();
   await remoteConfig.apply(applied);
+  return true;
+}
+
+function omitManagedSettings(input: AppSettingsInput): AppSettingsInput {
+  const { subscriptionUrl: _subscriptionUrl, ruleProfile: _ruleProfile, ...localSettings } = input;
+  return localSettings;
 }
 
 export async function updateSubscriptionNodes(

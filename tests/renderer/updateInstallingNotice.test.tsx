@@ -242,6 +242,40 @@ describe('silent update installation notice', () => {
     expect(findButton(container, '安装')?.disabled).toBe(false);
   });
 
+  it('shows a concise actionable recovery after the app reopens from an incomplete install', async () => {
+    const snapshot = await createDownloadedSnapshot();
+    snapshot.update = {
+      ...snapshot.update,
+      status: 'failed',
+      downloadedVersion: undefined,
+      message: '更新安装未完成，已重新打开当前版本，请重新检查并安装'
+    };
+    let checks = 0;
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () =>
+      root?.render(
+        <Home
+          {...createHomeProps(snapshot)}
+          busy={false}
+          busyLabel=""
+          onCheckUpdate={() => {
+            checks += 1;
+          }}
+        />
+      )
+    );
+
+    expect(container.textContent).toContain('安装未完成，请重新检查');
+    expect(container.textContent).not.toContain('已重新打开当前版本');
+    const checkButton = findButton(container, '重新检查');
+    expect(checkButton?.disabled).toBe(false);
+    await act(async () => checkButton?.click());
+    expect(checks).toBe(1);
+  });
+
   it('shows the automatic download route switch on both update surfaces', async () => {
     const snapshot = await createDownloadedSnapshot();
     snapshot.update = {
@@ -391,6 +425,7 @@ function createHomeProps(snapshot: AppSnapshot) {
     onStrategyChange: () => undefined,
     onOpenNodes: () => undefined,
     onUsageModeChange: () => undefined,
+    onCheckUpdate: () => undefined,
     onInstallUpdate: () => undefined
   };
 }

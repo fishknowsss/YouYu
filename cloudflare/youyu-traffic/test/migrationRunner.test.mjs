@@ -52,6 +52,7 @@ test('migration runner repairs legacy subscription columns once and preserves th
     'user_remote_config.subscription_url'
   ]);
   assert.deepEqual(plan.columnsToAdd, [
+    'users.can_edit_managed_config',
     'users.merged_into_user_id',
     'devices.device_key',
     'remote_config.subscription_url',
@@ -66,11 +67,11 @@ test('migration runner repairs legacy subscription columns once and preserves th
   database.prepare('UPDATE remote_config SET subscription_url = ? WHERE id = 1').run('https://example.com/global');
   database.prepare('UPDATE admin_settings SET traffic_limit_bytes = ? WHERE id = 1').run(987654321);
   database
-    .prepare('UPDATE user_remote_config SET subscription_url = ? WHERE user_id = ?')
-    .run('https://example.com/alice', 'user-1');
+    .prepare('INSERT INTO user_remote_config (user_id, subscription_url, updated_at) VALUES (?, ?, ?)')
+    .run('user-1', 'https://example.com/alice', '2026-07-13T01:00:00.000Z');
   await applyWorkerMigrations(runner);
 
-  assert.equal(runner.alterStatements.length, 8);
+  assert.equal(runner.alterStatements.length, 9);
   assert.equal(
     database.prepare('SELECT subscription_url FROM remote_config WHERE id = 1').get().subscription_url,
     'https://example.com/global'

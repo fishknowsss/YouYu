@@ -35,6 +35,8 @@ extraResources:
     to: assets/icon.png
   - from: build/tray-icon.png
     to: assets/tray-icon.png
+  - from: build/update-elevated-installer.ps1
+    to: update-elevated-installer.ps1
 win:
   icon: build/icon.ico
   requestedExecutionLevel: asInvoker

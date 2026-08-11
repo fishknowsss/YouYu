@@ -13,6 +13,7 @@ test('legacy database can apply every migration in order', () => {
     CREATE TABLE devices (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_seed TEXT NOT NULL UNIQUE, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
     CREATE TABLE traffic_daily (user_id TEXT NOT NULL, device_id TEXT NOT NULL, date TEXT NOT NULL, upload_bytes INTEGER NOT NULL, download_bytes INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, device_id, date));
     ALTER TABLE users ADD COLUMN merged_into_user_id TEXT REFERENCES users(id);
+    ALTER TABLE users ADD COLUMN can_edit_managed_config INTEGER NOT NULL DEFAULT 0 CHECK (can_edit_managed_config IN (0, 1));
     ALTER TABLE devices ADD COLUMN device_key TEXT;
   `);
 
@@ -26,7 +27,8 @@ test('legacy database can apply every migration in order', () => {
     '2026-08-01-persist-traffic-report-dedup.sql',
     '2026-08-02-add-user-profiles-and-notices.sql',
     '2026-08-02-add-user-notice-audit.sql',
-    '2026-08-10-add-node-region-policy.sql'
+    '2026-08-10-add-node-region-policy.sql',
+    '2026-08-11-add-managed-config-permission.sql'
   ]) {
     database.exec(readFileSync(new URL(`migrations/${name}`, baseUrl), 'utf8'));
   }
@@ -59,6 +61,10 @@ test('legacy database can apply every migration in order', () => {
   assert.ok(remoteColumns.includes('preferred_region'));
   assert.ok(remoteColumns.includes('region_fallback'));
   assert.ok(remoteColumns.includes('anomaly_threshold_bytes'));
+  assert.equal(
+    database.prepare('SELECT can_edit_managed_config FROM users LIMIT 1').get()?.can_edit_managed_config ?? 0,
+    0
+  );
   assert.deepEqual(
     { ...database.prepare('SELECT preferred_region, region_fallback FROM remote_config WHERE id = 1').get() },
     { preferred_region: 'jp', region_fallback: 'global' }
@@ -107,6 +113,42 @@ test('profile migration points a merged source name directly at its canonical ta
       .prepare('SELECT COUNT(*) AS count FROM user_name_aliases WHERE normalized_name = ? AND user_id <> ?')
       .get('source', 'target-user').count,
     0
+  );
+  database.close();
+});
+
+test('managed config permission survives repeated migration and empty legacy overrides are removed', () => {
+  const database = new DatabaseSync(':memory:');
+  database.exec(currentSchema);
+  database.exec(`
+    INSERT INTO users (id, name, normalized_name, status, created_at)
+    VALUES
+      ('user-1', 'Alice', 'alice', 'active', '2026-08-11T00:00:00.000Z'),
+      ('user-2', 'Bob', 'bob', 'active', '2026-08-11T00:00:00.000Z');
+    INSERT INTO user_remote_config (user_id, updated_at)
+    VALUES ('user-1', '2026-08-11T00:00:00.000Z');
+    INSERT INTO user_remote_config (user_id, rule_profile, updated_at)
+    VALUES ('user-2', 'subscription', '2026-08-11T00:00:00.000Z');
+  `);
+  assert.equal(
+    database.prepare('SELECT can_edit_managed_config FROM users WHERE id = ?').get('user-1').can_edit_managed_config,
+    0
+  );
+  database.prepare('UPDATE users SET can_edit_managed_config = 1 WHERE id = ?').run('user-1');
+  const migration = readFileSync(new URL('migrations/2026-08-11-add-managed-config-permission.sql', baseUrl), 'utf8');
+  database.exec(migration);
+  database.exec(migration);
+  assert.equal(
+    database.prepare('SELECT can_edit_managed_config FROM users WHERE id = ?').get('user-1').can_edit_managed_config,
+    1
+  );
+  assert.equal(
+    database.prepare('SELECT COUNT(*) AS count FROM user_remote_config WHERE user_id = ?').get('user-1').count,
+    0
+  );
+  assert.equal(
+    database.prepare('SELECT rule_profile FROM user_remote_config WHERE user_id = ?').get('user-2').rule_profile,
+    'subscription'
   );
   database.close();
 });

@@ -26,7 +26,7 @@ describe('SettingsStore', () => {
     const second = await store.read();
 
     expect(first.subscriptionUrl).toBe('');
-    expect(first.settingsVersion).toBe(5);
+    expect(first.settingsVersion).toBe(6);
     expect(first.controllerSecret).toHaveLength(32);
     expect(first.ruleProfile).toBe('ruleset');
     expect(first.dnsEnhanced).toBe(true);
@@ -154,7 +154,87 @@ describe('SettingsStore', () => {
     expect(migrated.strictRouteEnabled).toBe(true);
     expect(migrated.ruleProfile).toBe('subscription');
     expect(migrated.subscriptionRefreshIntervalHours).toBe(12);
-    expect(migrated.settingsVersion).toBe(5);
+    expect(migrated.settingsVersion).toBe(6);
+  });
+
+  it('removes a potentially cloud-owned rule from v5 settings while preserving both subscription URLs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-settings-'));
+    tempDirs.push(dir);
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify({
+        settingsVersion: 5,
+        subscriptionUrl: 'https://local.example.com/sub',
+        remoteSubscriptionUrl: 'https://identity-a.example.com/sub',
+        controllerSecret: '1234567890abcdef1234567890abcdef',
+        mode: 'rule',
+        strategy: 'auto',
+        ruleProfile: 'subscription',
+        selectedNode: '',
+        systemProxyEnabled: true,
+        dnsEnhanced: true,
+        snifferEnabled: true,
+        tunEnabled: false,
+        strictRouteEnabled: true,
+        allowLan: false,
+        subscriptionRefreshIntervalHours: 12
+      })
+    );
+    const store = new SettingsStore(dir);
+
+    const migrated = await store.read();
+    const persisted = JSON.parse(await readFile(join(dir, 'settings.json'), 'utf8')) as {
+      settingsVersion?: number;
+      subscriptionUrl?: string;
+      remoteSubscriptionUrl?: string;
+      ruleProfile?: string;
+    };
+
+    expect(migrated).toMatchObject({
+      settingsVersion: 6,
+      subscriptionUrl: 'https://identity-a.example.com/sub',
+      localSubscriptionUrl: 'https://local.example.com/sub',
+      remoteSubscriptionUrl: 'https://identity-a.example.com/sub',
+      ruleProfile: 'ruleset'
+    });
+    expect(persisted).toMatchObject({
+      settingsVersion: 6,
+      subscriptionUrl: 'https://local.example.com/sub',
+      remoteSubscriptionUrl: 'https://identity-a.example.com/sub',
+      ruleProfile: 'ruleset'
+    });
+  });
+
+  it('keeps an explicit local subscription rule in the current schema even when a cloud URL is active', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-settings-'));
+    tempDirs.push(dir);
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify({
+        settingsVersion: 6,
+        subscriptionUrl: 'https://local.example.com/sub',
+        remoteSubscriptionUrl: 'https://identity-a.example.com/sub',
+        controllerSecret: '1234567890abcdef1234567890abcdef',
+        mode: 'rule',
+        strategy: 'auto',
+        ruleProfile: 'subscription',
+        selectedNode: '',
+        systemProxyEnabled: true,
+        dnsEnhanced: true,
+        snifferEnabled: true,
+        tunEnabled: false,
+        strictRouteEnabled: true,
+        allowLan: false,
+        subscriptionRefreshIntervalHours: 12
+      })
+    );
+    const store = new SettingsStore(dir);
+
+    await expect(store.read()).resolves.toMatchObject({
+      settingsVersion: 6,
+      ruleProfile: 'subscription',
+      remoteSubscriptionUrl: 'https://identity-a.example.com/sub'
+    });
   });
 
   it('persists allowed subscription refresh intervals', async () => {
@@ -219,7 +299,7 @@ describe('SettingsStore', () => {
 
     expect(current.ruleProfile).toBe('ruleset');
     await expect(readFile(join(dir, 'settings.json'), 'utf8').then(JSON.parse)).resolves.toMatchObject({
-      settingsVersion: 5,
+      settingsVersion: 6,
       ruleProfile: 'ruleset'
     });
   });

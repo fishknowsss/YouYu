@@ -21,6 +21,7 @@ describe('IPC argument schemas', () => {
           remoteSubscriptionUrl: null,
           petWindow: { x: 10.4, y: -20.6 }
         },
+        'advanced-save',
         { requestId: 'request-456' }
       ])
     ).toEqual([
@@ -32,6 +33,7 @@ describe('IPC argument schemas', () => {
         remoteSubscriptionUrl: null,
         petWindow: { x: 10, y: -21 }
       },
+      'advanced-save',
       { requestId: 'request-456' }
     ]);
   });
@@ -45,6 +47,7 @@ describe('IPC argument schemas', () => {
     expect(() => parseIpcArguments(ipcChannels.setPetMousePassthrough, [1])).toThrow(/passthrough/);
     expect(() => parseIpcArguments(ipcChannels.start, [{ requestId: 'short' }])).toThrow(/requestId/);
     expect(() => parseIpcArguments(ipcChannels.saveSettings, [new Date()])).toThrow(/settings/);
+    expect(() => parseIpcArguments(ipcChannels.saveSettings, [{}, 'background-sync'])).toThrow(/intent/);
     expect(() =>
       parseIpcArguments(ipcChannels.registerTrafficIdentity, [{ name: 'Alice', passphrase: 'secret', elevated: true }])
     ).toThrow(/registration/);
@@ -56,12 +59,12 @@ describe('IPC argument schemas', () => {
     expect(() => parseIpcArguments(ipcChannels.testNode, ['A'.repeat(257)])).toThrow(/name/);
     expect(() => parseIpcArguments(ipcChannels.selectStrategy, ['fastest'])).toThrow(/strategy/);
     expect(() => parseIpcArguments(ipcChannels.testConnectivity, ['unknown'])).toThrow(/key/);
-    expect(() => parseIpcArguments(ipcChannels.saveSettings, [{ subscriptionRefreshIntervalHours: 3 }])).toThrow(
-      /subscriptionRefreshIntervalHours/
-    );
-    expect(() => parseIpcArguments(ipcChannels.saveSettings, [{ petWindow: { x: Infinity, y: 0 } }])).toThrow(
-      /petWindow.x/
-    );
+    expect(() =>
+      parseIpcArguments(ipcChannels.saveSettings, [{ subscriptionRefreshIntervalHours: 3 }, 'advanced-save'])
+    ).toThrow(/subscriptionRefreshIntervalHours/);
+    expect(() =>
+      parseIpcArguments(ipcChannels.saveSettings, [{ petWindow: { x: Infinity, y: 0 } }, 'advanced-save'])
+    ).toThrow(/petWindow.x/);
   });
 
   it('rejects unknown channels so newly added routes fail closed until a schema exists', () => {

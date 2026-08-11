@@ -19,7 +19,7 @@ describe('createDevYouYuApi', () => {
     });
 
     await api.registerTrafficIdentity({ name: '测试', passphrase: 'pass' });
-    await api.saveSettings({ subscriptionUrl: 'https://example.com/sub' });
+    await api.saveSettings({ subscriptionUrl: 'https://example.com/sub' }, 'advanced-save');
     const running = await api.start();
 
     expect(running.status).toBe('running');
@@ -40,7 +40,7 @@ describe('createDevYouYuApi', () => {
     const api = createDevYouYuApi();
 
     await api.registerTrafficIdentity({ name: '测试', passphrase: 'pass' });
-    await api.saveSettings({ subscriptionUrl: ' https://example.com/sub ' });
+    await api.saveSettings({ subscriptionUrl: ' https://example.com/sub ' }, 'advanced-save');
     const updated = await api.updateSubscription();
 
     expect(updated.status).toBe('running');
@@ -60,7 +60,7 @@ describe('createDevYouYuApi', () => {
   it('requires registration before starting or updating nodes', async () => {
     const api = createDevYouYuApi();
 
-    await api.saveSettings({ subscriptionUrl: 'https://example.com/sub' });
+    await api.saveSettings({ subscriptionUrl: 'https://example.com/sub' }, 'advanced-save');
 
     await expect(api.start()).rejects.toThrow('traffic identity required');
     await expect(api.updateSubscription()).rejects.toThrow('traffic identity required');

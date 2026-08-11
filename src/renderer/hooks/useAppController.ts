@@ -80,7 +80,6 @@ const emptySnapshot: AppSnapshot = {
 const easyStartSettings: AppSettingsInput = {
   mode: 'rule',
   strategy: 'auto',
-  ruleProfile: 'ruleset',
   systemProxyEnabled: true,
   dnsEnhanced: true,
   snifferEnabled: true,
@@ -338,6 +337,7 @@ export function useAppController() {
               ...easyStartSettings,
               ...(currentSnapshot.remoteSubscriptionUrl ? {} : { subscriptionUrl: nextUrl })
             },
+            'easy-start',
             saveRequest
           ),
           actionTimeoutMs,
@@ -587,7 +587,7 @@ export function useAppController() {
   );
   const saveSettings = useCallback(
     (settings: AppSettingsInput) =>
-      void runAction((api, request) => api.saveSettings(settings, request), '已保存', {
+      void runAction((api, request) => api.saveSettings(settings, 'advanced-save', request), '已保存', {
         workingMessage: '保存中',
         timeoutLabel: '保存',
         messageSink: setSettingsMessage,

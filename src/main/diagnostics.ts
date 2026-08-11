@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { DiagnosticIssueKind } from '../shared/ipc';
 
@@ -37,11 +38,15 @@ export const diagnosticLogMessageLimit = 4096;
 export const diagnosticLogCoalesceWindowMs = 2 * 60 * 1000;
 
 type DiagnosticLogEntry = {
-  message: string;
+  summaryMessage: string;
+  exportMessage: string;
+  coalesceKey: string;
   firstAt: Date;
   lastAt: Date;
   occurrences: number;
 };
+
+type NormalizedDiagnosticLog = Pick<DiagnosticLogEntry, 'summaryMessage' | 'exportMessage' | 'coalesceKey'>;
 
 type DiagnosticLogBufferOptions = {
   capacity?: number;
@@ -71,16 +76,16 @@ export class DiagnosticLogBuffer {
   }
 
   append(input: string, at = new Date()): void {
-    const normalized = normalizeDiagnosticLog(input);
+    const normalized = normalizeDiagnosticLog(input, this.maxMessageLength);
     if (!normalized) return;
-    const message = toBoundedSafeDiagnosticMessage(normalized, this.maxMessageLength);
-    if (!message) return;
 
     for (let index = this.entries.length - 1; index >= 0; index -= 1) {
       const candidate = this.entries[index];
-      if (candidate.message !== message) continue;
+      if (candidate.coalesceKey !== normalized.coalesceKey) continue;
       const elapsed = at.getTime() - candidate.lastAt.getTime();
       if (elapsed >= 0 && elapsed <= this.coalesceWindowMs) {
+        candidate.summaryMessage = normalized.summaryMessage;
+        candidate.exportMessage = normalized.exportMessage;
         candidate.lastAt = new Date(at.getTime());
         candidate.occurrences += 1;
         if (index !== this.entries.length - 1) {
@@ -92,7 +97,12 @@ export class DiagnosticLogBuffer {
       break;
     }
 
-    this.entries.push({ message, firstAt: new Date(at.getTime()), lastAt: new Date(at.getTime()), occurrences: 1 });
+    this.entries.push({
+      ...normalized,
+      firstAt: new Date(at.getTime()),
+      lastAt: new Date(at.getTime()),
+      occurrences: 1
+    });
     if (this.entries.length > this.capacity) {
       this.entries.splice(0, this.entries.length - this.capacity);
       this.droppedEntries += 1;
@@ -100,9 +110,17 @@ export class DiagnosticLogBuffer {
   }
 
   getLogs(limit = this.capacity): string[] {
+    return this.getFormattedLogs('summaryMessage', limit);
+  }
+
+  getExportLogs(limit = this.capacity): string[] {
+    return this.getFormattedLogs('exportMessage', limit);
+  }
+
+  private getFormattedLogs(messageKey: 'summaryMessage' | 'exportMessage', limit: number): string[] {
     const count = Math.max(0, Math.floor(limit));
     if (count === 0) return [];
-    return this.entries.slice(-count).map(formatDiagnosticLogEntry);
+    return this.entries.slice(-count).map((entry) => formatDiagnosticLogEntry(entry, entry[messageKey]));
   }
 }
 
@@ -113,7 +131,7 @@ const lineSensitiveKeyPattern = new RegExp(
   'gi'
 );
 const sensitiveKeyPattern = new RegExp(
-  String.raw`(["']?)((?:(?:controller|client|device|private|shared)[_ -]?)?secret|(?:(?:access|refresh|session|auth)[_ -]?)?token|credentials?|api[_ -]?key|(?:private|secret)[_ -]?key|passphrase|password|device[_ -]?(?:id|key|seed|name)|session[_ -]?id|user[_ -]?(?:id|name)|(?:remote[_ -]?)?subscription[_ -]?url|x[_ -]?device[_ -]?signature)(["']?)\s*([:=：])\s*(${quotedDiagnosticValue}|${redactedDiagnosticValue}|[^\s|,;}]+)`,
+  String.raw`(["']?)((?:(?:controller|client|device|private|shared)[_ -]?)?secret|(?:(?:access|refresh|session|auth)[_ -]?)?token|credentials?|api[_ -]?key|(?:private|secret)[_ -]?key|passphrase|password|device[_ -]?(?:id|key|seed|name)|session[_ -]?id|user[_ -]?(?:id|name)|accounts?(?:[_ -]?(?:id|name|email))?|e[_ -]?mail|login(?:[_ -]?(?:id|name))?|(?:remote[_ -]?)?subscription[_ -]?url|x[_ -]?device[_ -]?signature)(["']?)\s*([:=：])\s*(${quotedDiagnosticValue}|${redactedDiagnosticValue}|[^\s|,;}]+)`,
   'gi'
 );
 
@@ -126,20 +144,56 @@ export function redactDiagnosticText(input: string): string {
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi, 'Bearer [已隐藏]')
     .replace(/\bBasic\s+[A-Za-z0-9+/_=-]{8,}/gi, 'Basic [已隐藏]')
     .replace(sensitiveKeyPattern, redactSensitiveKeyValue)
+    .replace(
+      /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+\b/gi,
+      '[已隐藏邮箱]'
+    )
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[已隐藏标识]')
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '[已隐藏标识]')
     .replace(/(?<![A-Za-z0-9+/_=-])(?:[A-Fa-f0-9]{32,}|[A-Za-z0-9+/_=-]{40,})(?![A-Za-z0-9+/_=-])/g, '[已隐藏标识]');
 }
 
-function normalizeDiagnosticLog(message: string): string | undefined {
+function normalizeDiagnosticLog(message: string, maxMessageLength: number): NormalizedDiagnosticLog | undefined {
   if (/^\[mihomo\]\s*#<\s*CLIXML\s*$/i.test(message.trim())) return undefined;
+
+  const safeFullMessage = toSafeDiagnosticLine(message);
+  if (!safeFullMessage) return undefined;
   const warning = parseMihomoDialWarning(message);
-  if (!warning) return message;
-  return `连接警告：${warning.target} 访问失败（${warning.network}）`;
+  const exportMessage = warning
+    ? boundMihomoDiagnosticMessage(safeFullMessage, maxMessageLength)
+    : boundDiagnosticMessage(safeFullMessage, maxMessageLength);
+  if (!warning) {
+    return {
+      summaryMessage: exportMessage,
+      exportMessage,
+      coalesceKey: `message:${exportMessage}`
+    };
+  }
+
+  const summaryMessage = boundDiagnosticMessage(
+    toSafeDiagnosticLine(`连接警告：${warning.target} 访问失败（${warning.network}）`),
+    maxMessageLength
+  );
+  return {
+    summaryMessage,
+    exportMessage,
+    coalesceKey: createMihomoWarningCoalesceKey(safeFullMessage)
+  };
+}
+
+function createMihomoWarningCoalesceKey(safeMessage: string): string {
+  const normalized = safeMessage
+    .replace(/\btime\s*=\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi, 'time=[忽略]')
+    .replace(/((?:\[[^\]\s]+\]|[^\s:"'()]+)):\d+(\([^)\r\n]*\))?(?=\s+-->)/g, '$1:[本地临时端口]$2');
+  return `mihomo:${createHash('sha256').update(normalized).digest('hex')}`;
 }
 
 function parseMihomoDialWarning(message: string): { target: string; network: string } | undefined {
-  if (!message.includes('[mihomo]') || !/level=warning/i.test(message) || !/\[(?:TCP|UDP)\]\s+dial/i.test(message)) {
+  if (
+    !message.includes('[mihomo]') ||
+    !/level=(?:warning|error)/i.test(message) ||
+    !/\[(?:TCP|UDP)\]\s+dial/i.test(message)
+  ) {
     return undefined;
   }
 
@@ -308,23 +362,34 @@ function redactUrl(value: string): string {
 }
 
 function toSingleSafeLine(value: string): string {
-  const line = redactDiagnosticText(String(value))
-    .replace(/[\r\n]+/g, ' ↩ ')
-    .trim();
+  const line = toSafeDiagnosticLine(value);
   return line.length > 8192 ? `${line.slice(0, 8191)}…` : line;
 }
 
-function toBoundedSafeDiagnosticMessage(value: string, maxLength: number): string {
-  const safe = redactDiagnosticText(String(value))
+function toSafeDiagnosticLine(value: string): string {
+  return redactDiagnosticText(String(value))
     .replace(/[\r\n]+/g, ' ↩ ')
     .trim();
-  if (safe.length <= maxLength) return safe;
-  return `${safe.slice(0, maxLength - 1)}…`;
 }
 
-function formatDiagnosticLogEntry(entry: DiagnosticLogEntry): string {
-  if (entry.occurrences === 1) return `${formatLocalDateTime(entry.lastAt)} ${entry.message}`;
-  return `${formatLocalDateTime(entry.firstAt)} - ${formatLocalDateTime(entry.lastAt)} ${entry.message}（重复 ${entry.occurrences} 次）`;
+function boundDiagnosticMessage(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 1)}…`;
+}
+
+function boundMihomoDiagnosticMessage(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const omissionMarker = ' …[中间省略]… ';
+  if (maxLength <= omissionMarker.length + 2) return boundDiagnosticMessage(value, maxLength);
+  const retainedLength = maxLength - omissionMarker.length;
+  const headLength = Math.ceil(retainedLength * 0.65);
+  const tailLength = retainedLength - headLength;
+  return `${value.slice(0, headLength)}${omissionMarker}${value.slice(-tailLength)}`;
+}
+
+function formatDiagnosticLogEntry(entry: DiagnosticLogEntry, message: string): string {
+  if (entry.occurrences === 1) return `${formatLocalDateTime(entry.lastAt)} ${message}`;
+  return `${formatLocalDateTime(entry.firstAt)} - ${formatLocalDateTime(entry.lastAt)} ${message}（重复 ${entry.occurrences} 次）`;
 }
 
 function formatLocalDateTime(value: Date): string {

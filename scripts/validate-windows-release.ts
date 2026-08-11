@@ -33,6 +33,7 @@ const expectedUpdateMetadataPath = join(releaseDir, expectedUpdateMetadataName);
 const bundledSubscriptionPath = join(releaseDir, 'win-unpacked', 'resources', 'default-subscription.txt');
 const fullscreenProbePath = join(releaseDir, 'win-unpacked', 'resources', 'windows-fullscreen-probe.exe');
 const trafficApiUrlPath = join(releaseDir, 'win-unpacked', 'resources', 'traffic-api-url.txt');
+const elevatedUpdateWrapperPath = join(releaseDir, 'win-unpacked', 'resources', 'update-elevated-installer.ps1');
 const packagedMihomoPath = join(releaseDir, 'win-unpacked', 'resources', 'mihomo', 'win-x64');
 const electronDefaultAppPath = join(releaseDir, 'win-unpacked', 'resources', 'default_app.asar');
 const electronVersionMarkerPath = join(releaseDir, 'win-unpacked', 'version');
@@ -42,6 +43,12 @@ await access(expectedBlockmapPath);
 await access(expectedUpdateMetadataPath);
 await assertPathMissing(electronDefaultAppPath, 'Packaged app must not retain Electron default_app.asar');
 await assertPathMissing(electronVersionMarkerPath, 'Packaged app must not retain Electron version marker');
+
+const sourceElevatedUpdateWrapper = await readFile(join(root, 'build', 'update-elevated-installer.ps1'));
+const packagedElevatedUpdateWrapper = await readFile(elevatedUpdateWrapperPath);
+if (!sourceElevatedUpdateWrapper.equals(packagedElevatedUpdateWrapper)) {
+  throw new Error('Packaged elevated update wrapper does not match the reviewed source');
+}
 
 const sourceMihomo = await validateMihomoDistribution(join(root, mihomoResourceRelativePath));
 const packagedMihomo = await validateMihomoDistribution(packagedMihomoPath);

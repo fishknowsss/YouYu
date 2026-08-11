@@ -119,11 +119,27 @@ X-YouYu-Signature: <device HMAC>
 ```
 
 The Worker verifies the body-bound device signature and only accepts `subscriptionUrl` and `ruleProfile`; status,
-region policy, and other admin-owned fields cannot be changed by a client. A differing value becomes a per-user
+region policy, and other admin-owned fields cannot be changed by a client. Client writes are denied by default. An
+administrator must first grant that user `canEditManagedConfig` through the user drawer or the authenticated endpoint:
+
+```http
+POST /api/admin/users/<userId>/config-permission
+Authorization: Bearer <ADMIN_TOKEN>
+Content-Type: application/json
+
+{ "canEditManagedConfig": true }
+```
+
+Signed `GET /api/config` responses include the effective `config.canEditManagedConfig` capability, so the desktop can
+disable managed-setting edits even when its hidden professional mode is open. Revoking the capability blocks later
+client writes without silently deleting an existing override; resetting that user's config remains a separate admin
+action. A differing value becomes a per-user
 override immediately, so the admin user drawer reports `单独配置`. A value equal to the current global value clears
 that field's override. Resetting the user to `跟随全局` removes the override, and the next automatic or manual client
 sync applies the current global config. Concurrent admin and client actions use the order in which D1 successfully
-commits them; the last successful write is authoritative. Client responses include `configSource` as `global` or
+commits them; the last successful write is authoritative. The client write compares its desired values with the
+current global row inside the same SQL statement, avoiding a stale global snapshot. Client responses include
+`configSource` as `global` or
 `user`, allowing the desktop UI to show the same ownership that the Worker and Mihomo runtime actually use.
 
 The cumulative traffic limit is an admin-only dashboard setting and is never included in client or per-user remote

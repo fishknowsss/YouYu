@@ -9,6 +9,7 @@ import {
   createMihomoRuntime as createMihomoRuntimeProduction,
   type MihomoRuntimeOptions
 } from '../../src/main/mihomo/process';
+import { DiagnosticLogBuffer } from '../../src/main/diagnostics';
 import { spawnWindowsElevatedProcess } from '../../src/main/platform/elevatedProcess';
 import type { AppSettings } from '../../src/main/storage/settings';
 
@@ -515,6 +516,8 @@ proxies:
     const snapshot = {
       binding: 'identity-a',
       revision: 'revision-a',
+      ready: true,
+      canEditManagedConfig: false,
       config: {
         version: 1,
         enabled: true,
@@ -821,6 +824,54 @@ proxies:
     expect(fetch).not.toHaveBeenCalledWith('https://old-user.example.com/sub', expect.anything());
   });
 
+  it('fails closed instead of starting a bound identity with an unready cloud config', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const fetch = vi.fn(async () => new Response('proxies: []\n'));
+    vi.stubGlobal('fetch', fetch);
+    const spawn = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ localSubscriptionUrl: 'https://local.example.com/sub' }),
+      readRemoteConfigSnapshot: async () => ({
+        binding: 'identity-b',
+        revision: 'unready',
+        ready: false,
+        canEditManagedConfig: false,
+        config: undefined
+      }),
+      spawnProcess: spawn,
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await expect(runtime.start()).rejects.toThrow('cloud config is not ready for the current identity');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the identity-bound remote config snapshot cannot be read', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const fetch = vi.fn(async () => new Response('proxies: []\n'));
+    vi.stubGlobal('fetch', fetch);
+    const spawn = vi.fn(() => ({ once: vi.fn(), kill: vi.fn(), killed: false }));
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ localSubscriptionUrl: 'https://local.example.com/sub' }),
+      readRemoteConfigSnapshot: async () => {
+        throw new Error('remote config cache is unreadable');
+      },
+      spawnProcess: spawn,
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await expect(runtime.start()).rejects.toThrow('remote config cache is unreadable');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('does not write or spawn from a remote config whose identity changes during subscription fetch', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);
@@ -842,6 +893,8 @@ proxies:
     const snapshot = {
       binding: 'identity-a',
       revision: 'identity-a-config',
+      ready: true,
+      canEditManagedConfig: false,
       config: {
         version: 1,
         enabled: true,
@@ -901,6 +954,8 @@ proxies:
     const snapshot = {
       binding: 'identity-a',
       revision: 'identity-a-config',
+      ready: true,
+      canEditManagedConfig: false,
       config: {
         version: 1,
         enabled: true,
@@ -1439,6 +1494,209 @@ proxies:
 
     expect(elevatedSpawn).toHaveBeenCalledOnce();
     expect(normalSpawn).not.toHaveBeenCalled();
+  });
+
+  it('captures authenticated bounded warning logs from the controller only for an elevated TUN runtime', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.killed = false;
+    child.kill = vi.fn(() => {
+      child.killed = true;
+      queueMicrotask(() => child.emit('exit', null, 'SIGTERM'));
+      return true;
+    });
+    const encoder = new TextEncoder();
+    let warningStreamCancelled = false;
+    const warningStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'warning', payload: 'x'.repeat(70_000) })}\n`));
+        controller.enqueue(
+          encoder.encode(
+            `${JSON.stringify({
+              type: 'warning',
+              payload:
+                '[TCP] dial PROXY (match DomainSuffix/example.com) 127.0.0.1:51000(app.exe) --> example.com:443 error: dial tcp: i/o timeout'
+            })}\n`
+          )
+        );
+        controller.enqueue(
+          encoder.encode(
+            `${JSON.stringify({
+              type: 'error',
+              payload:
+                '[UDP] dial DIRECT (match ProcessName/dns.exe) 127.0.0.1:51001(dns.exe) --> dns.example.com:53 error: dial udp: connection refused'
+            })}\n`
+          )
+        );
+      },
+      cancel() {
+        warningStreamCancelled = true;
+      }
+    });
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/logs?level=warning')) {
+        expect(init?.headers).toEqual({ Authorization: 'Bearer local-secret' });
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        return new Response(warningStream, { status: 200 });
+      }
+      if (String(url).endsWith('/version')) {
+        return Response.json({ version: 'test' });
+      }
+      if (String(url).endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            selector: { now: 'node-1', all: ['node-1'] },
+            'node-1': {}
+          }
+        });
+      }
+      return new Response('proxies: []\n', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const diagnosticLogs = new DiagnosticLogBuffer();
+    const logLine = vi.fn((line: string) => {
+      diagnosticLogs.append(line, new Date(2026, 7, 11, 5, 0, 0));
+    });
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ tunEnabled: true }),
+      spawnElevatedProcess: () => child as never,
+      logLine
+    });
+
+    await runtime.start();
+
+    await vi.waitFor(() =>
+      expect(logLine).toHaveBeenCalledWith(
+        '[mihomo] level=warning msg="[TCP] dial PROXY (match DomainSuffix/example.com) 127.0.0.1:51000(app.exe) --> example.com:443 error: dial tcp: i/o timeout"'
+      )
+    );
+    expect(logLine).toHaveBeenCalledWith(
+      '[mihomo] level=error msg="[UDP] dial DIRECT (match ProcessName/dns.exe) 127.0.0.1:51001(dns.exe) --> dns.example.com:53 error: dial udp: connection refused"'
+    );
+    expect(logLine).not.toHaveBeenCalledWith(expect.stringContaining('x'.repeat(1_000)));
+    const rendererLogs = diagnosticLogs.getLogs();
+    expect(rendererLogs).toContain('2026-08-11 05:00:00 连接警告：example.com 访问失败（TCP）');
+    expect(rendererLogs).toContain('2026-08-11 05:00:00 连接警告：dns.example.com 访问失败（UDP）');
+    expect(rendererLogs.join('\n')).not.toMatch(
+      /DomainSuffix|ProcessName|(?:app|dns)\.exe|dial (?:tcp|udp)|i\/o timeout|connection refused|:(?:443|53)/
+    );
+    expect(diagnosticLogs.getExportLogs()).toContain(
+      '2026-08-11 05:00:00 [mihomo] level=warning msg="[TCP] dial PROXY (match DomainSuffix/example.com) 127.0.0.1:51000(app.exe) --> example.com:443 error: dial tcp: i/o timeout"'
+    );
+    expect(diagnosticLogs.getExportLogs()).toContain(
+      '2026-08-11 05:00:00 [mihomo] level=error msg="[UDP] dial DIRECT (match ProcessName/dns.exe) 127.0.0.1:51001(dns.exe) --> dns.example.com:53 error: dial udp: connection refused"'
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:9090/logs?level=warning',
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer local-secret' }
+      })
+    );
+
+    await runtime.stop();
+
+    await vi.waitFor(() => expect(warningStreamCancelled).toBe(true));
+    expect(runtime.isRunning?.()).toBe(false);
+  });
+
+  it('does not open the controller warning stream for a normal stdout/stderr runtime', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const fetch = vi.fn(async (_url: string | URL | Request) => new Response('proxies: []\n', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ tunEnabled: false }),
+      spawnProcess: () => ({ once: vi.fn(), kill: vi.fn(), killed: false }),
+      waitForReady: vi.fn(async () => undefined)
+    });
+
+    await runtime.start();
+
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith('/logs?level=warning'))).toBe(false);
+  });
+
+  it('cancels the elevated warning stream on unexpected exit and creates one fresh stream after restart', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const createChild = () => {
+      const child = new EventEmitter() as EventEmitter & {
+        killed: boolean;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.killed = false;
+      child.kill = vi.fn(() => {
+        child.killed = true;
+        queueMicrotask(() => child.emit('exit', null, 'SIGTERM'));
+        return true;
+      });
+      return child;
+    };
+    const children = [createChild(), createChild()];
+    const cancelledStreams: boolean[] = [];
+    let warningStreamCount = 0;
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith('/logs?level=warning')) {
+        const index = warningStreamCount++;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            cancel() {
+              cancelledStreams[index] = true;
+            }
+          }),
+          { status: 200 }
+        );
+      }
+      if (String(url).endsWith('/version')) {
+        return Response.json({ version: 'test' });
+      }
+      if (String(url).endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            selector: { now: 'node-1', all: ['node-1'] },
+            'node-1': {}
+          }
+        });
+      }
+      return new Response('proxies: []\n', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const onUnexpectedExit = vi.fn();
+    const spawnElevatedProcess = vi
+      .fn()
+      .mockReturnValueOnce(children[0] as never)
+      .mockReturnValueOnce(children[1] as never);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings({ tunEnabled: true }),
+      spawnElevatedProcess,
+      onUnexpectedExit
+    });
+
+    await runtime.start();
+    await vi.waitFor(() => expect(warningStreamCount).toBe(1));
+
+    children[0].emit('exit', 1, null);
+
+    await vi.waitFor(() => expect(cancelledStreams[0]).toBe(true));
+    expect(onUnexpectedExit).toHaveBeenCalledWith('exit code 1');
+    expect(runtime.isRunning?.()).toBe(false);
+
+    await runtime.start();
+
+    await vi.waitFor(() => expect(warningStreamCount).toBe(2));
+    expect(spawnElevatedProcess).toHaveBeenCalledTimes(2);
+
+    await runtime.stop();
+    await vi.waitFor(() => expect(cancelledStreams[1]).toBe(true));
   });
 
   it('kills an in-flight mihomo startup when the operation is cancelled', async () => {

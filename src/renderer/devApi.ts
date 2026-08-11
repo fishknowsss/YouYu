@@ -485,7 +485,7 @@ export function createDevYouYuApi(
         }
       });
     },
-    async saveSettings(settings) {
+    async saveSettings(settings, _intent) {
       return publish({
         subscriptionUrl:
           typeof settings.subscriptionUrl === 'string' ? settings.subscriptionUrl.trim() : snapshot.subscriptionUrl,

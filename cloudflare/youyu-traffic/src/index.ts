@@ -72,6 +72,10 @@ type ClientConfigUpdateInput = {
   ruleProfile?: unknown;
 };
 
+type ManagedConfigPermissionInput = {
+  canEditManagedConfig?: unknown;
+};
+
 type UserProfileInput = {
   name?: unknown;
   requestId?: unknown;
@@ -164,6 +168,7 @@ type EffectiveDeviceConfigRow = RemoteConfigRow & {
   user_preferred_region?: string | null;
   user_region_fallback?: string | null;
   user_updated_at?: string | null;
+  can_edit_managed_config?: number | null;
   user_id?: string | null;
   user_name?: string | null;
   profile_updated_at?: string | null;
@@ -180,6 +185,7 @@ type RemoteControlConfig = {
   version: number;
   enabled: boolean;
   configSource: 'global' | 'user';
+  canEditManagedConfig: boolean;
   subscriptionUrl?: string;
   ruleProfile?: string;
   preferredRegion: 'auto' | 'jp' | 'hk' | 'tw' | 'sg' | 'us' | 'kr';
@@ -396,6 +402,11 @@ async function dispatchRequest(request: Request, env: Env, url: URL): Promise<Re
     await requireEmptyBody(request);
     return resetAdminUserConfig(env, userConfigResetMatch[1]);
   }
+  const userConfigPermissionMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/config-permission$/);
+  if (request.method === 'POST' && userConfigPermissionMatch) {
+    await requireAdmin(request, env);
+    return updateAdminManagedConfigPermission(request, env, userConfigPermissionMatch[1]);
+  }
   if (request.method === 'GET' && url.pathname === '/api/admin/anomalies') {
     await requireAdmin(request, env);
     return listAnomalies(env, parseAdminPagination(url, ADMIN_ANOMALIES_DEFAULT_PAGE_SIZE));
@@ -565,50 +576,66 @@ async function updateClientConfig(request: Request, env: Env): Promise<Response>
   }
 
   const canonicalUserId = await verifyDeviceRequest(request, env, userId, deviceId, bodyText);
-  const global = await getGlobalRemoteConfig(env);
+  await getGlobalRemoteConfig(env);
   const columns: string[] = [];
+  const selectExpressions: string[] = [];
   const bindings: unknown[] = [];
   if (hasOwnField(input, 'subscriptionUrl')) {
     const desired = parseNullableSubscriptionUrl(input.subscriptionUrl);
     columns.push('subscription_url');
-    bindings.push(desired === (global.subscriptionUrl ?? null) ? null : desired);
+    selectExpressions.push('CASE WHEN ? IS remote_config.subscription_url THEN NULL ELSE ? END');
+    bindings.push(desired, desired);
   }
   if (hasOwnField(input, 'ruleProfile')) {
     const desired = parseNullableConfigChoice(input.ruleProfile, ['ruleset', 'subscription'], 'invalid rule profile');
     if (!desired) throw new HttpError(400, 'invalid rule profile');
     columns.push('rule_profile');
-    bindings.push(desired === global.ruleProfile ? null : desired);
+    selectExpressions.push(
+      `CASE
+         WHEN ? = CASE
+           WHEN LOWER(TRIM(COALESCE(remote_config.rule_profile, ''))) = 'subscription'
+             THEN 'subscription'
+           ELSE 'ruleset'
+         END
+         THEN NULL
+         ELSE ?
+       END`
+    );
+    bindings.push(desired, desired);
   }
 
   const now = new Date().toISOString();
   const result = await env.DB.prepare(
     `INSERT INTO user_remote_config (user_id, ${columns.join(', ')}, updated_at)
-     SELECT users.id, ${columns.map(() => '?').join(', ')}, ?
+     SELECT users.id, ${selectExpressions.join(', ')}, ?
      FROM users
-     WHERE users.id = ? AND users.status = 'active' AND users.merged_into_user_id IS NULL
+     INNER JOIN remote_config ON remote_config.id = 1
+     WHERE users.id = ?
+       AND users.status = 'active'
+       AND users.merged_into_user_id IS NULL
+       AND users.can_edit_managed_config = 1
      ON CONFLICT(user_id) DO UPDATE SET
        ${columns.map((column) => `${column} = excluded.${column}`).join(', ')},
        updated_at = excluded.updated_at`
   )
     .bind(...bindings, now, canonicalUserId)
     .run();
-  if (getD1Changes(result) === 0) throw new HttpError(409, 'device state changed');
+  if (getD1Changes(result) === 0) {
+    const user = await env.DB.prepare(
+      `SELECT status, merged_into_user_id AS mergedIntoUserId,
+              can_edit_managed_config AS canEditManagedConfig
+       FROM users
+       WHERE id = ?`
+    )
+      .bind(canonicalUserId)
+      .first<{ status?: string; mergedIntoUserId?: string | null; canEditManagedConfig?: number }>();
+    if (user?.status === 'active' && !user.mergedIntoUserId && user.canEditManagedConfig !== 1) {
+      throw new HttpError(403, 'managed config editing forbidden');
+    }
+    throw new HttpError(409, 'device state changed');
+  }
 
-  await env.DB.prepare(
-    `DELETE FROM user_remote_config
-     WHERE user_id = ?
-       AND enabled IS NULL
-       AND subscription_url IS NULL
-       AND rule_profile IS NULL
-       AND preferred_region IS NULL
-       AND region_fallback IS NULL
-       AND preferred_node IS NULL
-       AND preferred_strategy IS NULL
-       AND direct_rules IS NULL
-       AND proxy_rules IS NULL`
-  )
-    .bind(canonicalUserId)
-    .run();
+  await deleteEmptyUserRemoteConfig(env, canonicalUserId);
 
   const state = await getEffectiveClientStateForDevice(env, deviceId);
   return json({
@@ -739,13 +766,33 @@ async function updateAdminTrafficLimit(request: Request, env: Env): Promise<Resp
 
 async function getAdminUserConfig(env: Env, userId: string): Promise<Response> {
   await requireKnownUser(env, userId);
-  const override = await getUserRemoteConfig(env, userId);
-  const effective = await getEffectiveRemoteConfig(env, userId);
+  const [override, effective] = await Promise.all([
+    getUserRemoteConfig(env, userId),
+    getEffectiveRemoteConfig(env, userId)
+  ]);
   await requireKnownUser(env, userId);
   return json({
+    canEditManagedConfig: effective.canEditManagedConfig,
     override,
     effective
   });
+}
+
+async function updateAdminManagedConfigPermission(request: Request, env: Env, userId: string): Promise<Response> {
+  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as ManagedConfigPermissionInput;
+  assertOnlyFields(input, ['canEditManagedConfig'], 'unsupported config permission field');
+  if (typeof input.canEditManagedConfig !== 'boolean') {
+    throw new HttpError(400, 'invalid managed config permission');
+  }
+  const result = await env.DB.prepare(
+    `UPDATE users
+     SET can_edit_managed_config = ?
+     WHERE id = ? AND status = 'active' AND merged_into_user_id IS NULL`
+  )
+    .bind(input.canEditManagedConfig ? 1 : 0, userId)
+    .run();
+  if (getD1Changes(result) === 0) throw new HttpError(404, 'unknown user');
+  return json({ ok: true, canEditManagedConfig: input.canEditManagedConfig });
 }
 
 async function updateAdminUserConfig(request: Request, env: Env, userId: string): Promise<Response> {
@@ -806,10 +853,12 @@ async function updateAdminUserConfig(request: Request, env: Env, userId: string)
     await requireKnownUser(env, userId);
   }
 
+  await deleteEmptyUserRemoteConfig(env, userId);
+
   const override = await getUserRemoteConfig(env, userId);
   const effective = await getEffectiveRemoteConfig(env, userId);
   await requireKnownUser(env, userId);
-  return json({ override, effective });
+  return json({ canEditManagedConfig: effective.canEditManagedConfig, override, effective });
 }
 
 async function syncGlobalConfigToUsers(env: Env): Promise<Response> {
@@ -837,6 +886,7 @@ async function resetAdminUserConfig(env: Env, userId: string): Promise<Response>
   const effective = await getEffectiveRemoteConfig(env, userId);
   await requireKnownUser(env, userId);
   return json({
+    canEditManagedConfig: effective.canEditManagedConfig,
     override: null,
     effective
   });
@@ -2333,6 +2383,7 @@ async function listUsers(env: Env, pagination: AdminPagination): Promise<Respons
        users.id,
        users.name,
        users.status,
+       users.can_edit_managed_config = 1 AS canEditManagedConfig,
        CASE
          WHEN user_remote_config.user_id IS NOT NULL AND user_remote_config.enabled = 0 THEN '已停用'
          WHEN user_remote_config.user_id IS NOT NULL AND COALESCE(TRIM(user_remote_config.subscription_url), '') <> '' THEN '单独订阅'
@@ -2472,6 +2523,7 @@ async function getGlobalRemoteConfig(env: Env): Promise<RemoteControlConfig> {
       version: 1,
       enabled: true,
       configSource: 'global',
+      canEditManagedConfig: false,
       subscriptionUrl: undefined,
       ruleProfile: 'ruleset',
       preferredRegion: 'jp',
@@ -2502,13 +2554,47 @@ async function getUserRemoteConfig(env: Env, userId: string): Promise<Partial<Re
   };
 }
 
+async function deleteEmptyUserRemoteConfig(env: Env, userId: string): Promise<void> {
+  await env.DB.prepare(
+    `DELETE FROM user_remote_config
+     WHERE user_id = ?
+       AND enabled IS NULL
+       AND subscription_url IS NULL
+       AND rule_profile IS NULL
+       AND preferred_region IS NULL
+       AND region_fallback IS NULL
+       AND preferred_node IS NULL
+       AND preferred_strategy IS NULL
+       AND direct_rules IS NULL
+       AND proxy_rules IS NULL`
+  )
+    .bind(userId)
+    .run();
+}
+
+async function getUserManagedConfigPermission(env: Env, userId: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT can_edit_managed_config AS canEditManagedConfig
+     FROM users
+     WHERE id = ? AND status = 'active' AND merged_into_user_id IS NULL`
+  )
+    .bind(userId)
+    .first<{ canEditManagedConfig?: number | null }>();
+  if (!row) throw new HttpError(404, 'unknown user');
+  return row.canEditManagedConfig === 1;
+}
+
 async function getEffectiveRemoteConfig(env: Env, userId: string): Promise<RemoteControlConfig> {
-  const global = await getGlobalRemoteConfig(env);
-  const override = await getUserRemoteConfig(env, userId);
-  if (!override) return global;
+  const [global, override, canEditManagedConfig] = await Promise.all([
+    getGlobalRemoteConfig(env),
+    getUserRemoteConfig(env, userId),
+    getUserManagedConfigPermission(env, userId)
+  ]);
+  if (!override) return { ...global, canEditManagedConfig };
 
   return {
     ...global,
+    canEditManagedConfig,
     enabled: typeof override.enabled === 'boolean' ? override.enabled : global.enabled,
     subscriptionUrl: override.subscriptionUrl ?? global.subscriptionUrl,
     ruleProfile: override.ruleProfile ?? global.ruleProfile,
@@ -2536,6 +2622,7 @@ async function getEffectiveClientStateForDevice(env: Env, deviceId: string): Pro
        user_remote_config.preferred_region AS user_preferred_region,
        user_remote_config.region_fallback AS user_region_fallback,
        user_remote_config.updated_at AS user_updated_at,
+       users.can_edit_managed_config,
        users.id AS user_id,
        users.name AS user_name,
        COALESCE((
@@ -2571,6 +2658,7 @@ async function getEffectiveClientStateForDevice(env: Env, deviceId: string): Pro
   const global = normalizeRemoteConfigRow(row);
   const config = {
     ...global,
+    canEditManagedConfig: row.can_edit_managed_config === 1,
     enabled: typeof row.user_enabled === 'number' ? row.user_enabled === 1 : global.enabled,
     subscriptionUrl: normalizeStoredSubscriptionUrl(row.user_subscription_url) ?? global.subscriptionUrl,
     ruleProfile: normalizeOptionalRuleProfile(row.user_rule_profile) ?? global.ruleProfile,
@@ -2611,6 +2699,7 @@ function normalizeRemoteConfigRow(row: RemoteConfigRow): RemoteControlConfig {
     version: typeof row.version === 'number' && row.version > 0 ? row.version : 1,
     enabled: row.enabled !== 0,
     configSource: 'global',
+    canEditManagedConfig: false,
     subscriptionUrl: normalizeStoredSubscriptionUrl(row.subscription_url),
     ruleProfile: normalizeRuleProfile(row.rule_profile),
     preferredRegion: normalizePreferredRegion(row.preferred_region),
@@ -2842,6 +2931,9 @@ function safeRouteLabel(pathname: string): string {
   if (/^\/api\/admin\/users\/[^/]+\/merge-preview$/.test(pathname)) return '/api/admin/users/:id/merge-preview';
   if (/^\/api\/admin\/users\/[^/]+\/merge$/.test(pathname)) return '/api/admin/users/:id/merge';
   if (/^\/api\/admin\/users\/[^/]+\/config\/reset$/.test(pathname)) return '/api/admin/users/:id/config/reset';
+  if (/^\/api\/admin\/users\/[^/]+\/config-permission$/.test(pathname)) {
+    return '/api/admin/users/:id/config-permission';
+  }
   if (/^\/api\/admin\/users\/[^/]+\/config$/.test(pathname)) return '/api/admin/users/:id/config';
   if (/^\/api\/admin\/users\/[^/]+\/traffic$/.test(pathname)) return '/api/admin/users/:id/traffic';
   const knownRoutes = new Set([
@@ -3304,11 +3396,13 @@ function errorCodeFor(status: number, message: string): string {
   const knownCodes: Record<string, string> = {
     'admin disabled': 'ADMIN_DISABLED',
     'config conflict': 'CONFIG_CONFLICT',
+    'managed config editing forbidden': 'MANAGED_CONFIG_EDITING_FORBIDDEN',
     'device state changed': 'DEVICE_STATE_CHANGED',
     forbidden: 'FORBIDDEN',
     'internal error': 'INTERNAL_ERROR',
     'invalid app version': 'INVALID_APP_VERSION',
     'invalid config resolution': 'INVALID_CONFIG_RESOLUTION',
+    'invalid managed config permission': 'INVALID_MANAGED_CONFIG_PERMISSION',
     'invalid content length': 'INVALID_CONTENT_LENGTH',
     'invalid device': 'INVALID_DEVICE',
     'invalid device key': 'INVALID_DEVICE_KEY',
@@ -3367,6 +3461,7 @@ function errorCodeFor(status: number, message: string): string {
     'unknown user': 'UNKNOWN_USER',
     'unsupported activation field': 'UNSUPPORTED_ACTIVATION_FIELD',
     'unsupported config field': 'UNSUPPORTED_CONFIG_FIELD',
+    'unsupported config permission field': 'UNSUPPORTED_CONFIG_PERMISSION_FIELD',
     'unsupported merge field': 'UNSUPPORTED_MERGE_FIELD',
     'unsupported notice acknowledgement field': 'UNSUPPORTED_NOTICE_ACKNOWLEDGEMENT_FIELD',
     'unsupported notice field': 'UNSUPPORTED_NOTICE_FIELD',

@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   normalized_name TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL DEFAULT 'active',
+  can_edit_managed_config INTEGER NOT NULL DEFAULT 0 CHECK (can_edit_managed_config IN (0, 1)),
   created_at TEXT NOT NULL,
   merged_into_user_id TEXT,
   FOREIGN KEY (merged_into_user_id) REFERENCES users(id)

@@ -34,7 +34,8 @@ type AppSettingsNormalizerInput = Omit<Partial<AppSettings>, 'selectedNode' | 'p
 };
 
 const settingsFileName = 'settings.json';
-const currentSettingsVersion = 5;
+const currentSettingsVersion = 6;
+const remoteRuleOwnershipMigrationVersion = 6;
 const bundledSelectionMigrationVersion = 3;
 const validModes: MihomoMode[] = ['rule', 'global', 'direct'];
 const validStrategies: StrategyKey[] = ['manual', 'auto', 'fallback', 'load-balance', 'direct'];
@@ -107,9 +108,11 @@ export class SettingsStore {
   }
 
   private normalize(value: AppSettingsNormalizerInput): AppSettings {
-    const normalizedRuleProfile = normalizeRuleProfile(value.ruleProfile, value.settingsVersion);
     const storedSubscriptionUrl = typeof value.subscriptionUrl === 'string' ? value.subscriptionUrl.trim() : '';
     const remoteSubscriptionUrl = normalizeSubscriptionUrl(value.remoteSubscriptionUrl);
+    const normalizedRuleProfile = shouldResetLegacyRemoteRuleProfile(value.settingsVersion, remoteSubscriptionUrl)
+      ? 'ruleset'
+      : normalizeRuleProfile(value.ruleProfile, value.settingsVersion);
     const localSubscriptionUrl = this.defaultSubscriptionUrl || storedSubscriptionUrl;
     const resetBundledSelection = this.shouldResetBundledSelection(value, storedSubscriptionUrl);
     const normalizedStrategy = validStrategies.includes(value.strategy as StrategyKey)
@@ -211,6 +214,15 @@ function normalizeRuleProfile(value: unknown, settingsVersion: unknown): RulePro
   // local/global variants into the supported smart ruleset.
   if (typeof settingsVersion !== 'number' && value === 'smart') return 'subscription';
   return validRuleProfiles.includes(value as RuleProfile) ? (value as RuleProfile) : 'ruleset';
+}
+
+function shouldResetLegacyRemoteRuleProfile(settingsVersion: unknown, remoteSubscriptionUrl: string | undefined) {
+  const version = typeof settingsVersion === 'number' && Number.isFinite(settingsVersion) ? settingsVersion : 0;
+  // v1.7.6 could copy the identity-bound cloud rule into the single local
+  // ruleProfile field. There is no trustworthy pre-cloud value to recover, so
+  // old schemas with an active cloud URL get one conservative reset. Version 6
+  // and local-only settings are never changed by this ownership migration.
+  return Boolean(remoteSubscriptionUrl) && version < remoteRuleOwnershipMigrationVersion;
 }
 
 function normalizeSubscriptionUrl(value: unknown): string | undefined {

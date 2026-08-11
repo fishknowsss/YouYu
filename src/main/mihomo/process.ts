@@ -10,6 +10,7 @@ import type { RemoteControlConfig } from '../../shared/ipc';
 import { EXTERNAL_RESPONSE_BODY_LIMITS, readFetchTextBounded } from '../http/boundedBody';
 import { selectMihomoProcessSpawner, spawnWindowsJobProcess } from '../platform/windowsJobProcess';
 import { buildMihomoConfig, isBlockedSelectableNodeName, strategyTargets } from './config';
+import { monitorMihomoWarningLogs } from './controllerLogStream';
 
 type SpawnedProcess = {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
@@ -27,6 +28,8 @@ type TrackedProcess = {
   process: SpawnedProcess;
   exited: boolean;
   exitPromise: Promise<SpawnedProcessExit>;
+  warningLogController?: AbortController;
+  warningLogTask?: Promise<void>;
 };
 
 type MihomoProxyItem = {
@@ -589,15 +592,18 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
     const settings = await options.readSettings();
     let remoteConfigSnapshot: ActiveRemoteConfigSnapshot | undefined;
     let remoteConfig: RemoteControlConfig | undefined;
-    try {
-      if (options.readRemoteConfigSnapshot) {
-        remoteConfigSnapshot = await options.readRemoteConfigSnapshot();
-        remoteConfig = remoteConfigSnapshot.config;
-      } else {
+    if (options.readRemoteConfigSnapshot) {
+      remoteConfigSnapshot = await options.readRemoteConfigSnapshot();
+      remoteConfig = remoteConfigSnapshot.config;
+    } else {
+      try {
         remoteConfig = await options.readRemoteConfig?.();
+      } catch (error) {
+        options.logLine?.(`remote config skipped: ${error instanceof Error ? error.message : String(error)}`);
       }
-    } catch (error) {
-      options.logLine?.(`remote config skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (remoteConfigSnapshot?.binding && !remoteConfigSnapshot.ready) {
+      throw new Error('cloud config is not ready for the current identity');
     }
     const subscriptionUrl =
       remoteConfig?.enabled && remoteConfig.subscriptionUrl
@@ -749,6 +755,8 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
     stoppingChildren.add(current);
     let timeout: NodeJS.Timeout | undefined;
     try {
+      current.warningLogController?.abort(new Error('mihomo runtime stopped'));
+      await current.warningLogTask?.catch(() => undefined);
       if (!current.exited && !current.process.killed) {
         current.process.kill();
       }
@@ -813,6 +821,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         const settleExit = (outcome: SpawnedProcessExit) => {
           if (exitSettled) return;
           exitSettled = true;
+          current.warningLogController?.abort(new Error('mihomo process exited'));
           current.exited = true;
           if (child === current) {
             child = null;
@@ -881,6 +890,22 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         });
 
         let abortStartup: () => void = () => undefined;
+        const startWarningLogMonitor = () => {
+          if (!settings.tunEnabled || current.warningLogController) return;
+          const warningLogController = new AbortController();
+          current.warningLogController = warningLogController;
+          current.warningLogTask = monitorMihomoWarningLogs({
+            controllerPort: ports.controllerPort,
+            secret: settings.controllerSecret,
+            signal: warningLogController.signal,
+            onLine: (line) => options.logLine?.(`[mihomo] ${line}`)
+          }).finally(() => {
+            if (current.warningLogController === warningLogController) {
+              current.warningLogController = undefined;
+              current.warningLogTask = undefined;
+            }
+          });
+        };
         try {
           const aborted = new Promise<never>((_resolve, reject) => {
             abortStartup = () => reject(signal?.reason);
@@ -891,6 +916,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
               ? options.waitForReady(settings.controllerSecret)
               : (async () => {
                   await waitForController(settings.controllerSecret, ports.controllerPort, signal);
+                  startWarningLogMonitor();
                   await waitForUsableProxies(
                     settings.controllerSecret,
                     ports.controllerPort,

@@ -482,15 +482,35 @@ function Get-InstalledProcesses([string] $ExpectedExecutablePath) {
       if ([string]::IsNullOrWhiteSpace($_.ExecutablePath)) { return }
       $processPath = Normalize-ExecutablePath $_.ExecutablePath
       if ($processPath -ine $ExpectedExecutablePath) { return }
-      $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop
-      if ([int] $owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($owner.Sid)) {
-        throw "Cannot resolve owner SID for YouYu process $($_.ProcessId)."
+      $processSnapshot = $_
+      $owner = $null
+      $ownerError = $null
+      try {
+        $owner = Invoke-CimMethod -InputObject $processSnapshot -MethodName GetOwnerSid -ErrorAction Stop
+        if ([int] $owner.ReturnValue -ne 0 -or [string]::IsNullOrWhiteSpace($owner.Sid)) {
+          $ownerError = "Cannot resolve owner SID for YouYu process $($processSnapshot.ProcessId)."
+        }
+      } catch {
+        $ownerError = $_
+      }
+      if ($null -ne $ownerError) {
+        # Electron child processes can disappear after the Win32_Process snapshot
+        # but before GetOwnerSid runs while the app is quitting for an update.
+        # Re-read the exact PID: only a confirmed disappearance is benign. Any
+        # surviving process or failed recheck remains a fail-closed boundary.
+        try {
+          $stillPresent = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($processSnapshot.ProcessId)" -ErrorAction Stop
+        } catch {
+          throw $ownerError
+        }
+        if ($null -eq $stillPresent) { return }
+        throw $ownerError
       }
       [pscustomobject]@{
-        ProcessId = [int] $_.ProcessId
+        ProcessId = [int] $processSnapshot.ProcessId
         ExecutablePath = $processPath
         OwnerSid = Normalize-UserSid $owner.Sid
-        SessionId = [int] $_.SessionId
+        SessionId = [int] $processSnapshot.SessionId
       }
     })
 }

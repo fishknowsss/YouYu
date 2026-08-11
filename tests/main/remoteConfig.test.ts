@@ -19,6 +19,7 @@ const cachedConfig = {
 const activeCachedConfig = {
   version: 3,
   enabled: true,
+  configSource: 'global' as const,
   directRules: [],
   proxyRules: []
 };
@@ -30,7 +31,7 @@ const registeredIdentity = {
 };
 
 function cacheEnvelope(
-  config: typeof cachedConfig = cachedConfig,
+  config: typeof cachedConfig & { canEditManagedConfig?: boolean } = cachedConfig,
   identity: Pick<typeof registeredIdentity, 'userId' | 'deviceId'> = registeredIdentity
 ) {
   return {
@@ -242,7 +243,23 @@ describe('RemoteConfigClient cache', () => {
 
     await expect(client.getActiveConfig()).resolves.toMatchObject({
       version: 3,
-      enabled: true
+      enabled: true,
+      configSource: 'global'
+    });
+  });
+
+  it('marks an identity-bound legacy cache without configSource as cloud-owned while offline', async () => {
+    await writeFile(join(dir, 'remote-config.json'), JSON.stringify(cacheEnvelope()), 'utf8');
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: '',
+      appVersion: '1.7.7',
+      store: createRegisteredStore()
+    });
+
+    await expect(client.getActiveConfigSnapshot()).resolves.toMatchObject({
+      ready: true,
+      config: { enabled: true, configSource: 'global' }
     });
   });
 
@@ -425,6 +442,7 @@ describe('RemoteConfigClient cache', () => {
       config: {
         version: 4,
         enabled: false,
+        configSource: 'global',
         directRules: [],
         proxyRules: []
       }
@@ -584,6 +602,11 @@ describe('RemoteConfigClient cache', () => {
   });
 
   it('saves user-managed config through a signed request and commits the canonical server response', async () => {
+    await writeFile(
+      join(dir, 'remote-config.json'),
+      JSON.stringify(cacheEnvelope({ ...cachedConfig, canEditManagedConfig: true })),
+      'utf8'
+    );
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       requests.push({ url: String(url), init });
@@ -593,6 +616,7 @@ describe('RemoteConfigClient cache', () => {
             version: 7,
             enabled: true,
             configSource: 'user',
+            canEditManagedConfig: true,
             subscriptionUrl: 'https://example.com/alice',
             ruleProfile: 'subscription',
             directRules: [],
@@ -638,6 +662,39 @@ describe('RemoteConfigClient cache', () => {
     );
     expect(new Headers(requests[0]?.init?.headers).get('x-youyu-signature')).toMatch(/^[0-9a-f]{64}$/);
     await expect(client.getActiveConfig()).resolves.toMatchObject({ configSource: 'user' });
+  });
+
+  it('exposes the managed-config permission and refuses writes before a current authorized cache exists', async () => {
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.7.7',
+      store: createRegisteredStore(),
+      fetch: vi.fn()
+    });
+
+    await expect(client.getActiveConfigSnapshot()).resolves.toMatchObject({
+      ready: false,
+      canEditManagedConfig: false
+    });
+    await expect(client.updateUserConfig({ ruleProfile: 'subscription' })).rejects.toThrow('sync required');
+  });
+
+  it('refuses an unprivileged cached account before sending a managed-config request', async () => {
+    await writeFile(join(dir, 'remote-config.json'), JSON.stringify(cacheEnvelope()), 'utf8');
+    const fetch = vi.fn();
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.7.7',
+      store: createRegisteredStore(),
+      fetch
+    });
+
+    await expect(client.updateUserConfig({ ruleProfile: 'subscription' })).rejects.toThrow(
+      'managed config editing forbidden'
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('serializes notice acknowledgement behind an in-flight sync so stale config cannot restore it', async () => {
@@ -917,7 +974,13 @@ describe('RemoteConfigClient cache', () => {
     try {
       const result = await withTestCertificate(() => client.sync({ proxyUrl: proxy.url, signal: controller.signal }));
 
-      expect(result.config).toEqual({ version: 5, enabled: true, directRules: [], proxyRules: [] });
+      expect(result.config).toEqual({
+        version: 5,
+        enabled: true,
+        configSource: 'global',
+        directRules: [],
+        proxyRules: []
+      });
       expect(authorities).toEqual([`agent1:${origin.port}`]);
       expect(requestText).toContain('GET /api/config?');
       expect(requestText).toContain('accept-encoding: identity');

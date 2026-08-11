@@ -268,7 +268,8 @@ describe('App renderer lifecycle', () => {
     vi.useFakeTimers();
     const snapshot = { ...createRegisteredRendererSnapshot(), status: 'stopped' as const };
     let saveRequest: OperationRequest | undefined;
-    const saveSettings = vi.fn((_: unknown, request?: OperationRequest) => {
+    const saveSettings = vi.fn((_: unknown, intent: string, request?: OperationRequest) => {
+      expect(intent).toBe('easy-start');
       saveRequest = request;
       return new Promise<AppSnapshot>(() => undefined);
     });
@@ -295,6 +296,7 @@ describe('App renderer lifecycle', () => {
       await Promise.resolve();
     });
     expect(saveSettings).toHaveBeenCalledOnce();
+    expect(saveSettings.mock.calls[0]?.[0]).not.toHaveProperty('ruleProfile');
     expect(vi.getTimerCount()).toBe(baselineTimerCount + 1);
 
     await act(async () => root?.unmount());

@@ -66,6 +66,7 @@ export function App() {
             onStrategyChange={controller.selectStrategy}
             onOpenNodes={controller.openNodes}
             onUsageModeChange={controller.changeUsageMode}
+            onCheckUpdate={controller.checkForUpdates}
             onInstallUpdate={controller.installUpdate}
           />
         )}

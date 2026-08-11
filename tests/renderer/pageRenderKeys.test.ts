@@ -47,5 +47,16 @@ describe('renderer page render keys', () => {
         update: { ...snapshot.update, status: 'checking' }
       })
     ).not.toBe(baseKey);
+    expect(
+      getSettingsRenderKey({
+        ...snapshot,
+        trafficIdentity: {
+          userId: 'user-1',
+          deviceId: 'device-1',
+          name: '测试用户',
+          registeredAt: '2026-08-11T00:00:00.000Z'
+        }
+      })
+    ).not.toBe(baseKey);
   });
 });

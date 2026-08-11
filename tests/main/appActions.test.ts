@@ -302,14 +302,20 @@ describe('app actions', () => {
         lifecycle: makeLifecycle(),
         runtime: { start: vi.fn(async () => undefined), restart },
         remoteConfig: {
-          read: async () => ({
-            version: 3,
-            enabled: true,
-            configSource: 'global',
-            subscriptionUrl: 'https://example.com/global',
-            ruleProfile: 'ruleset',
-            directRules: [],
-            proxyRules: []
+          readSnapshot: async () => ({
+            binding: '["user-1","device-1"]',
+            ready: true,
+            canEditManagedConfig: true,
+            config: {
+              version: 3,
+              enabled: true,
+              configSource: 'global',
+              canEditManagedConfig: true,
+              subscriptionUrl: 'https://example.com/global',
+              ruleProfile: 'ruleset',
+              directRules: [],
+              proxyRules: []
+            }
           }),
           update: updateRemote,
           apply: async () => {
@@ -331,6 +337,7 @@ describe('app actions', () => {
       },
       undefined
     );
+    expect(updateLocal).toHaveBeenCalledWith({});
     expect(order).toEqual(['remote-update', 'remote-apply', 'local-update', 'restart']);
   });
 
@@ -343,14 +350,20 @@ describe('app actions', () => {
         settingsStore: { read: vi.fn(), update: updateLocal },
         lifecycle: makeLifecycle({ getStatus: () => 'stopped' }),
         remoteConfig: {
-          read: async () => ({
-            version: 3,
-            enabled: true,
-            configSource: 'global',
-            subscriptionUrl: 'https://example.com/global',
-            ruleProfile: 'ruleset',
-            directRules: [],
-            proxyRules: []
+          readSnapshot: async () => ({
+            binding: '["user-1","device-1"]',
+            ready: true,
+            canEditManagedConfig: true,
+            config: {
+              version: 3,
+              enabled: true,
+              configSource: 'global',
+              canEditManagedConfig: true,
+              subscriptionUrl: 'https://example.com/global',
+              ruleProfile: 'ruleset',
+              directRules: [],
+              proxyRules: []
+            }
           }),
           update: updateRemote,
           apply: vi.fn()
@@ -365,7 +378,7 @@ describe('app actions', () => {
     );
 
     expect(updateRemote).not.toHaveBeenCalled();
-    expect(updateLocal).toHaveBeenCalledOnce();
+    expect(updateLocal).toHaveBeenCalledWith({ tunEnabled: true });
   });
 
   it('does not persist a conflicting local managed value when the cloud write fails', async () => {
@@ -376,13 +389,19 @@ describe('app actions', () => {
           settingsStore: { read: vi.fn(), update: updateLocal },
           lifecycle: makeLifecycle(),
           remoteConfig: {
-            read: async () => ({
-              version: 3,
-              enabled: true,
-              configSource: 'global',
-              ruleProfile: 'ruleset',
-              directRules: [],
-              proxyRules: []
+            readSnapshot: async () => ({
+              binding: '["user-1","device-1"]',
+              ready: true,
+              canEditManagedConfig: true,
+              config: {
+                version: 3,
+                enabled: true,
+                configSource: 'global',
+                canEditManagedConfig: true,
+                ruleProfile: 'ruleset',
+                directRules: [],
+                proxyRules: []
+              }
             }),
             update: async () => {
               throw new Error('cloud unavailable');
@@ -395,6 +414,90 @@ describe('app actions', () => {
       )
     ).rejects.toThrow('cloud unavailable');
 
+    expect(updateLocal).not.toHaveBeenCalled();
+  });
+
+  it('never publishes managed settings for the easy-start intent', async () => {
+    const updateRemote = vi.fn();
+    const updateLocal = vi.fn(async () => makeSettings());
+
+    await saveSubscriptionSettings(
+      {
+        settingsStore: { read: vi.fn(), update: updateLocal },
+        lifecycle: makeLifecycle({ getStatus: () => 'stopped' }),
+        remoteConfig: {
+          readSnapshot: vi.fn(),
+          update: updateRemote,
+          apply: vi.fn()
+        },
+        createSnapshot: async () => makeSnapshot()
+      },
+      { subscriptionUrl: 'https://bundled.example/sub', ruleProfile: 'ruleset' },
+      { intent: 'easy-start' }
+    );
+
+    expect(updateRemote).not.toHaveBeenCalled();
+    expect(updateLocal).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an advanced managed save until a verified cloud identity has a current cache', async () => {
+    const updateLocal = vi.fn();
+    await expect(
+      saveSubscriptionSettings(
+        {
+          settingsStore: { read: vi.fn(), update: updateLocal },
+          lifecycle: makeLifecycle({ getStatus: () => 'stopped' }),
+          remoteConfig: {
+            readSnapshot: async () => ({
+              binding: '["user-1","device-1"]',
+              ready: false,
+              canEditManagedConfig: false
+            }),
+            update: vi.fn(),
+            apply: vi.fn()
+          },
+          createSnapshot: async () => makeSnapshot()
+        },
+        { subscriptionUrl: 'https://local.example/sub' },
+        { intent: 'advanced-save' }
+      )
+    ).rejects.toThrow('请先同步云端配置');
+    expect(updateLocal).not.toHaveBeenCalled();
+  });
+
+  it('rejects an advanced managed save when the account is not authorized', async () => {
+    const updateRemote = vi.fn();
+    const updateLocal = vi.fn();
+    await expect(
+      saveSubscriptionSettings(
+        {
+          settingsStore: { read: vi.fn(), update: updateLocal },
+          lifecycle: makeLifecycle({ getStatus: () => 'stopped' }),
+          remoteConfig: {
+            readSnapshot: async () => ({
+              binding: '["user-1","device-1"]',
+              ready: true,
+              canEditManagedConfig: false,
+              config: {
+                version: 3,
+                enabled: true,
+                configSource: 'global',
+                subscriptionUrl: 'https://global.example/sub',
+                ruleProfile: 'ruleset',
+                directRules: [],
+                proxyRules: []
+              }
+            }),
+            update: updateRemote,
+            apply: vi.fn()
+          },
+          createSnapshot: async () => makeSnapshot()
+        },
+        { ruleProfile: 'subscription' },
+        { intent: 'advanced-save' }
+      )
+    ).rejects.toThrow('未获配置修改权限');
+    expect(updateRemote).not.toHaveBeenCalled();
     expect(updateLocal).not.toHaveBeenCalled();
   });
 

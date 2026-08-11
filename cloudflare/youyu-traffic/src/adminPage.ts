@@ -274,6 +274,7 @@ export function adminPage(): string {
                     <div class="section-title user-config-state"><span class="chip gray" id="userSubscriptionState">跟随全局</span></div>
                     <div class="form-grid">
                       <label class="field" for="userMode">模式<select id="userMode"><option value="follow">跟随全局</option><option value="custom">单独配置</option><option value="disabled">停用</option></select></label>
+                      <label class="field" for="userCanEditManagedConfig">自行配置<select id="userCanEditManagedConfig"><option value="false">不允许</option><option value="true">允许</option></select></label>
                       <label class="field" for="userRuleProfile">规则<select id="userRuleProfile"><option value="ruleset">智能规则</option><option value="subscription">机场规则</option></select></label>
                       <label class="field" for="userPreferredRegion">优先地区<select id="userPreferredRegion"><option value="jp">日本</option><option value="hk">香港</option><option value="tw">台湾</option><option value="sg">新加坡</option><option value="us">美国</option><option value="kr">韩国</option><option value="auto">最低延迟</option></select></label>
                       <label class="field" for="userRegionFallback">地区不可用<select id="userRegionFallback"><option value="global">自动切换</option><option value="strict">保持地区</option></select></label>

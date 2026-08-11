@@ -59,9 +59,9 @@ describe('traffic identity runtime handoff', () => {
     expect(registration).toContain('const identityChanged =');
     expect(changedIdentityBranch).toContain('const activeIntentGeneration = runtimeIntent.capture()');
     expect(changedIdentityBranch.indexOf('runtimeIntent.requestStart()')).toBeLessThan(
-      changedIdentityBranch.indexOf('await syncRemoteConfig')
+      changedIdentityBranch.indexOf('await syncRequiredRemoteConfig')
     );
-    expect(changedIdentityBranch.indexOf('await syncRemoteConfig')).toBeLessThan(
+    expect(changedIdentityBranch.indexOf('await syncRequiredRemoteConfig')).toBeLessThan(
       changedIdentityBranch.indexOf('await restartLifecycleForExpectedIntent(newIntentGeneration)')
     );
     expect(changedIdentityBranch).not.toContain("lifecycle.getStatus() === 'running'");

@@ -115,6 +115,50 @@ describe('manage-installed-process.ps1 user boundary', () => {
     });
   });
 
+  windowsIt('accepts a 1.7.5 five-minute handoff until its original expiry without silently renewing it', async () => {
+    await withBoundaryFiles([], async ({ handoffPath, inventoryPath }) => {
+      await writeFile(
+        handoffPath,
+        JSON.stringify({
+          version: 1,
+          nonce,
+          targetUserSid,
+          targetSessionId,
+          targetProcessId: 4242,
+          executablePath,
+          createdAtEpochMs: now,
+          expiresAtEpochMs: now + 300_000
+        }),
+        'utf8'
+      );
+      const baseArguments = [
+        '-Action',
+        'Verify',
+        '-ExecutablePath',
+        executablePath,
+        '-HandoffPath',
+        handoffPath,
+        '-HandoffNonce',
+        nonce,
+        '-ExpectedUserSid',
+        targetUserSid,
+        '-ExpectedSessionId',
+        String(targetSessionId),
+        '-ProcessInventoryPath',
+        inventoryPath,
+        '-SkipFileOwnerCheck',
+        '-CurrentTimeEpochMs'
+      ];
+
+      await expect(runScript([...baseArguments, String(now + 299_999)])).resolves.toMatchObject({
+        stdout: expect.stringContaining('"status":"verified"')
+      });
+      await expect(runScript([...baseArguments, String(now + 300_001)])).rejects.toMatchObject({
+        stderr: expect.stringContaining('has expired')
+      });
+    });
+  });
+
   windowsIt('does not permit injected process inventories in the mutating production action', async () => {
     await withBoundaryFiles([], async ({ handoffPath, inventoryPath }) => {
       await expect(
@@ -350,6 +394,116 @@ describe('manage-installed-process.ps1 user boundary', () => {
       }
     }
   );
+
+  windowsIt('ignores only a confirmed vanished child and fails closed for every other owner lookup error', async () => {
+    const current = await getCurrentWindowsIdentity();
+    if (isNonInteractiveIdentity(current.sid)) return;
+
+    const raceNonce = randomUUID().toLowerCase();
+    const canonicalTempDirectory = await getCanonicalLocalTempDirectory();
+    const handoffPath = join(canonicalTempDirectory, `youyu-update-handoff-${raceNonce}.json`);
+    const acknowledgementPath = join(canonicalTempDirectory, `youyu-update-handoff-${raceNonce}.ready.json`);
+    const uniqueExecutablePath = join(tmpdir(), `youyu-cim-race-target-${randomUUID()}.exe`);
+    const sourceProcessId = 4242;
+    const vanishedProcessId = 4343;
+    const currentTime = Date.now();
+    try {
+      await writeFile(
+        handoffPath,
+        JSON.stringify({
+          version: 1,
+          nonce: raceNonce,
+          targetUserSid: current.sid,
+          targetSessionId: current.session,
+          targetProcessId: sourceProcessId,
+          executablePath: uniqueExecutablePath,
+          createdAtEpochMs: currentTime,
+          expiresAtEpochMs: currentTime + 300_000
+        }),
+        'utf8'
+      );
+
+      const script = [
+        '$global:youyuInventoryRead = 0',
+        'function Get-CimInstance {',
+        '  param([string] $ClassName, [string] $Filter, [object] $ErrorAction)',
+        "  if ($Filter -eq ('ProcessId = ' + $PID)) { return [pscustomobject]@{ ProcessId = $PID; SessionId = [int] $env:YOUYU_TEST_SESSION_ID } }",
+        "  if ($Filter -eq ('ProcessId = ' + $env:YOUYU_TEST_VANISHED_PID)) {",
+        "    if ($env:YOUYU_TEST_RECHECK_BEHAVIOR -eq 'error') { throw 'simulated exact PID recheck failure' }",
+        "    if ($env:YOUYU_TEST_RECHECK_BEHAVIOR -eq 'present') { return [pscustomobject]@{ ProcessId = [int] $env:YOUYU_TEST_VANISHED_PID; ExecutablePath = $env:YOUYU_TEST_EXECUTABLE_PATH; SessionId = [int] $env:YOUYU_TEST_SESSION_ID } }",
+        '    return $null',
+        '  }',
+        "  if ($Filter -ne \"Name = 'YouYu.exe'\") { throw ('unexpected CIM filter: ' + $Filter) }",
+        '  $global:youyuInventoryRead += 1',
+        '  if ($global:youyuInventoryRead -eq 1) {',
+        '    [pscustomobject]@{ ProcessId = [int] $env:YOUYU_TEST_SOURCE_PID; ExecutablePath = $env:YOUYU_TEST_EXECUTABLE_PATH; SessionId = [int] $env:YOUYU_TEST_SESSION_ID }',
+        "    if ($env:YOUYU_TEST_RECHECK_BEHAVIOR -ne 'vanished') { [pscustomobject]@{ ProcessId = [int] $env:YOUYU_TEST_VANISHED_PID; ExecutablePath = $env:YOUYU_TEST_EXECUTABLE_PATH; SessionId = [int] $env:YOUYU_TEST_SESSION_ID } }",
+        '    return',
+        '  }',
+        "  if ($global:youyuInventoryRead -eq 2 -and $env:YOUYU_TEST_RECHECK_BEHAVIOR -eq 'vanished') {",
+        '    return [pscustomobject]@{ ProcessId = [int] $env:YOUYU_TEST_VANISHED_PID; ExecutablePath = $env:YOUYU_TEST_EXECUTABLE_PATH; SessionId = [int] $env:YOUYU_TEST_SESSION_ID }',
+        '  }',
+        '  return @()',
+        '}',
+        'function Invoke-CimMethod {',
+        '  param([object] $InputObject, [string] $MethodName, [object] $ErrorAction)',
+        "  if ([int] $InputObject.ProcessId -eq [int] $env:YOUYU_TEST_VANISHED_PID) { throw 'simulated CIM not found after process exit' }",
+        '  return [pscustomobject]@{ ReturnValue = 0; Sid = $env:YOUYU_TEST_USER_SID }',
+        '}',
+        '& $env:YOUYU_TEST_MANAGE_SCRIPT -Action AcknowledgeAndWait -ExecutablePath $env:YOUYU_TEST_EXECUTABLE_PATH -HandoffPath $env:YOUYU_TEST_HANDOFF_PATH -HandoffNonce $env:YOUYU_TEST_NONCE -ExpectedUserSid $env:YOUYU_TEST_USER_SID -ExpectedSessionId $env:YOUYU_TEST_SESSION_ID -RequireHandoff -TimeoutSeconds 2',
+        'exit $LASTEXITCODE'
+      ].join('\n');
+      const runScenario = (recheckBehavior: 'vanished' | 'present' | 'error') =>
+        execFileAsync(
+          join(
+            process.env.SystemRoot ?? String.raw`C:\Windows`,
+            'System32',
+            'WindowsPowerShell',
+            'v1.0',
+            'powershell.exe'
+          ),
+          ['-NoProfile', '-NonInteractive', '-Command', script],
+          {
+            windowsHide: true,
+            env: {
+              ...process.env,
+              YOUYU_TEST_MANAGE_SCRIPT: join(process.cwd(), 'build', 'manage-installed-process.ps1'),
+              YOUYU_TEST_EXECUTABLE_PATH: uniqueExecutablePath,
+              YOUYU_TEST_HANDOFF_PATH: handoffPath,
+              YOUYU_TEST_NONCE: raceNonce,
+              YOUYU_TEST_USER_SID: current.sid,
+              YOUYU_TEST_SESSION_ID: String(current.session),
+              YOUYU_TEST_SOURCE_PID: String(sourceProcessId),
+              YOUYU_TEST_VANISHED_PID: String(vanishedProcessId),
+              YOUYU_TEST_RECHECK_BEHAVIOR: recheckBehavior,
+              YOUYU_UPDATE_HANDOFF_PATH: '',
+              YOUYU_UPDATE_HANDOFF_NONCE: '',
+              YOUYU_UPDATE_TARGET_USER_SID: '',
+              YOUYU_UPDATE_TARGET_SESSION_ID: ''
+            }
+          }
+        );
+
+      const { stdout } = await runScenario('vanished');
+
+      expect(stdout).toContain('"status":"acknowledged-and-waited"');
+      await expect(readFile(acknowledgementPath, 'utf8')).resolves.toContain(raceNonce);
+      await rm(acknowledgementPath, { force: true });
+
+      await expect(runScenario('present')).rejects.toMatchObject({
+        stderr: expect.stringContaining('simulated CIM not found after process exit')
+      });
+      await expect(readFile(acknowledgementPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+      await expect(runScenario('error')).rejects.toMatchObject({
+        stderr: expect.stringContaining('simulated CIM not found after process exit')
+      });
+      await expect(readFile(acknowledgementPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(handoffPath, { force: true });
+      await rm(acknowledgementPath, { force: true });
+    }
+  });
 
   windowsIt('recovers the old 1.7.0 handoff from only the current installer identity temp directory', async () => {
     const current = await getCurrentWindowsIdentity();

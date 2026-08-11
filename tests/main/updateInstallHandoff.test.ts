@@ -6,6 +6,7 @@ import {
   createUpdateInstallerHandoff,
   createUpdateInstallerHandoffArguments,
   deferUpdateInstallerLaunch,
+  resolveUpdateInstallerCancellationPath,
   resolveUpdateInstallerHandoffAcknowledgementPath,
   resolveWindowsUpdateHandoffDirectory,
   updateInstallerHandoffDelayMs,
@@ -154,7 +155,7 @@ describe('deferUpdateInstallerLaunch', () => {
         targetProcessId: 4242,
         executablePath: String.raw`C:\Program Files\YouYu\YouYu.exe`,
         createdAtEpochMs: 1_800_000_000_000,
-        expiresAtEpochMs: 1_800_000_300_000
+        expiresAtEpochMs: 1_800_000_000_000 + updateInstallerHandoffLifetimeMs
       });
       expect(environment).toMatchObject({
         EXISTING: 'preserved',
@@ -174,8 +175,11 @@ describe('deferUpdateInstallerLaunch', () => {
         '7'
       ]);
 
+      const cancellationPath = resolveUpdateInstallerCancellationPath(lease);
+      await writeFile(cancellationPath, '{"state":"cancelled"}\n', 'utf8');
       await lease.abandon();
       await expect(readFile(lease.path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(cancellationPath, 'utf8')).resolves.toContain('cancelled');
       expect(environment[updateInstallerHandoffEnvironment.path]).toBeUndefined();
       expect(environment[updateInstallerHandoffEnvironment.nonce]).toBeUndefined();
       expect(environment[updateInstallerHandoffEnvironment.userSid]).toBeUndefined();
@@ -278,9 +282,12 @@ describe('deferUpdateInstallerLaunch', () => {
       });
 
       await expect(readFile(lease.path, 'utf8')).resolves.toContain('targetProcessId');
+      const cancellationPath = resolveUpdateInstallerCancellationPath(lease);
+      await writeFile(cancellationPath, '{"state":"cancelled"}\n', 'utf8');
       expect(expiryDelayMs).toBe(updateInstallerHandoffLifetimeMs);
       await expiryTask?.();
       await expect(readFile(lease.path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(cancellationPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
       expect(environment[updateInstallerHandoffEnvironment.path]).toBeUndefined();
     } finally {
       await rm(directory, { recursive: true, force: true });

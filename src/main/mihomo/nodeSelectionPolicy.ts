@@ -76,3 +76,22 @@ export function exitRegionLabel(code: string | undefined): string {
   const normalized = code?.toLowerCase() as Exclude<PreferredNodeRegion, 'auto'> | undefined;
   return normalized && preferredNodeRegions.includes(normalized) ? preferredRegionLabel(normalized) : '其他地区';
 }
+
+export function resolveNodeSelectionFallbackNotice(options: {
+  policy: NodeSelectionPolicy;
+  selectedNode: string;
+  selectedExitRegion?: string;
+  selectedViaVerificationFallback: boolean;
+}): string | undefined {
+  if (options.policy.preferredRegion === 'auto' || options.policy.regionFallback !== 'global') return undefined;
+
+  const preferredLabel = preferredRegionLabel(options.policy.preferredRegion);
+  const selectedRegion = options.selectedExitRegion?.toLowerCase() ?? detectNodeRegion(options.selectedNode);
+  if (selectedRegion !== options.policy.preferredRegion) {
+    return `${preferredLabel}节点均不可用，已自动切换至${exitRegionLabel(selectedRegion)}节点`;
+  }
+  if (options.selectedViaVerificationFallback) {
+    return `${preferredLabel}节点出口验证暂不可用，已使用当前可用节点`;
+  }
+  return undefined;
+}

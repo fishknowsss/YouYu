@@ -13,8 +13,9 @@ describe('update and exit lifecycle safety', () => {
     expect(install.indexOf('await updateCoordinator.prepareInstall()')).toBeLessThan(
       install.indexOf('updateInstallerLaunchPending = true')
     );
+    expect(install).toContain('const expectedVersion = preparation.snapshot.downloadedVersion');
     expect(install.indexOf('await updateCoordinator.prepareInstall()')).toBeLessThan(
-      install.indexOf('launchDownloadedUpdateInstaller({ installerPath, handoff })')
+      install.indexOf('await launchDownloadedUpdateInstaller({')
     );
   });
 
@@ -62,14 +63,14 @@ describe('update and exit lifecycle safety', () => {
     expect(deferredLaunch).toContain('!updateInstallerLaunchPending');
     expect(deferredLaunch).toContain('updateInstallAttempt !== installAttempt');
     expect(deferredLaunch.indexOf('updateInstallAttempt !== installAttempt')).toBeLessThan(
-      deferredLaunch.indexOf('launchDownloadedUpdateInstaller({ installerPath, handoff })')
+      deferredLaunch.indexOf('await launchDownloadedUpdateInstaller({')
     );
     expect(deferredLaunch.indexOf('updateInstallerLaunchStarted = true')).toBeLessThan(
       deferredLaunch.indexOf('app.quit()')
     );
     expect(deferredLaunch.indexOf('cleanupFinished = true')).toBeLessThan(deferredLaunch.indexOf('app.quit()'));
     expect(deferredLaunch.indexOf('isQuitting = true')).toBeLessThan(deferredLaunch.indexOf('app.quit()'));
-    expect(deferredLaunch.indexOf('launchDownloadedUpdateInstaller({ installerPath, handoff })')).toBeLessThan(
+    expect(deferredLaunch.indexOf('await launchDownloadedUpdateInstaller({')).toBeLessThan(
       deferredLaunch.indexOf('updateInstallerLaunchStarted = true')
     );
     expect(install.slice(0, install.indexOf('deferUpdateInstallerLaunch'))).not.toContain('isQuitting = true');
@@ -88,7 +89,7 @@ describe('update and exit lifecycle safety', () => {
 
     expect(setup).toContain('autoUpdater.autoInstallOnAppQuit = false');
     expect(install).toContain('resolveDownloadedUpdateInstallerPath');
-    expect(install).toContain('launchDownloadedUpdateInstaller({ installerPath, handoff })');
+    expect(install).toContain('await launchDownloadedUpdateInstaller({');
     expect(install).not.toContain('autoUpdater.quitAndInstall');
   });
 

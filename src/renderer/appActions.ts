@@ -167,6 +167,16 @@ export function getActionErrorMessage(error: unknown): string {
   if (message.includes('核心接口未加载')) return '核心接口未加载';
   if (message.includes('traffic endpoint not configured')) return '先配置后台地址';
   if (message.includes('traffic identity required')) return '先完成登记';
+  if (message.includes('remote config sync required') || message.includes('请先同步云端配置')) {
+    return '请先同步云端配置';
+  }
+  if (
+    message.includes('managed config editing forbidden') ||
+    message.includes('remote config update failed: 403') ||
+    message.includes('未获配置修改权限')
+  ) {
+    return '此账号未获配置修改权限';
+  }
   if (message.includes('missing traffic user name')) return '先填写姓名';
   if (message.includes('missing traffic passphrase')) return '先填写口令';
   if (message.includes('traffic activation failed: 403')) return '口令不对';

@@ -64,6 +64,8 @@ describe('renderer action behavior', () => {
 
     expect(getActionErrorMessage(timeoutError)).toBe('修复超时');
     expect(getActionErrorMessage(new Error('operation timed out'))).toBe('操作超时');
+    expect(getActionErrorMessage(new Error('remote config sync required'))).toBe('请先同步云端配置');
+    expect(getActionErrorMessage(new Error('remote config update failed: 403'))).toBe('此账号未获配置修改权限');
   });
 
   it('does not start the proxy when cancellation lands during the snapshot gap', async () => {
@@ -227,7 +229,7 @@ describe('renderer action behavior', () => {
   ])('keeps the $done settings message out of the home diagnostics panel', async ({ button, done }) => {
     window.history.replaceState({}, '', '/?mode=advanced&page=settings');
     const snapshot = createRegisteredRendererSnapshot();
-    const saveSettings = vi.fn(async () => snapshot);
+    const saveSettings = vi.fn(async (_settings?: unknown, _intent?: unknown) => snapshot);
     const repair = vi.fn(async () => snapshot);
     const api = {
       getSnapshot: vi.fn(async () => snapshot),
@@ -259,6 +261,11 @@ describe('renderer action behavior', () => {
 
     expect(container.querySelector('.diagnostics-status')?.textContent ?? '').not.toContain(done);
     expect(button === '保存' ? saveSettings : repair).toHaveBeenCalledOnce();
+    if (button === '保存') {
+      expect(saveSettings.mock.calls[0]?.[0]).not.toHaveProperty('subscriptionUrl');
+      expect(saveSettings.mock.calls[0]?.[0]).not.toHaveProperty('ruleProfile');
+      expect(saveSettings.mock.calls[0]?.[1]).toBe('advanced-save');
+    }
   });
 
   it('exports diagnostics through the preload API and reports completion only after a saved file', async () => {

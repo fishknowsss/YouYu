@@ -66,8 +66,21 @@ function SettingsView({
   const snapshotRuleProfile = snapshot.ruleProfile;
   const snapshotTunEnabled = snapshot.features.tunEnabled;
   const snapshotRefreshIntervalHours = snapshot.features.subscriptionRefreshIntervalHours;
+  const hasCloudIdentity = Boolean(snapshot.trafficIdentity);
+  const managedConfigLocked = hasCloudIdentity && (!snapshot.remoteConfigReady || !snapshot.canEditManagedConfig);
 
   useEffect(() => {
+    if (managedConfigLocked) {
+      setSubscriptionUrl(snapshotSubscriptionUrl);
+      setRuleProfile(snapshotRuleProfile);
+      const hasLocalDraft =
+        tunEnabled !== snapshotTunEnabled || subscriptionRefreshIntervalHours !== snapshotRefreshIntervalHours;
+      if (!hasLocalDraft) {
+        setSettingsDirty(false);
+        pendingSettingsKey.current = undefined;
+      }
+      return;
+    }
     if (settingsDirty && pendingSettingsKey.current !== snapshotSettingsKey) {
       return;
     }
@@ -79,18 +92,19 @@ function SettingsView({
     setSettingsDirty(false);
     pendingSettingsKey.current = undefined;
   }, [
+    managedConfigLocked,
     settingsDirty,
+    subscriptionRefreshIntervalHours,
     snapshotRefreshIntervalHours,
     snapshotRuleProfile,
     snapshotSettingsKey,
     snapshotSubscriptionUrl,
-    snapshotTunEnabled
+    snapshotTunEnabled,
+    tunEnabled
   ]);
 
   function save() {
     const nextSettings: AppSettingsInput = {
-      subscriptionUrl: subscriptionUrl.trim(),
-      ruleProfile,
       systemProxyEnabled: true,
       dnsEnhanced: true,
       snifferEnabled: true,
@@ -98,9 +112,14 @@ function SettingsView({
       strictRouteEnabled: true,
       subscriptionRefreshIntervalHours
     };
+    if (!managedConfigLocked) {
+      nextSettings.subscriptionUrl = subscriptionUrl.trim();
+      nextSettings.ruleProfile = ruleProfile;
+    }
     pendingSettingsKey.current = getInputSettingsKey({
       ...nextSettings,
-      subscriptionUrl: subscriptionUrl.trim()
+      subscriptionUrl: subscriptionUrl.trim(),
+      ruleProfile
     });
     onSave(nextSettings);
   }
@@ -112,10 +131,10 @@ function SettingsView({
         <div className="settings-form-grid">
           <div className="settings-row settings-subscription-row">
             <label className="field settings-subscription-field">
-              <span>订阅 · {formatConfigSource(snapshot.configSource)}</span>
+              <span>订阅 · {formatManagedConfigState(snapshot)}</span>
               <input
                 value={subscriptionUrl}
-                disabled={busy}
+                disabled={busy || managedConfigLocked}
                 onChange={(event) => {
                   setSettingsDirty(true);
                   setSubscriptionUrl(event.target.value);
@@ -127,10 +146,10 @@ function SettingsView({
 
           <div className="settings-row settings-control-row">
             <SettingsSelect<RuleProfile>
-              label="规则来源"
+              label={managedConfigLocked ? '规则来源 · 只读' : '规则来源'}
               value={ruleProfile}
               options={ruleProfileOptions}
-              disabled={busy}
+              disabled={busy || managedConfigLocked}
               onChange={(nextRuleProfile) => {
                 setSettingsDirty(true);
                 setRuleProfile(nextRuleProfile);
@@ -249,6 +268,11 @@ export function getSettingsRenderKey(snapshot: AppSnapshot): string {
     ruleProfile: snapshot.ruleProfile,
     configSource: snapshot.configSource ?? 'local',
     configUpdatedAt: snapshot.configUpdatedAt ?? '',
+    canEditManagedConfig: snapshot.canEditManagedConfig,
+    remoteConfigReady: snapshot.remoteConfigReady,
+    trafficIdentity: snapshot.trafficIdentity
+      ? `${snapshot.trafficIdentity.userId}:${snapshot.trafficIdentity.deviceId}`
+      : '',
     features: {
       systemProxyEnabled: snapshot.features.systemProxyEnabled,
       dnsEnhanced: snapshot.features.dnsEnhanced,
@@ -272,6 +296,14 @@ function formatConfigSource(source: AppSnapshot['configSource']): string {
   if (source === 'user') return '单独配置';
   if (source === 'global') return '跟随全局';
   return '仅本机';
+}
+
+function formatManagedConfigState(snapshot: AppSnapshot): string {
+  if (snapshot.trafficIdentity && !snapshot.remoteConfigReady) return '先同步';
+  if (snapshot.trafficIdentity && !snapshot.canEditManagedConfig) {
+    return `${formatConfigSource(snapshot.configSource)} · 只读`;
+  }
+  return formatConfigSource(snapshot.configSource);
 }
 
 function getDiagnosticIssueCopy(issueKind: AppSnapshot['diagnostics']['issueKind']): string {

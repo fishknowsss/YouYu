@@ -1,6 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { buildProxyRelaunchArguments, resumeProxyAfterRelaunchArgument } from '../../src/main/appRelaunch';
+import {
+  buildProxyRelaunchArguments,
+  resumeProxyAfterRelaunchArgument,
+  updateInstallFailedRelaunchArgument
+} from '../../src/main/appRelaunch';
+import {
+  updateRelaunchAcknowledgementNonceArgument,
+  updateRelaunchAcknowledgementPathArgument
+} from '../../src/main/updateRelaunchAcknowledgement';
 
 describe('application relaunch safety', () => {
   it('preserves normal arguments and emits one proxy-resume argument', () => {
@@ -9,7 +17,12 @@ describe('application relaunch safety', () => {
         'out/main/index.js',
         '--hidden',
         resumeProxyAfterRelaunchArgument,
-        '--shutdown-for-install'
+        '--shutdown-for-install',
+        updateInstallFailedRelaunchArgument,
+        updateRelaunchAcknowledgementPathArgument,
+        String.raw`C:\Users\Example\AppData\Local\Temp\youyu-update-relaunch.ready.json`,
+        updateRelaunchAcknowledgementNonceArgument,
+        '8fb748f0-540a-4f7a-9bd2-144020b83e9b'
       ])
     ).toEqual(['out/main/index.js', '--hidden', resumeProxyAfterRelaunchArgument]);
   });
@@ -35,8 +48,8 @@ describe('application relaunch safety', () => {
     const initialization = source.slice(source.indexOf('.whenReady()'));
 
     expect(restart.indexOf('await requireTrafficIdentity()')).toBeLessThan(restart.indexOf('await cleanupBeforeExit'));
-    expect(initialization).toContain('if (resumeProxyAfterRelaunch)');
-    expect(initialization).toContain('void startProxy()');
+    expect(initialization).toContain('if (updateRelaunchResumeRequested)');
+    expect(initialization).toContain('resumeProxyFromRelaunch()');
   });
 
   it('runs one complete tray repair before relaunching without an intermediate core restart', async () => {

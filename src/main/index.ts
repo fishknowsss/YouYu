@@ -24,15 +24,15 @@ import { runRuntimeOperationWithSafeRetry } from './runtimeRecoveryPolicy';
 import { createAppRuntimeCoordinator } from './appRuntimeCoordinator';
 import { IpcOperationRegistry } from './ipcOperations';
 import { LatestOperationCoordinator } from './latestOperationCoordinator';
+import { NodeSelectionCoordinator } from './nodeSelectionCoordinator';
 import { parseIpcArguments } from './ipcSchemas';
 import { connectivityServices, probeProxyExitRegionCode, testAllConnectivity, testConnectivity } from './connectivity';
 import { createMihomoApiClient } from './mihomo/api';
 import {
-  detectNodeRegion,
   expectedExitRegionCode,
-  exitRegionLabel,
   isNodeInPreferredRegion,
   preferredRegionLabel,
+  resolveNodeSelectionFallbackNotice,
   resolveNodeSelectionPolicy,
   type NodeSelectionPolicy
 } from './mihomo/nodeSelectionPolicy';
@@ -65,6 +65,7 @@ import { createTemporaryRuntimeLeaseManager, createTrafficRegistrationCoordinato
 import { TrafficStore } from './traffic/store';
 import { TrafficTracker } from './traffic/tracker';
 import { RemoteConfigClient, type ActiveRemoteConfigSnapshot } from './remoteConfig';
+import { syncRequiredBoundRemoteConfig } from './remoteConfigAuthority';
 import { createRemoteSubscriptionCoordinator } from './remoteSubscription';
 import { createSubscriptionCoordinator, type SubscriptionRefreshSource } from './subscriptionCoordinator';
 import { calculateMainWindowMetrics } from './windowSizing';
@@ -93,11 +94,20 @@ import {
 import { updateInstallingMessage } from '../shared/updateProgress';
 import { deferUpdateInstallerLaunch } from './updateInstallHandoff';
 import { launchDownloadedUpdateInstaller, resolveDownloadedUpdateInstallerPath } from './updateInstallerLauncher';
+import {
+  resolveUpdateRelaunchAcknowledgementRequest,
+  type UpdateRelaunchAcknowledgementRequest,
+  writeUpdateRelaunchAcknowledgement
+} from './updateRelaunchAcknowledgement';
 import { createCodexConnectionRecoveryCoordinator } from './codexConnectionRecovery';
 import { createPetVisibilityController } from './petVisibilityController';
 import { applyPetWindowTaskbarPolicy } from './petWindowPolicy';
 import { createRuntimeIntentController } from './runtimeIntent';
-import { buildProxyRelaunchArguments, resumeProxyAfterRelaunchArgument } from './appRelaunch';
+import {
+  buildProxyRelaunchArguments,
+  resumeProxyAfterRelaunchArgument,
+  updateInstallFailedRelaunchArgument
+} from './appRelaunch';
 import { clearMihomoRepairCache, runNetworkRepair, type NetworkRepairOptions } from './networkRepair';
 import {
   DiagnosticLogBuffer,
@@ -139,8 +149,15 @@ const directNetworkFetch: FetchLike = async (input, init) => {
 const startHidden = process.argv.includes('--hidden') || process.argv.includes('--startup');
 const shutdownForInstall = process.argv.includes('--shutdown-for-install');
 const resumeProxyAfterRelaunch = process.argv.includes(resumeProxyAfterRelaunchArgument);
+const recoveredFromUpdateInstallFailure = process.argv.includes(updateInstallFailedRelaunchArgument);
+const startupUpdateRelaunchAcknowledgement = resolveUpdateRelaunchAcknowledgementRequest(process.argv);
 const windowsStartupTask = createWindowsStartupTask({ executablePath: process.execPath });
 let mainWindow: BrowserWindow | null = null;
+let mainWindowContentReady = false;
+let applicationInitializationReady = false;
+let updateRelaunchResumeRequested = resumeProxyAfterRelaunch;
+let updateRelaunchResumeStarted = false;
+let recoveredUpdateInstallFailureReported = false;
 let petWindow: BrowserWindow | null = null;
 let noticeWindow: BrowserWindow | null = null;
 const petIpcChannels = new Set<string>([
@@ -233,6 +250,7 @@ let runtimePorts = {
   dnsPort: 1053
 };
 const nodeTestOperations = new LatestOperationCoordinator<AppSnapshot>();
+const nodeSelectionCoordinator = new NodeSelectionCoordinator();
 let subscriptionRevision = 0;
 const ipcOperations = new IpcOperationRegistry((error) => appendLog(`取消操作清理失败: ${formatError(error)}`));
 const runtimeIntent = createRuntimeIntentController();
@@ -365,7 +383,6 @@ const remoteConfigClient = new RemoteConfigClient({
 const remoteSubscriptionCoordinator = createRemoteSubscriptionCoordinator({
   readSettings: () => settingsStore.read(),
   updateRemoteSubscription: (value) => settingsStore.update({ remoteSubscriptionUrl: value }),
-  updateRuleProfile: (value) => settingsStore.update({ ruleProfile: value }),
   isSnapshotCurrent: (snapshot) => remoteConfigClient.isActiveConfigSnapshotCurrent(snapshot),
   getActiveSnapshot: () => remoteConfigClient.getActiveConfigSnapshot(),
   onChanged: (url) => {
@@ -485,7 +502,7 @@ function recordError(context: string, error: unknown) {
 async function exportCurrentDiagnostics() {
   const settings = await settingsStore.read().catch(() => undefined);
   const exportedAt = new Date();
-  const logs = appLogs.getLogs();
+  const logs = appLogs.getExportLogs();
 
   return exportDiagnosticReport(
     {
@@ -774,12 +791,15 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
     downloadedPaths: downloadedUpdateInstallerPaths,
     updaterInstallerPath: getAutoUpdaterInstallerPath()
   });
+  const expectedVersion = preparation.snapshot.downloadedVersion;
+  if (!expectedVersion) throw new Error('downloaded update version is unavailable');
 
   updateInstallerLaunchPending = true;
   updateInstallerLaunchFailed = false;
   updateInstallerLaunchStarted = false;
   updateInstallerBeforeQuitObserved = false;
   updateInstallRuntimeWasRunning = lifecycle.getStatus() === 'running';
+  const shouldResumeProxyAfterUpdate = updateInstallRuntimeWasRunning;
   updateInstallRuntimeIntentGeneration = runtimeIntent.capture();
   const installAttempt = ++updateInstallAttempt;
   lifecycle.suspendStarts();
@@ -796,7 +816,12 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
         if (!updateInstallerLaunchPending || updateInstallAttempt !== installAttempt) {
           return;
         }
-        await launchDownloadedUpdateInstaller({ installerPath, handoff });
+        await launchDownloadedUpdateInstaller({
+          installerPath,
+          expectedVersion,
+          resumeProxyAfterRelaunch: shouldResumeProxyAfterUpdate,
+          handoff
+        });
         if (!updateInstallerLaunchPending || updateInstallAttempt !== installAttempt) {
           throw new Error('update installer launch was canceled');
         }
@@ -826,6 +851,41 @@ function getAutoUpdaterInstallerPath(): unknown {
 
 function recoverFromUpdateInstallerLaunchFailure(error: unknown) {
   recoverFromUpdateInstallFailure('启动安装器失败', error);
+}
+
+async function syncRequiredRemoteConfig(options: RemoteConfigSyncOptions = {}): Promise<boolean> {
+  return syncRequiredBoundRemoteConfig({
+    sync: () => syncRemoteConfig({ ...options, throwOnError: false }),
+    readSnapshot: () => remoteConfigClient.getActiveConfigSnapshot()
+  });
+}
+
+function reportRecoveredUpdateInstallFailure() {
+  if (recoveredUpdateInstallFailureReported) return;
+  recoveredUpdateInstallFailureReported = true;
+  const message = '更新安装未完成，已重新打开当前版本，请重新检查并安装';
+  appendLog(message);
+  setUpdateSnapshot({ status: 'failed', message });
+  refreshTrayMenu();
+  void broadcastSnapshot().catch((error) => recordError('更新失败状态通知失败', error));
+}
+
+async function acknowledgeUpdateRelaunchWhenWindowReady(request: UpdateRelaunchAcknowledgementRequest): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (!mainWindowContentReady || !mainWindow || mainWindow.isDestroyed()) {
+    if (Date.now() >= deadline) throw new Error('update relaunch window did not become ready');
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+  await writeUpdateRelaunchAcknowledgement(request, { appVersion });
+}
+
+function resumeProxyFromRelaunch() {
+  updateRelaunchResumeRequested = true;
+  if (!applicationInitializationReady || updateRelaunchResumeStarted) return;
+  updateRelaunchResumeStarted = true;
+  void startProxy()
+    .then((snapshot) => sendSnapshotToWindows(snapshot))
+    .catch((error) => recordError('重启后恢复代理失败', error));
 }
 
 function recoverFromUpdateInstallFailure(prefix: string, error: unknown) {
@@ -1180,32 +1240,34 @@ const nodeHealthCoordinator = createNodeHealthCoordinator<RuntimeNodeHealthConte
     }
   },
   async recoverNode(context, signal) {
-    const mihomoApi = createRuntimeMihomoApi({ secret: context.settings.controllerSecret });
-    const selectedNode = isAutomaticStrategy(context.settings.strategy)
-      ? context.settings.strategy === 'auto'
-        ? await selectPreferredAutoNode({ avoidNode: context.nodeName, signal }).catch((error) => {
-            signal.throwIfAborted();
-            appendLog(`自动地区节点恢复失败: ${formatError(error)}`);
-            return undefined;
-          })
-        : await mihomoApi.selectBestUsableNodeForStrategy(context.settings.strategy, {
-            avoidNode: context.nodeName,
-            signal
-          })
-      : await mihomoApi.selectBestUsableNode({ avoidNode: context.nodeName, signal });
-    signal.throwIfAborted();
-    if (!selectedNode) return undefined;
-    await settingsStore.update(
-      isAutomaticStrategy(context.settings.strategy)
-        ? { strategy: context.settings.strategy, selectedNode: null }
-        : { strategy: 'manual', selectedNode }
-    );
-    signal.throwIfAborted();
-    await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
-    signal.throwIfAborted();
-    await mihomoApi.flushDnsCache().catch((error) => appendLog(`刷新 DNS 缓存失败: ${formatError(error)}`));
-    signal.throwIfAborted();
-    return selectedNode;
+    return nodeSelectionCoordinator.replaceAutomatic(signal, async (operationSignal) => {
+      const mihomoApi = createRuntimeMihomoApi({ secret: context.settings.controllerSecret });
+      const selectedNode = isAutomaticStrategy(context.settings.strategy)
+        ? context.settings.strategy === 'auto'
+          ? await performPreferredAutoNode({ avoidNode: context.nodeName, signal: operationSignal }).catch((error) => {
+              operationSignal.throwIfAborted();
+              appendLog(`自动地区节点恢复失败: ${formatError(error)}`);
+              return undefined;
+            })
+          : await mihomoApi.selectBestUsableNodeForStrategy(context.settings.strategy, {
+              avoidNode: context.nodeName,
+              signal: operationSignal
+            })
+        : await mihomoApi.selectBestUsableNode({ avoidNode: context.nodeName, signal: operationSignal });
+      operationSignal.throwIfAborted();
+      if (!selectedNode) return undefined;
+      await settingsStore.update(
+        isAutomaticStrategy(context.settings.strategy)
+          ? { strategy: context.settings.strategy, selectedNode: null }
+          : { strategy: 'manual', selectedNode }
+      );
+      operationSignal.throwIfAborted();
+      await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+      operationSignal.throwIfAborted();
+      await mihomoApi.flushDnsCache().catch((error) => appendLog(`刷新 DNS 缓存失败: ${formatError(error)}`));
+      operationSignal.throwIfAborted();
+      return selectedNode;
+    });
   },
   onTransientFailure: (nodeName) => appendLog(`当前节点短暂异常，等待复查: ${nodeName}`),
   onRecovering: (nodeName) => appendLog(`当前节点不可用，正在切换: ${nodeName}`),
@@ -1337,6 +1399,8 @@ async function createSnapshot(): Promise<AppSnapshot> {
     strategy: activeStrategy,
     ruleProfile: remoteConfigSnapshot.config?.ruleProfile ?? settings.ruleProfile,
     configSource: remoteConfigSnapshot.config?.configSource ?? 'local',
+    canEditManagedConfig: remoteConfigSnapshot.canEditManagedConfig,
+    remoteConfigReady: remoteConfigSnapshot.ready,
     configUpdatedAt: remoteConfigSnapshot.config?.updatedAt,
     features: {
       systemProxyEnabled: settings.systemProxyEnabled,
@@ -1579,17 +1643,24 @@ function publishNodeSelectionNotice(message: string): void {
   }
 }
 
-async function selectPreferredAutoNode(
+function selectPreferredAutoNode(
   options: {
     signal?: AbortSignal;
     avoidNode?: string;
-    restoreNodeOnFailure?: string;
   } = {}
 ): Promise<string> {
+  return nodeSelectionCoordinator.replaceAutomatic(options.signal, (signal) =>
+    performPreferredAutoNode({ ...options, signal })
+  );
+}
+
+async function performPreferredAutoNode(options: { signal: AbortSignal; avoidNode?: string }): Promise<string> {
   const settings = await settingsStore.read();
   const policy = await readNodeSelectionPolicy();
   const expectedRegion = expectedExitRegionCode(policy.preferredRegion);
   let selectedExitRegion: string | undefined;
+  let selectedViaVerificationFallback = false;
+  const probedExitRegions = new Map<string, string | undefined>();
   const mihomoApi = createRuntimeMihomoApi({ secret: settings.controllerSecret });
   const selectedNode = await mihomoApi.selectBestUsableNodeForStrategy('auto', {
     avoidNode: options.avoidNode,
@@ -1601,6 +1672,7 @@ async function selectPreferredAutoNode(
         appendLog(`出口地区验证失败: ${nodeName} (${formatError(error)})`);
         return undefined;
       });
+      probedExitRegions.set(nodeName, actualRegion);
       if (!expectedRegion) {
         selectedExitRegion = actualRegion;
         return true;
@@ -1616,12 +1688,18 @@ async function selectPreferredAutoNode(
       }
       selectedExitRegion = actualRegion;
       return true;
-    }
+    },
+    verifyFallbackNode:
+      expectedRegion && policy.regionFallback === 'global'
+        ? async (nodeName, signal) => {
+            signal?.throwIfAborted();
+            selectedExitRegion = probedExitRegions.get(nodeName);
+            selectedViaVerificationFallback = true;
+            return true;
+          }
+        : undefined
   });
   if (!selectedNode) {
-    if (options.restoreNodeOnFailure) {
-      await mihomoApi.selectNode(options.restoreNodeOnFailure).catch(() => undefined);
-    }
     throw new Error(
       policy.preferredRegion === 'auto'
         ? '没有可用节点'
@@ -1630,15 +1708,13 @@ async function selectPreferredAutoNode(
           : '没有可用节点'
     );
   }
-  const selectedRegion = selectedExitRegion?.toLowerCase() ?? detectNodeRegion(selectedNode);
-  if (
-    policy.preferredRegion !== 'auto' &&
-    selectedRegion !== policy.preferredRegion &&
-    policy.regionFallback === 'global'
-  ) {
-    const message = `${preferredRegionLabel(policy.preferredRegion)}节点均不可用，已自动切换至${exitRegionLabel(selectedRegion)}节点`;
-    publishNodeSelectionNotice(message);
-  }
+  const fallbackNotice = resolveNodeSelectionFallbackNotice({
+    policy,
+    selectedNode,
+    selectedExitRegion,
+    selectedViaVerificationFallback
+  });
+  if (fallbackNotice) publishNodeSelectionNotice(fallbackNotice);
   return selectedNode;
 }
 
@@ -1657,7 +1733,7 @@ async function performStartProxy(signal?: AbortSignal, requestedIntentGeneration
   await requireTrafficIdentity();
   const intentGeneration = requestedIntentGeneration ?? runtimeIntent.requestStart();
   throwIfRuntimeIntentCanceled(intentGeneration);
-  await syncRemoteConfig({ signal });
+  await syncRequiredRemoteConfig({ signal });
   throwIfAborted(signal);
   throwIfRuntimeIntentCanceled(intentGeneration);
   await startLifecycleWithSafeRetry(signal, intentGeneration);
@@ -1665,12 +1741,18 @@ async function performStartProxy(signal?: AbortSignal, requestedIntentGeneration
   throwIfRuntimeIntentCanceled(intentGeneration);
   await trafficRegistration.activatePending();
   throwIfRuntimeIntentCanceled(intentGeneration);
-  await syncRemoteConfig({
-    proxyUrl: getRuntimeTrafficProxyUrl(),
-    restartIfRunning: true,
-    signal,
-    intentGeneration
-  });
+  try {
+    await syncRequiredRemoteConfig({
+      proxyUrl: getRuntimeTrafficProxyUrl(),
+      restartIfRunning: true,
+      signal,
+      intentGeneration
+    });
+  } catch (error) {
+    runtimeIntent.cancel();
+    await lifecycle.stop().catch((stopError) => appendLog(`云端配置未就绪后停止代理失败: ${formatError(stopError)}`));
+    throw error;
+  }
   throwIfAborted(signal);
   throwIfRuntimeIntentCanceled(intentGeneration);
   const startedSettings = await settingsStore.read();
@@ -1706,23 +1788,23 @@ async function selectBestAutoNode(signal?: AbortSignal): Promise<AppSnapshot> {
     return createSnapshot();
   }
 
-  const currentNode = await createRuntimeMihomoApi({ secret: settings.controllerSecret })
-    .getCurrentNode()
-    .catch(() => '');
-  const selectedNode = await selectPreferredAutoNode({
-    signal,
-    restoreNodeOnFailure: settings.strategy === 'manual' ? currentNode : undefined
-  });
-  throwIfAborted(signal);
-  settings = await settingsStore.update({ strategy: 'auto', selectedNode: null });
+  return nodeSelectionCoordinator.runUserAction(async () => {
+    throwIfAborted(signal);
+    if (lifecycle.getStatus() !== 'running') {
+      throw new Error('代理已停止，请重新启动后再选点');
+    }
+    const selectedNode = await performPreferredAutoNode({ signal: signal ?? new AbortController().signal });
+    throwIfAborted(signal);
+    settings = await settingsStore.update({ strategy: 'auto', selectedNode: null });
 
-  const mihomoApi = createRuntimeMihomoApi({ secret: settings.controllerSecret });
-  await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
-  await mihomoApi.flushDnsCache().catch((error) => appendLog(`刷新 DNS 缓存失败: ${formatError(error)}`));
-  appendLog(`已自动选择可用节点: ${selectedNode}`);
-  clearLastError();
-  scheduleNodeHealthCheck(0);
-  return createSnapshot();
+    const mihomoApi = createRuntimeMihomoApi({ secret: settings.controllerSecret });
+    await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+    await mihomoApi.flushDnsCache().catch((error) => appendLog(`刷新 DNS 缓存失败: ${formatError(error)}`));
+    appendLog(`已自动选择可用节点: ${selectedNode}`);
+    clearLastError();
+    scheduleNodeHealthCheck(0);
+    return createSnapshot();
+  });
 }
 
 async function selectVerifiedManualNode(
@@ -2038,18 +2120,29 @@ async function performTrafficIdentityRegistration(
         );
       const activeIntentGeneration = runtimeIntent.capture();
       const newIntentGeneration = activeIntentGeneration === undefined ? undefined : runtimeIntent.requestStart();
+      let newIdentityConfigReady = true;
       try {
-        await syncRemoteConfig({
+        await syncRequiredRemoteConfig({
           proxyUrl: getRuntimeTrafficProxyUrl(),
-          throwOnError: true
+          quiet: true
         });
       } catch (error) {
+        newIdentityConfigReady = false;
         recordPostCommitIssue(
           '\u7528\u6237\u5df2\u5207\u6362\uff0c\u65b0\u7528\u6237\u914d\u7f6e\u540c\u6b65\u5931\u8d25',
           error
         );
       }
-      if (newIntentGeneration !== undefined) {
+      if (!newIdentityConfigReady) {
+        try {
+          await appRuntimeCoordinator.stop();
+        } catch (error) {
+          recordPostCommitIssue(
+            '\u7528\u6237\u5df2\u5207\u6362\uff0c\u672a\u83b7\u5f97\u4e91\u7aef\u914d\u7f6e\u540e\u505c\u6b62\u4ee3\u7406\u5931\u8d25',
+            error
+          );
+        }
+      } else if (newIntentGeneration !== undefined) {
         try {
           await restartLifecycleForExpectedIntent(newIntentGeneration);
           trafficTracker.start();
@@ -2181,22 +2274,24 @@ function registerIpc() {
     );
   });
   ipcMain.handle(ipcChannels.selectNode, async (_event, name: string) => {
-    const settings = await settingsStore.read();
     if (lifecycle.getStatus() !== 'running') {
       await requireTrafficIdentity();
       await startLifecycleForUser();
     }
     nodeHealthCoordinator.invalidate();
-    const mihomoApi = createMihomoApiClient({
-      secret: settings.controllerSecret,
-      controllerPort: runtimePorts.controllerPort
+    return nodeSelectionCoordinator.runUserAction(async () => {
+      const settings = await settingsStore.read();
+      const mihomoApi = createMihomoApiClient({
+        secret: settings.controllerSecret,
+        controllerPort: runtimePorts.controllerPort
+      });
+      const selectedNode = await selectVerifiedManualNode(mihomoApi, name);
+      await settingsStore.update({ strategy: 'manual', selectedNode });
+      await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
+      await mihomoApi.flushDnsCache().catch((error) => appendLog(`刷新 DNS 缓存失败: ${formatError(error)}`));
+      scheduleNodeHealthCheck(0);
+      return createSnapshot();
     });
-    const selectedNode = await selectVerifiedManualNode(mihomoApi, name);
-    await settingsStore.update({ strategy: 'manual', selectedNode });
-    await mihomoApi.closeConnections().catch((error) => appendLog(`关闭旧连接失败: ${formatError(error)}`));
-    await mihomoApi.flushDnsCache().catch((error) => appendLog(`刷新 DNS 缓存失败: ${formatError(error)}`));
-    scheduleNodeHealthCheck(0);
-    return createSnapshot();
   });
   ipcMain.handle(ipcChannels.selectBestAutoNode, async (event, request?: OperationRequest) => {
     return runCancelableOperation(
@@ -2218,18 +2313,20 @@ function registerIpc() {
   });
   ipcMain.handle(ipcChannels.selectStrategy, async (_event, strategy) => {
     nodeHealthCoordinator.invalidate();
-    const snapshot = await selectMihomoStrategy(
-      {
-        settingsStore,
-        lifecycle,
-        runtime: userRuntimeActions,
-        createMihomoApi: createRuntimeMihomoApi,
-        createSnapshot
-      },
-      strategy
-    );
-    scheduleNodeHealthCheck(0);
-    return snapshot;
+    return nodeSelectionCoordinator.runUserAction(async () => {
+      const snapshot = await selectMihomoStrategy(
+        {
+          settingsStore,
+          lifecycle,
+          runtime: userRuntimeActions,
+          createMihomoApi: createRuntimeMihomoApi,
+          createSnapshot
+        },
+        strategy
+      );
+      scheduleNodeHealthCheck(0);
+      return snapshot;
+    });
   });
   ipcMain.handle(ipcChannels.setMode, async (_event, mode) => {
     nodeHealthCoordinator.invalidate();
@@ -2345,7 +2442,7 @@ function registerIpc() {
       cancelProxyStart
     );
   });
-  ipcMain.handle(ipcChannels.saveSettings, async (event, settings, request?: OperationRequest) => {
+  ipcMain.handle(ipcChannels.saveSettings, async (event, settings, intent, request?: OperationRequest) => {
     return runCancelableOperation(
       event.sender.id,
       request,
@@ -2360,7 +2457,7 @@ function registerIpc() {
                 lifecycle,
                 runtime: userRuntimeActions,
                 remoteConfig: {
-                  read: () => remoteConfigClient.getActiveConfig(),
+                  readSnapshot: () => remoteConfigClient.getActiveConfigSnapshot(),
                   update: async (input, updateSignal) =>
                     (
                       await remoteConfigClient.updateUserConfig(input, {
@@ -2376,7 +2473,7 @@ function registerIpc() {
                 createSnapshot
               },
               settings,
-              { signal }
+              { signal, intent }
             );
             if (isDiagnosticIssueResolvedByOperation('save-settings', issueBeforeSave)) {
               clearLastErrorIfUnchanged(lastErrorBeforeSave);
@@ -3260,6 +3357,7 @@ function createTray() {
 }
 
 async function createWindow() {
+  mainWindowContentReady = false;
   const display = screen.getPrimaryDisplay();
   const mainWindowMetrics = calculateMainWindowMetrics(display.size, display.workAreaSize);
   const win = new BrowserWindow({
@@ -3315,6 +3413,7 @@ async function createWindow() {
   win.on('closed', () => {
     if (mainWindow === win) {
       mainWindow = null;
+      mainWindowContentReady = false;
     }
   });
 
@@ -3322,6 +3421,9 @@ async function createWindow() {
     await win.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
     await win.loadFile(join(__dirname, '../renderer/index.html'));
+  }
+  if (mainWindow === win && !win.isDestroyed()) {
+    mainWindowContentReady = true;
   }
 }
 
@@ -3544,6 +3646,7 @@ async function cleanupBeforeExit(options: ExitCleanupOptions = {}): Promise<bool
   stopNodeHealthMonitor();
   appRuntimeCoordinator.stopRecovery();
   await nodeTestOperations.cancel();
+  await nodeSelectionCoordinator.cancel();
   stopRemoteConfigPolling();
   if (petFeatureEnabled) {
     stopPetFullscreenProbe({ restoreVisibility: false });
@@ -3606,8 +3709,21 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
       void cleanupBeforeExit().catch((error) => recordError('退出清理失败', error));
       return;
     }
-    if (commandLine.includes('--hidden') || commandLine.includes('--startup')) return;
-    showMainWindow();
+    const relaunchAcknowledgement = resolveUpdateRelaunchAcknowledgementRequest(commandLine);
+    if (commandLine.includes(updateInstallFailedRelaunchArgument)) {
+      reportRecoveredUpdateInstallFailure();
+      showMainWindow();
+    } else if (!commandLine.includes('--hidden') && !commandLine.includes('--startup')) {
+      showMainWindow();
+    }
+    if (commandLine.includes(resumeProxyAfterRelaunchArgument)) {
+      resumeProxyFromRelaunch();
+    }
+    if (relaunchAcknowledgement) {
+      void acknowledgeUpdateRelaunchWhenWindowReady(relaunchAcknowledgement).catch((error) =>
+        recordError('更新后重开确认失败', error)
+      );
+    }
   });
 
   app
@@ -3625,19 +3741,25 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
       await allocateRuntimePorts();
       registerIpc();
       setupAutoUpdates();
+      if (recoveredFromUpdateInstallFailure) reportRecoveredUpdateInstallFailure();
       await reconcileLaunchAtLogin();
       createTray();
-      void createWindow().catch((error) => recordError('创建主窗口失败', error));
+      applicationInitializationReady = true;
+      const initialWindow = createWindow();
+      void initialWindow.catch((error) => recordError('创建主窗口失败', error));
+      if (startupUpdateRelaunchAcknowledgement) {
+        void initialWindow
+          .then(() => acknowledgeUpdateRelaunchWhenWindowReady(startupUpdateRelaunchAcknowledgement))
+          .catch((error) => recordError('更新后重开确认失败', error));
+      }
       startRemoteConfigPolling();
       void broadcastSnapshot().catch((error) => recordError('初始化通知快照失败', error));
       void refreshTrafficTotalsFromServer();
       if (petFeatureEnabled) {
         void createPetWindow().catch((error) => recordError('创建桌宠窗口失败', error));
       }
-      if (resumeProxyAfterRelaunch) {
-        void startProxy()
-          .then((snapshot) => sendSnapshotToWindows(snapshot))
-          .catch((error) => recordError('重启后恢复代理失败', error));
+      if (updateRelaunchResumeRequested) {
+        resumeProxyFromRelaunch();
       }
 
       app.on('activate', () => {

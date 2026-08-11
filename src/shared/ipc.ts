@@ -3,12 +3,14 @@ export type AppBuildChannel = 'standard' | 'in' | 'no';
 export type MihomoMode = 'rule' | 'global' | 'direct';
 export type StrategyKey = 'manual' | 'auto' | 'fallback' | 'load-balance' | 'direct';
 export type RuleProfile = 'ruleset' | 'subscription';
+export type SettingsSaveIntent = 'easy-start' | 'advanced-save';
 export type PreferredNodeRegion = 'auto' | 'jp' | 'hk' | 'tw' | 'sg' | 'us' | 'kr';
 export type RegionFallback = 'strict' | 'global';
 export type RemoteControlConfig = {
   version: number;
   enabled: boolean;
   configSource?: 'global' | 'user';
+  canEditManagedConfig?: boolean;
   subscriptionUrl?: string;
   ruleProfile?: RuleProfile;
   preferredRegion?: PreferredNodeRegion;
@@ -296,6 +298,8 @@ export type AppSnapshot = {
   strategy: StrategyKey;
   ruleProfile: RuleProfile;
   configSource?: 'local' | 'global' | 'user';
+  canEditManagedConfig?: boolean;
+  remoteConfigReady?: boolean;
   configUpdatedAt?: string;
   features: FeatureSettings;
   runtime: RuntimeStats;
@@ -336,7 +340,11 @@ export type YouYuApi = {
   testAllConnectivity: () => Promise<ConnectivityResult[]>;
   closeConnections: () => Promise<AppSnapshot>;
   updateSubscription: (request?: OperationRequest) => Promise<AppSnapshot>;
-  saveSettings: (settings: AppSettingsInput, request?: OperationRequest) => Promise<AppSnapshot>;
+  saveSettings: (
+    settings: AppSettingsInput,
+    intent: SettingsSaveIntent,
+    request?: OperationRequest
+  ) => Promise<AppSnapshot>;
   registerTrafficIdentity: (input: TrafficRegistrationInput) => Promise<AppSnapshot>;
   acknowledgeUserNotice: (revision: number) => Promise<AppSnapshot>;
   wakeRemoteConfig: () => Promise<void>;

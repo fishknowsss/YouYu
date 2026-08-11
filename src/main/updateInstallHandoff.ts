@@ -8,7 +8,7 @@ import {
 } from './platform/windowsUserIdentity';
 
 export const updateInstallerHandoffDelayMs = 2000;
-export const updateInstallerHandoffLifetimeMs = 5 * 60 * 1000;
+export const updateInstallerHandoffLifetimeMs = 14 * 60 * 1000;
 
 export const updateInstallerHandoffEnvironment = {
   path: 'YOUYU_UPDATE_HANDOFF_PATH',
@@ -53,6 +53,23 @@ export function resolveUpdateInstallerHandoffAcknowledgementPath(
     throw new Error('update handoff path does not match its nonce');
   }
   return win32.join(win32.dirname(handoffPath), 'youyu-update-handoff-' + nonce + '.ready.json');
+}
+
+export function resolveUpdateInstallerCancellationPath(
+  options: Pick<UpdateInstallerHandoffLease, 'path' | 'nonce'>
+): string {
+  const handoffPath = win32.normalize(options.path.trim());
+  if (!win32.isAbsolute(handoffPath) || handoffPath.includes('\0')) {
+    throw new Error('invalid update handoff path');
+  }
+  const nonce = options.nonce.trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(nonce)) {
+    throw new Error('invalid update handoff nonce');
+  }
+  if (win32.basename(handoffPath).toLowerCase() !== 'youyu-update-handoff-' + nonce + '.json') {
+    throw new Error('update handoff path does not match its nonce');
+  }
+  return win32.join(win32.dirname(handoffPath), 'youyu-update-cancel-' + nonce + '.json');
 }
 
 export function resolveWindowsUpdateHandoffDirectory(environment: NodeJS.ProcessEnv = process.env): string {
@@ -135,6 +152,7 @@ export async function createUpdateInstallerHandoff(
     `youyu-update-handoff-${nonce}.json`
   );
   const acknowledgementPath = resolveUpdateInstallerHandoffAcknowledgementPath({ path, nonce });
+  const cancellationPath = resolveUpdateInstallerCancellationPath({ path, nonce });
   const assignedEnvironment: Record<string, string> = {
     [updateInstallerHandoffEnvironment.path]: path,
     [updateInstallerHandoffEnvironment.nonce]: nonce,
@@ -147,12 +165,9 @@ export async function createUpdateInstallerHandoff(
   for (const [name, value] of Object.entries(assignedEnvironment)) environment[name] = value;
 
   let abandoned = false;
-  let cancelExpiryCleanup: (() => void) | undefined;
   const abandon = async (): Promise<void> => {
     if (abandoned) return;
     abandoned = true;
-    cancelExpiryCleanup?.();
-    cancelExpiryCleanup = undefined;
     try {
       await Promise.all([rm(path, { force: true }), rm(acknowledgementPath, { force: true })]);
     } finally {
@@ -169,7 +184,13 @@ export async function createUpdateInstallerHandoff(
       timer.unref();
       return () => clearTimeout(timer);
     });
-  cancelExpiryCleanup = scheduleExpiryCleanup(abandon, updateInstallerHandoffLifetimeMs);
+  scheduleExpiryCleanup(async () => {
+    try {
+      await abandon();
+    } finally {
+      await rm(cancellationPath, { force: true });
+    }
+  }, updateInstallerHandoffLifetimeMs);
 
   return {
     path,

@@ -1696,6 +1696,8 @@ test('admin page exposes the fixed-viewport management workspace without removed
   assert.match(script, /const token = tokenOverride \|\| committedToken;/);
   assert.match(page, /value="ruleset">智能规则/);
   assert.match(page, /value="subscription">机场规则/);
+  assert.match(page, /id="userCanEditManagedConfig"/);
+  assert.match(page, /<option value="false">不允许<\/option><option value="true">允许<\/option>/);
   assert.match(page, /data-drawer-tab="merge">合并用户/);
   assert.match(page, /data-drawer-tab="profile">资料通知/);
   assert.match(page, /id="userProfileName"[^>]*maxlength="80"/);
@@ -1846,6 +1848,16 @@ test('admin page edits a user profile and plain-text targeted notice end to end'
   await waitFor(() => document.getElementById('drawerContent').hidden === false);
   assert.equal(document.getElementById('userProfileName').value, 'Alice');
   assert.equal(document.getElementById('userNoticeDuration').value, '10');
+  const permissionSelect = document.getElementById('userCanEditManagedConfig');
+  assert.equal(permissionSelect.value, 'false');
+  permissionSelect.value = 'true';
+  permissionSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  await waitFor(
+    () =>
+      database.queryAll('SELECT can_edit_managed_config FROM users WHERE id = ?', identity.userId)[0]
+        ?.can_edit_managed_config === 1
+  );
+  assert.equal(permissionSelect.value, 'true');
 
   const profileInput = document.getElementById('userProfileName');
   profileInput.value = 'Alice 修正';
@@ -1895,7 +1907,12 @@ test('admin writes reject non-object JSON and bodies larger than 64 KiB', async 
   context.after(() => database.close());
   await addKnownUser(database);
 
-  for (const path of ['/api/admin/config', '/api/admin/traffic-limit', '/api/admin/users/user-1/config']) {
+  for (const path of [
+    '/api/admin/config',
+    '/api/admin/traffic-limit',
+    '/api/admin/users/user-1/config',
+    '/api/admin/users/user-1/config-permission'
+  ]) {
     const nonObject = await requestAdminConfig(database, path, '[]');
     assert.equal(nonObject.status, 400, path);
     await assertWorkerError(nonObject, 400, 'invalid json');
@@ -2620,6 +2637,17 @@ test('a signed client config save becomes a user override and an admin reset res
   });
   assert.equal(global.status, 200);
 
+  const initial = await getClientConfig(database, identity, deviceSeed);
+  assert.equal((await initial.json()).config.canEditManagedConfig, false);
+  const forbidden = await updateClientConfig(database, identity, deviceSeed, {
+    ruleProfile: 'subscription'
+  });
+  await assertWorkerError(forbidden, 403, 'managed config editing forbidden', 'MANAGED_CONFIG_EDITING_FORBIDDEN');
+
+  const granted = await updateAdminManagedConfigPermission(database, identity.userId, true);
+  assert.equal(granted.status, 200);
+  assert.equal((await granted.json()).canEditManagedConfig, true);
+
   const saved = await updateClientConfig(database, identity, deviceSeed, {
     subscriptionUrl: 'https://example.com/alice',
     ruleProfile: 'subscription'
@@ -2629,6 +2657,7 @@ test('a signed client config save becomes a user override and an admin reset res
   assert.equal(savedBody.config.configSource, 'user');
   assert.equal(savedBody.config.subscriptionUrl, 'https://example.com/alice');
   assert.equal(savedBody.config.ruleProfile, 'subscription');
+  assert.equal(savedBody.config.canEditManagedConfig, true);
 
   const adminView = await getAdminUserConfig(database, identity.userId);
   assert.equal(adminView.status, 200);
@@ -2648,6 +2677,7 @@ test('a signed client config save becomes a user override and an admin reset res
   assert.equal(synchronizedBody.config.configSource, 'global');
   assert.equal(synchronizedBody.config.subscriptionUrl, 'https://example.com/global');
   assert.equal(synchronizedBody.config.ruleProfile, 'ruleset');
+  assert.equal(synchronizedBody.config.canEditManagedConfig, true);
 
   const laterClientSave = await updateClientConfig(database, identity, deviceSeed, {
     ruleProfile: 'subscription'
@@ -2666,6 +2696,85 @@ test('a signed client config save becomes a user override and an admin reset res
   assert.equal(finalReset.status, 200);
   const finalState = await getClientConfig(database, identity, deviceSeed);
   assert.equal((await finalState.json()).config.configSource, 'global');
+
+  assert.equal((await updateAdminManagedConfigPermission(database, identity.userId, false)).status, 200);
+  const revoked = await updateClientConfig(database, identity, deviceSeed, {
+    ruleProfile: 'subscription'
+  });
+  await assertWorkerError(revoked, 403, 'managed config editing forbidden', 'MANAGED_CONFIG_EDITING_FORBIDDEN');
+});
+
+test('client config compares against the global value inside its committed SQL write', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const identity = await (await activate(database, { name: 'Alice', deviceSeed })).json();
+  assert.equal((await updateAdminManagedConfigPermission(database, identity.userId, true)).status, 200);
+
+  let intercepted = false;
+  const racedDatabase = {
+    ...database,
+    prepare(sql) {
+      const statement = database.prepare(sql);
+      if (intercepted || !sql.includes('INSERT INTO user_remote_config') || !sql.includes('INNER JOIN remote_config')) {
+        return statement;
+      }
+      return {
+        bind(...bindings) {
+          const bound = statement.bind(...bindings);
+          return {
+            async run() {
+              intercepted = true;
+              await database
+                .prepare("UPDATE remote_config SET rule_profile = 'subscription', updated_at = ? WHERE id = 1")
+                .bind(new Date().toISOString())
+                .run();
+              return bound.run();
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const response = await updateClientConfig(racedDatabase, identity, deviceSeed, {
+    ruleProfile: 'subscription'
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(intercepted, true);
+  assert.equal((await response.json()).config.configSource, 'global');
+  assert.equal(
+    database.queryAll('SELECT user_id FROM user_remote_config WHERE user_id = ?', identity.userId).length,
+    0
+  );
+});
+
+test('clearing every admin override deletes the empty ownership row', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const identity = await (
+    await activate(database, {
+      name: 'Alice',
+      deviceSeed: '11111111-1111-4111-8111-111111111111'
+    })
+  ).json();
+  assert.equal((await updateAdminUserConfig(database, identity.userId, { ruleProfile: 'subscription' })).status, 200);
+
+  const cleared = await updateAdminUserConfig(database, identity.userId, {
+    enabled: null,
+    subscriptionUrl: null,
+    ruleProfile: null,
+    preferredRegion: null,
+    regionFallback: null
+  });
+  assert.equal(cleared.status, 200);
+  const body = await cleared.json();
+  assert.equal(body.override, null);
+  assert.equal(body.effective.configSource, 'global');
+  assert.equal(
+    database.queryAll('SELECT user_id FROM user_remote_config WHERE user_id = ?', identity.userId).length,
+    0
+  );
 });
 
 test('client config writes require the current device signature and reject admin-owned fields', async (context) => {
@@ -2847,6 +2956,14 @@ async function getAdminTrafficTrend(database, range) {
 
 async function updateAdminUserConfig(database, userId, input) {
   return requestAdminConfig(database, `/api/admin/users/${encodeURIComponent(userId)}/config`, JSON.stringify(input));
+}
+
+async function updateAdminManagedConfigPermission(database, userId, canEditManagedConfig) {
+  return requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(userId)}/config-permission`,
+    JSON.stringify({ canEditManagedConfig })
+  );
 }
 
 async function requestAdminConfig(database, path, body) {

@@ -26,7 +26,7 @@ describe('update install entry points', () => {
       source.indexOf('function recoverFromUpdateInstallerLaunchFailure')
     );
 
-    expect(install).toContain('launchDownloadedUpdateInstaller({ installerPath, handoff })');
+    expect(install).toContain('await launchDownloadedUpdateInstaller({');
     expect(install).toContain('updateInstallerLaunchStarted = true');
     expect(install).toContain('app.quit()');
     expect(install).not.toContain('autoUpdater.quitAndInstall');

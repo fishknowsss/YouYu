@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DiagnosticLogBuffer,
@@ -56,6 +57,90 @@ describe('diagnostic log buffer', () => {
     ]);
   });
 
+  it('keeps the renderer summary concise while exporting the latest safe full Mihomo failure sample', () => {
+    const logs = new DiagnosticLogBuffer();
+    const first =
+      '[mihomo] time="2026-08-11T05:02:00+08:00" level=warning msg="[TCP] dial 🌐 自动选择 (match ProcessName/chrome.exe) 127.0.0.1:52100 --> api.example.com:443 error: proxy chain hk-01 -> relay-a: dial tcp 198.51.100.10:443: i/o timeout" account=alice@example.com';
+    const latest = first
+      .replace('05:02:00', '05:02:05')
+      .replace('127.0.0.1:52100', '127.0.0.1:60999')
+      .replace('alice@example.com', 'bob@example.com');
+
+    logs.append(first, new Date(2026, 7, 11, 5, 2, 0));
+    logs.append(latest, new Date(2026, 7, 11, 5, 2, 5));
+
+    expect(logs.getLogs()).toEqual([
+      '2026-08-11 05:02:00 - 2026-08-11 05:02:05 连接警告：api.example.com 访问失败（TCP）（重复 2 次）'
+    ]);
+    expect(logs.getLogs()[0]).not.toMatch(/ProcessName|proxy chain|dial tcp|i\/o timeout|:443/);
+
+    const exportLogs = logs.getExportLogs();
+    expect(exportLogs).toHaveLength(1);
+    expect(exportLogs[0]).toContain('time="2026-08-11T05:02:05+08:00"');
+    expect(exportLogs[0]).toContain('[TCP] dial 🌐 自动选择');
+    expect(exportLogs[0]).toContain('match ProcessName/chrome.exe');
+    expect(exportLogs[0]).toContain('127.0.0.1:60999 --> api.example.com:443');
+    expect(exportLogs[0]).toContain('proxy chain hk-01 -> relay-a');
+    expect(exportLogs[0]).toContain('dial tcp 198.51.100.10:443: i/o timeout');
+    expect(exportLogs[0]).toContain('account=[已隐藏]');
+    expect(exportLogs[0]).not.toContain('bob@example.com');
+    expect(exportLogs[0]).toContain('（重复 2 次）');
+  });
+
+  it('does not coalesce the same Mihomo destination when rule, process, outbound, or root error changes', () => {
+    const logs = new DiagnosticLogBuffer();
+    const base =
+      '[mihomo] time="2026-08-11T05:03:00+08:00" level=warning msg="[UDP] dial outbound-a (match ProcessName/app-a.exe) 127.0.0.1:53001 --> dns.example.com:53 error: dial udp 203.0.113.10:53: i/o timeout"';
+
+    [
+      base,
+      base.replace('ProcessName/app-a.exe', 'ProcessName/app-b.exe').replace(':53001', ':53002'),
+      base.replace('outbound-a', 'outbound-b').replace(':53001', ':53003'),
+      base.replace('ProcessName/app-a.exe', 'DomainSuffix/example.com').replace(':53001', ':53004'),
+      base.replace('i/o timeout', 'connection refused').replace(':53001', ':53005')
+    ].forEach((warning, index) => logs.append(warning, new Date(2026, 7, 11, 5, 3, index)));
+
+    expect(logs.getLogs()).toHaveLength(5);
+    expect(logs.getExportLogs()).toHaveLength(5);
+  });
+
+  it('ignores only the TUN local temporary port while preserving the source process identity', () => {
+    const logs = new DiagnosticLogBuffer();
+    const appAFirst =
+      '[mihomo] level=warning msg="[TCP] dial PROXY (match DomainSuffix/example.com) 127.0.0.1:51000(app-a.exe) --> example.com:443 error: dial tcp: i/o timeout"';
+    const appALatest = appAFirst.replace(':51000(app-a.exe)', ':51001(app-a.exe)');
+    const appB = appAFirst.replace(':51000(app-a.exe)', ':51002(app-b.exe)');
+
+    logs.append(appAFirst, new Date(2026, 7, 11, 5, 3, 0));
+    logs.append(appALatest, new Date(2026, 7, 11, 5, 3, 1));
+    logs.append(appB, new Date(2026, 7, 11, 5, 3, 2));
+
+    expect(logs.size).toBe(2);
+    expect(logs.getLogs()).toEqual([
+      '2026-08-11 05:03:00 - 2026-08-11 05:03:01 连接警告：example.com 访问失败（TCP）（重复 2 次）',
+      '2026-08-11 05:03:02 连接警告：example.com 访问失败（TCP）'
+    ]);
+    expect(logs.getExportLogs()[0]).toContain('127.0.0.1:51001(app-a.exe) --> example.com:443');
+    expect(logs.getExportLogs()[0]).toContain('（重复 2 次）');
+    expect(logs.getExportLogs()[1]).toContain('127.0.0.1:51002(app-b.exe) --> example.com:443');
+    expect(logs.getExportLogs()[1]).not.toContain('（重复');
+  });
+
+  it('flattens and bounds the detailed export sample without exposing it through getLogs', () => {
+    const logs = new DiagnosticLogBuffer({ maxMessageLength: 256 });
+    const warning = `[mihomo] time="2026-08-11T05:04:00+08:00" level=warning msg="[TCP] dial outbound-a (match ProcessName/app.exe) 127.0.0.1:54001 --> api.example.com:443 error: first line\r\nsecond line ${'safe '.repeat(100)}terminal root error: connection refused"`;
+
+    logs.append(warning, new Date(2026, 7, 11, 5, 4, 0));
+
+    expect(logs.getLogs()[0]).toBe('2026-08-11 05:04:00 连接警告：api.example.com 访问失败（TCP）');
+    const [exported] = logs.getExportLogs();
+    expect(exported).not.toMatch(/[\r\n]/);
+    expect(exported).toContain('[中间省略]');
+    expect(exported).toContain('[TCP] dial outbound-a');
+    expect(exported).toContain('terminal root error: connection refused');
+    expect(exported).toHaveLength(20 + 256);
+  });
+
   it('uses the actual Mihomo destination instead of a matched rule-set label', () => {
     const logs = new DiagnosticLogBuffer();
     const warning =
@@ -82,6 +167,7 @@ describe('diagnostic log buffer', () => {
     logs.append('[mihomo] #< CLIXML', new Date(2026, 7, 2, 1, 14, 34));
 
     expect(logs.getLogs()).toEqual([]);
+    expect(logs.getExportLogs()).toEqual([]);
   });
 
   it('starts a new logical entry after the repeat coalescing window', () => {
@@ -111,11 +197,21 @@ describe('diagnostic log buffer', () => {
 
     expect(logs.getLogs(80)).toHaveLength(80);
     expect(logs.getLogs()).toHaveLength(100);
+    expect(logs.getExportLogs(80)).toHaveLength(80);
     expect(logs.size).toBe(100);
   });
 });
 
 describe('diagnostic export', () => {
+  it('wires detailed logs only to file export while snapshots keep the concise renderer view', () => {
+    const mainSource = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
+
+    expect(mainSource).toContain('const logs = appLogs.getExportLogs();');
+    expect(mainSource).toContain('logs: appLogs.getLogs(diagnosticSnapshotLogLimit),');
+    expect(mainSource).not.toContain('logs: appLogs.getExportLogs(');
+    expect(mainSource.match(/getExportLogs\(/g)).toHaveLength(1);
+  });
+
   it.each([
     ['WinINet system proxy disable failed', 'system-proxy'],
     ['getaddrinfo ENOTFOUND example.com', 'dns'],
@@ -253,6 +349,33 @@ describe('diagnostic export', () => {
     const redacted = redactDiagnosticText(input);
 
     for (const secret of ['shortsecret', 'dXNlcjpwYXNz', 'proxy-user', 'proxy-pass']) {
+      expect(redacted).not.toContain(secret);
+    }
+    expect(redactDiagnosticText(redacted)).toBe(redacted);
+  });
+
+  it('redacts email addresses and account-style identity fields', () => {
+    const input = [
+      'contact=alice+support@example.com',
+      'account=customer-42',
+      'accountId=019f60d8-d5fb-73d0-a15c-a954a55b85b4',
+      'account_name="Alice Zhang"',
+      'email: bob@example.net',
+      'loginName=alice-login',
+      'username=alice-user'
+    ].join(' | ');
+
+    const redacted = redactDiagnosticText(input);
+
+    for (const secret of [
+      'alice+support@example.com',
+      'customer-42',
+      '019f60d8-d5fb-73d0-a15c-a954a55b85b4',
+      'Alice Zhang',
+      'bob@example.net',
+      'alice-login',
+      'alice-user'
+    ]) {
       expect(redacted).not.toContain(secret);
     }
     expect(redactDiagnosticText(redacted)).toBe(redacted);

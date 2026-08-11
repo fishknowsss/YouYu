@@ -1141,6 +1141,138 @@ describe('createMihomoApiClient', () => {
     expect(autoNow).toBe('fast-node');
   });
 
+  it('restores every changed selector when all auto-strategy candidates fail verification', async () => {
+    const autoTarget = strategyTargets.auto;
+    let mainNow = 'manual-node';
+    let autoNow = 'old-node';
+    const candidateNames = ['JP Tokyo 01', 'JP Osaka 02'];
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: { type: 'Selector', now: mainNow, all: [autoTarget, 'manual-node'] },
+            [autoTarget]: { type: 'URLTest', now: autoNow, all: ['old-node', ...candidateNames] },
+            'manual-node': {},
+            'old-node': {},
+            ...Object.fromEntries(candidateNames.map((name) => [name, {}]))
+          }
+        });
+      }
+      if (path.includes('/delay')) {
+        const name = decodeURIComponent(path.match(/\/proxies\/([^/]+)\/delay/)?.[1] ?? '');
+        return Response.json({ delay: candidateNames.includes(name) ? 60 + candidateNames.indexOf(name) : 120 });
+      }
+
+      const body = JSON.parse(String(init?.body ?? '{}')) as { name?: string };
+      if (path.endsWith(`/proxies/${encodeURIComponent(autoTarget)}`) && body.name) autoNow = body.name;
+      if (path.endsWith('/proxies/Main') && body.name) mainNow = body.name;
+      return new Response(null, { status: 204 });
+    });
+    const verifyNode = vi.fn(async (_name: string) => false);
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(
+      api.selectBestUsableNodeForStrategy('auto', {
+        policy: { preferredRegion: 'jp', regionFallback: 'strict' },
+        verifyNode
+      })
+    ).resolves.toBeUndefined();
+
+    expect(verifyNode.mock.calls.map(([name]) => name)).toEqual(candidateNames);
+    expect(autoNow).toBe('old-node');
+    expect(mainNow).toBe('manual-node');
+  });
+
+  it('does not let an older automatic rollback overwrite a newer manual selector choice', async () => {
+    const autoTarget = strategyTargets.auto;
+    let mainNow = 'manual-old';
+    let autoNow = 'US old';
+    const candidate = 'JP Tokyo 01';
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: { type: 'Selector', now: mainNow, all: [autoTarget, 'manual-old', 'manual-new'] },
+            [autoTarget]: { type: 'URLTest', now: autoNow, all: ['US old', candidate] },
+            'manual-old': {},
+            'manual-new': {},
+            'US old': {},
+            [candidate]: {}
+          }
+        });
+      }
+      if (path.includes('/delay')) {
+        const name = decodeURIComponent(path.match(/\/proxies\/([^/]+)\/delay/)?.[1] ?? '');
+        return Response.json({ delay: name === candidate ? 50 : 150 });
+      }
+
+      const body = JSON.parse(String(init?.body ?? '{}')) as { name?: string };
+      if (path.endsWith(`/proxies/${encodeURIComponent(autoTarget)}`) && body.name) autoNow = body.name;
+      if (path.endsWith('/proxies/Main') && body.name) mainNow = body.name;
+      return new Response(null, { status: 204 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(
+      api.selectBestUsableNodeForStrategy('auto', {
+        policy: { preferredRegion: 'jp', regionFallback: 'strict' },
+        verifyNode: async () => {
+          mainNow = 'manual-new';
+          return false;
+        }
+      })
+    ).resolves.toBeUndefined();
+
+    expect(autoNow).toBe('US old');
+    expect(mainNow).toBe('manual-new');
+  });
+
+  it('reconsiders a healthy preferred-name node as a global fallback only after verification is exhausted', async () => {
+    const autoTarget = strategyTargets.auto;
+    let mainNow = autoTarget;
+    const candidateNames = ['JP Tokyo 01', 'JP Osaka 02'];
+    let autoNow = candidateNames[1];
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: { type: 'Selector', now: mainNow, all: [autoTarget] },
+            [autoTarget]: { type: 'URLTest', now: autoNow, all: candidateNames },
+            ...Object.fromEntries(candidateNames.map((name) => [name, {}]))
+          }
+        });
+      }
+      if (path.includes('/delay')) {
+        const name = decodeURIComponent(path.match(/\/proxies\/([^/]+)\/delay/)?.[1] ?? '');
+        return Response.json({ delay: 60 + candidateNames.indexOf(name) });
+      }
+
+      const body = JSON.parse(String(init?.body ?? '{}')) as { name?: string };
+      if (path.endsWith(`/proxies/${encodeURIComponent(autoTarget)}`) && body.name) autoNow = body.name;
+      if (path.endsWith('/proxies/Main') && body.name) mainNow = body.name;
+      return new Response(null, { status: 204 });
+    });
+    const verifyNode = vi.fn(async (_name: string) => false);
+    const verifyFallbackNode = vi.fn(async (name: string) => name === candidateNames[0]);
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(
+      api.selectBestUsableNodeForStrategy('auto', {
+        policy: { preferredRegion: 'jp', regionFallback: 'global' },
+        verifyNode,
+        verifyFallbackNode
+      })
+    ).resolves.toBe(candidateNames[0]);
+
+    expect(verifyNode.mock.calls.map(([name]) => name)).toEqual(candidateNames);
+    expect(verifyFallbackNode.mock.calls.map(([name]) => name)).toEqual([candidateNames[0]]);
+    expect(autoNow).toBe(candidateNames[0]);
+    expect(mainNow).toBe(autoTarget);
+  });
+
   it('aborts all-node delay testing', async () => {
     let firstDelayStarted: (() => void) | undefined;
     const firstDelay = new Promise<void>((resolve) => {

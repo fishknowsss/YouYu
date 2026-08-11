@@ -5,6 +5,7 @@ import {
   type MihomoMode,
   type OperationRequest,
   type RuleProfile,
+  type SettingsSaveIntent,
   type StrategyKey,
   type TrafficRegistrationInput
 } from '../shared/ipc';
@@ -36,6 +37,7 @@ const optionalOperationChannels = new Set<string>([
 const strategies = new Set<StrategyKey>(['manual', 'auto', 'fallback', 'load-balance', 'direct']);
 const modes = new Set<MihomoMode>(['rule', 'global', 'direct']);
 const ruleProfiles = new Set<RuleProfile>(['ruleset', 'subscription']);
+const settingsSaveIntents = new Set<SettingsSaveIntent>(['easy-start', 'advanced-save']);
 const connectivityKeys = new Set<ConnectivityServiceKey>([
   'steam',
   'steamNetwork',
@@ -114,8 +116,12 @@ export function parseIpcArguments(channel: string, args: unknown[]): unknown[] {
       requireArgumentCount(channel, args, 1, 2);
       return [parseEnum(channel, 'key', args[0], connectivityKeys), parseOptionalOperationRequest(channel, args[1])];
     case ipcChannels.saveSettings:
-      requireArgumentCount(channel, args, 1, 2);
-      return [parseSettingsInput(channel, args[0]), parseOptionalOperationRequest(channel, args[1])];
+      requireArgumentCount(channel, args, 2, 3);
+      return [
+        parseSettingsInput(channel, args[0]),
+        parseEnum(channel, 'intent', args[1], settingsSaveIntents),
+        parseOptionalOperationRequest(channel, args[2])
+      ];
     case ipcChannels.registerTrafficIdentity:
       requireArgumentCount(channel, args, 1);
       return [parseTrafficRegistration(channel, args[0])];
