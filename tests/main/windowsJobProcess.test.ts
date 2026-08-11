@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type SpawnOptions } from 'node:child_process';
 import { join, win32 } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -7,6 +7,17 @@ import {
   spawnWindowsJobProcess,
   windowsJobNativeTypePowerShell
 } from '../../src/main/platform/windowsJobProcess';
+import { createWindowsPowerShellFixtureEnvironment } from '../helpers/windowsPowerShellEnvironment';
+
+const spawnJobHostWithFixtureCache = ((command: string, args: readonly string[] = [], options: SpawnOptions = {}) =>
+  spawn(command, args, {
+    ...options,
+    env: createWindowsPowerShellFixtureEnvironment({ ...process.env, ...options?.env })
+  })) as unknown as typeof spawn;
+
+function spawnWindowsJobFixture(binaryPath: string, args: string[]) {
+  return spawnWindowsJobProcess(binaryPath, args, { spawnHost: spawnJobHostWithFixtureCache });
+}
 
 describe('Windows Job Object process host', () => {
   it('starts the host at the canonical PS5 path with an isolated module environment', () => {
@@ -63,7 +74,7 @@ describe('Windows Job Object process host', () => {
         'v1.0',
         'powershell.exe'
       );
-      const host = spawnWindowsJobProcess(powershellPath, [
+      const host = spawnWindowsJobFixture(powershellPath, [
         '-NoProfile',
         '-NonInteractive',
         '-Command',
@@ -95,7 +106,7 @@ describe('Windows Job Object process host', () => {
         'v1.0',
         'powershell.exe'
       );
-      const host = spawnWindowsJobProcess(powershellPath, [
+      const host = spawnWindowsJobFixture(powershellPath, [
         '-NoProfile',
         '-NonInteractive',
         '-Command',

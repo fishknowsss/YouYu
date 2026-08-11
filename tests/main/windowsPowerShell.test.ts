@@ -92,7 +92,7 @@ describe('Windows PowerShell 5.1 process environment', () => {
       const result = spawnSync(resolveWindowsPowerShellPath(), ['-NoProfile', '-NonInteractive', '-Command', script], {
         encoding: 'utf8',
         windowsHide: true,
-        env: createWindowsPowerShellEnvironment({
+        env: createWindowsPowerShellFixtureEnvironment({
           ...process.env,
           PSModulePath: String.raw`C:\Program Files\PowerShell\7\Modules`
         })

@@ -71,6 +71,7 @@ jobs:
             echo ERROR: GitHub runner PS5 analysis cache file does not exist.
             exit /b 1
           )
+          set "PSModulePath="
           npm test
 
       - name: Test Worker maintenance

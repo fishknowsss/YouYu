@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import { createWindowsPowerShellEnvironment } from '../../src/main/platform/windowsPowerShell';
 import { createWindowsPowerShellFixtureEnvironment } from '../helpers/windowsPowerShellEnvironment';
 import {
   createUpdateInstallerBootstrapScript,
@@ -53,16 +52,9 @@ function createLauncher(): ChildProcess {
   return child;
 }
 
-async function runWindowsPowerShellScript(
-  script: string,
-  environment: NodeJS.ProcessEnv,
-  environmentMode: 'fixture' | 'production' = 'fixture'
-) {
+async function runWindowsPowerShellScript(script: string, environment: NodeJS.ProcessEnv) {
   const transport = createUpdateInstallerSupervisorTransport(script);
-  const childEnvironment =
-    environmentMode === 'production'
-      ? createWindowsPowerShellEnvironment(environment)
-      : createWindowsPowerShellFixtureEnvironment(environment);
+  const childEnvironment = createWindowsPowerShellFixtureEnvironment(environment);
   childEnvironment[updateInstallerSupervisorScriptEnvironment] = transport.environmentValue;
   const child = spawn(
     resolveWindowsPowerShellPath(environment.SystemRoot),
@@ -690,16 +682,11 @@ describe('controlled Windows update installer launcher', () => {
       }),
       'utf8'
     ).toString('base64');
-    const { stdout, stderr, exitCode } = await runWindowsPowerShellScript(
-      probeScript,
-      {
-        ...process.env,
-        PSModulePath: String.raw`C:\Program Files\PowerShell\7\Modules`,
-        PSModuleAnalysisCachePath: 'NUL',
-        [updateInstallerLauncherPayloadEnvironment]: payload
-      },
-      'production'
-    );
+    const { stdout, stderr, exitCode } = await runWindowsPowerShellScript(probeScript, {
+      ...process.env,
+      PSModulePath: String.raw`C:\Program Files\PowerShell\7\Modules`,
+      [updateInstallerLauncherPayloadEnvironment]: payload
+    });
 
     expect(exitCode, stderr).toBe(0);
     expect(stderr).not.toContain('YouYu update launcher:');

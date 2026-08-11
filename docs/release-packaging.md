@@ -283,7 +283,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    npm run build
    ```
 
-   更新器或安装器的 Windows PowerShell 5.1 代码有改动时，相关真实 PowerShell 测试只能作为快速反馈，不能替代上面的完整 `npm test`。完整测试必须保留 Vitest 默认文件并行，以覆盖干净 Windows runner 的真实进程环境；生产中的 Node、NSIS 或其他中间进程启动 5.1 前，必须大小写无关地移除父进程继承的 `PSModulePath` 和 `PSModuleAnalysisCachePath`，让 5.1 重建原生模块路径并使用原生缓存。Actions 的 Test 步骤必须从 `cmd` 启动并始终丢弃模块路径；重复脚本夹具只可复用 runner 已提供且确实存在的绝对、非 `NUL` 分析缓存文件，同时由独立污染父环境测试验证生产路径仍会清除两项设置。不得通过硬编码模块目录、禁用或自行预热缓存、放宽超时、失败重试或 `--no-file-parallelism` 掩盖故障。若只在干净 runner 失败，应按真实产品兼容问题处理，先减少重复夹具启动或收紧进程隔离，再继续发布。
+   更新器或安装器的 Windows PowerShell 5.1 代码有改动时，相关真实 PowerShell 测试只能作为快速反馈，不能替代上面的完整 `npm test`。完整测试必须保留 Vitest 默认文件并行，以覆盖干净 Windows runner 的真实进程环境；生产中的 Node、NSIS 或其他中间进程启动 5.1 前，必须大小写无关地移除父进程继承的 `PSModulePath` 和 `PSModuleAnalysisCachePath`，让 5.1 重建原生模块路径并使用原生缓存。Actions 的 Test 步骤必须从 `cmd` 启动并显式丢弃模块路径；重复真实脚本夹具只可复用 runner 已提供且确实存在的绝对、非 `NUL` 分析缓存文件，单元和进程启动契约测试负责证明生产路径清除两项设置，另由污染模块路径的真实测试确认 5.1 仍从 `$PSHOME` 解析系统模块。不得通过硬编码模块目录、禁用或自行预热缓存、放宽超时、失败重试或 `--no-file-parallelism` 掩盖故障。若只在干净 runner 失败，应按真实产品兼容问题处理，先减少重复夹具启动或收紧进程隔离，再继续发布。
 
    如果改动包含 UI，必须额外做关键尺寸或关键页面验证。优先覆盖最小窗口、断点附近窗口和本次改动页面；可以使用截图、DOM 快照或等价的可重复检查，并在最终说明中写明验证过的尺寸和页面。
 
