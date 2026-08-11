@@ -29,6 +29,14 @@ export const updateInstallerBootstrapCleanupGraceMs = 40_000;
 export const updateInstallerNodeCleanupMarginMs = 10_000;
 export const updateInstallerExecutionTimeoutMs = 10 * 60 * 1000;
 export const updateElevatedInstallerPayloadEnvironment = 'YOUYU_UPDATE_ELEVATED_INSTALL_PAYLOAD';
+export const updateInstallerPowerShellModuleAnalysisCacheEnvironment = 'PSModuleAnalysisCachePath';
+
+const updateInstallerPowerShellModuleImports = [
+  'Import-Module Microsoft.PowerShell.Management -ErrorAction Stop',
+  'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop',
+  'Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop',
+  'Import-Module CimCmdlets -ErrorAction Stop'
+] as const;
 
 type SpawnLauncher = (
   command: string,
@@ -124,6 +132,7 @@ export function signalUpdateInstallerCancellation(
 export function createElevatedUpdateInstallerScript(): string {
   return [
     "$ErrorActionPreference = 'Stop'",
+    ...updateInstallerPowerShellModuleImports,
     '$cancellationPath = $null',
     '$installer = $null',
     '$installerBoundaryClosed = $false',
@@ -295,6 +304,7 @@ function createUpdateInstallerPowerShellTransport(
   const environmentValue = gzipSync(scriptBytes, { level: 9 }).toString('base64');
   const loaderScript = [
     "$ErrorActionPreference = 'Stop'",
+    ...updateInstallerPowerShellModuleImports,
     '$compressedStream = $null',
     '$gzipStream = $null',
     '$reader = $null',
@@ -874,10 +884,14 @@ export async function launchDownloadedUpdateInstaller(options: UpdateInstallerLa
     }),
     'utf8'
   ).toString('base64');
-  const environment: NodeJS.ProcessEnv = {
-    ...(options.environment ?? process.env),
-    [updateInstallerLauncherPayloadEnvironment]: payload
-  };
+  const environment: NodeJS.ProcessEnv = { ...(options.environment ?? process.env) };
+  for (const key of Object.keys(environment)) {
+    if (key.toLowerCase() === updateInstallerPowerShellModuleAnalysisCacheEnvironment.toLowerCase()) {
+      delete environment[key];
+    }
+  }
+  environment[updateInstallerPowerShellModuleAnalysisCacheEnvironment] = 'NUL';
+  environment[updateInstallerLauncherPayloadEnvironment] = payload;
   const supervisorTransport = createUpdateInstallerSupervisorTransport(createUpdateInstallerLauncherScript());
   environment[updateInstallerSupervisorScriptEnvironment] = supervisorTransport.environmentValue;
   environment[updateInstallerSupervisorLoaderEnvironment] = supervisorTransport.encodedLoaderCommand;

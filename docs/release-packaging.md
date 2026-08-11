@@ -335,17 +335,30 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
    纯文档或项目规则修改不需要版本号、安装包或 release，提交信息应直接描述文档改动。
 
-6. 创建并推送版本标签。
+6. 推送 `main` 并等待精确提交的 GitHub Actions 验证。
+
+   ```powershell
+   $commit = git rev-parse HEAD
+   git push origin main
+   gh run list --workflow Validate --commit $commit --limit 1 --json databaseId,status,conclusion,headSha,url
+   gh run watch <上一步返回的 databaseId> --exit-status
+   ```
+
+   推送后立即检查，不要等到上传 Release 时才发现失败。必须确认 `Validate` 的 `headSha` 等于本次 `$commit` 且结论为 `success`；本地测试全绿不能替代 GitHub 新鲜 Windows runner。若失败，立即停止标签和 Release，运行 `gh run view <run-id> --log-failed` 获取失败步骤，修复、重新提交并推送后，从本步骤重新验证。若 workflow 尚未出现在列表中，只做有界轮询，不得误用上一提交的绿色结果。
+
+7. 创建并推送版本标签，再等待标签构建。
 
    ```powershell
    git tag v<version>
-   git push origin main
    git push origin v<version>
+   $tagCommit = git rev-list -n 1 v<version>
+   gh run list --workflow "Build Windows" --commit $tagCommit --limit 1 --json databaseId,status,conclusion,headSha,url
+   gh run watch <上一步返回的 databaseId> --exit-status
    ```
 
-   推送版本标签时使用精确标签名。不要使用 `git push --follow-tags`，除非已经确认本地没有无关未推送标签。若误推了无关标签，立即确认它不是本次发布需要的标签，并删除远端误推标签。
+   推送版本标签时使用精确标签名。`Build Windows` 必须对应 `$tagCommit` 且结论为 `success`，之后才能创建 GitHub Release。不要使用 `git push --follow-tags`，除非已经确认本地没有无关未推送标签。若误推了无关标签，立即确认它不是本次发布需要的标签，并删除远端误推标签。
 
-7. 创建 GitHub Release 并上传资产。
+8. 创建 GitHub Release 并上传资产。
 
    ```powershell
    $version = node -p "require('./package.json').version"
@@ -369,7 +382,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
    如果 Release 已存在，先检查已有资产是否来自同一次构建。确需覆盖时才使用 `gh release upload "v$version" ... --clobber`。
 
-8. 校验远端发布结果。
+9. 校验远端发布结果。
 
    ```powershell
    $version = node -p "require('./package.json').version"
@@ -386,7 +399,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
    该命令通过预检批准的当前路由完成全部 11 个资产和三个更新通道校验。每个更新描述文件都必须显示 `version: <version>`，并分别指向 `YouYu-<version>-x64.exe`、`YouYu-<version>-x64-in.exe`、`YouYu-<version>-x64-no.exe`；远端 `SHA256SUMS.txt` 必须与本地逐字节一致并恰好覆盖其余十个远端资产。
 
-9. 最终收尾。
+10. 最终收尾。
 
    ```powershell
    git status --short
@@ -407,4 +420,6 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 - `npm run validate:mihomo` 通过，仓库与安装包内同时包含已校验的 Mihomo binary、manifest、GPL 全文和来源说明。
 - `team-builds/` 中恰好只有当前版本、带订阅的 `-in` 和 `-no` 两个 EXE；没有版本子目录、标准无后缀版或 `.blockmap`。
 - 团队双包成功后 `release/` 已清理；运行 `dist:win:release` 时才重新生成公共三通道资产。
+- 推送 `main` 后立即确认本次精确提交的 `Validate` 全绿，才创建版本标签；推送标签后确认同一提交的 `Build Windows` 全绿，才创建或上传 GitHub Release。
+- Actions 失败时先用 `gh run view <run-id> --log-failed` 处理当前失败并重新跑精确提交门禁，不得用本地绿灯、旧提交绿灯或跳过步骤继续发布。
 - 上传 GitHub 时使用 `npm run dist:win:release` 生成的三通道公开更新产物，并确认 `latest.yml`、`latest-in.yml`、`latest-no.yml`、当前 YouYu 版本命名的 Mihomo 对应源码归档和覆盖全部十个公开资产的 `SHA256SUMS.txt` 都存在。

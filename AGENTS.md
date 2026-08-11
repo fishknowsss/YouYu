@@ -24,6 +24,7 @@
 - Scripts launched through the canonical `WindowsPowerShell\\v1.0\\powershell.exe` path must remain compatible with Windows PowerShell 5.1 and its .NET Framework runtime. Do not use .NET Core-only APIs such as `System.IO.Path.IsPathFullyQualified`; run the real Windows PowerShell compatibility test when changing the update launcher.
 - For app code or app resource changes that are being delivered locally, read `docs/release-packaging.md`, bump the patch version, and produce the documented Windows installers unless the user explicitly says not to package.
 - For release-delivered app changes, finish the full checklist in `docs/release-packaging.md`: validation, packaging, local archive maintenance, commit, explicit tag push, GitHub Release asset upload, and remote `latest*.yml` verification.
+- After pushing a release commit to `main`, immediately inspect and wait for the exact commit's `Validate` workflow. Do not create or push the version tag until it is green. After pushing the exact tag, wait for that tag's `Build Windows` workflow before creating or uploading the GitHub Release. A local green run never substitutes for these clean-runner gates; on failure, stop the release, inspect `gh run view <run-id> --log-failed`, fix and push a new commit, then repeat both gates.
 - Pure documentation, project-rule, or archive housekeeping changes do not require a version bump or installer rebuild.
 
 ## CDN and Release Network Rules

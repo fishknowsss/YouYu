@@ -43,6 +43,10 @@ jobs:
         run: npm run typecheck
 
       - name: Test
+        # PowerShell 5.1 writes its user-scoped module analysis cache asynchronously.
+        # Disable that shared file cache so parallel clean-runner fixtures scan modules independently.
+        env:
+          PSModuleAnalysisCachePath: NUL
         run: npm test
 
       - name: Test Worker maintenance

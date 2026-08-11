@@ -26,7 +26,8 @@ import {
   updateInstallerSupervisorReadyTimeoutMs,
   updateInstallerSupervisorScriptEnvironment,
   updateInstallerSupervisorLoaderEnvironment,
-  updateInstallerNodeCleanupMarginMs
+  updateInstallerNodeCleanupMarginMs,
+  updateInstallerPowerShellModuleAnalysisCacheEnvironment
 } from '../../src/main/updateInstallerLauncher';
 import {
   resolveUpdateInstallerCancellationPath,
@@ -51,13 +52,21 @@ function createLauncher(): ChildProcess {
 
 async function runWindowsPowerShellScript(script: string, environment: NodeJS.ProcessEnv) {
   const transport = createUpdateInstallerSupervisorTransport(script);
+  const childEnvironment = { ...environment };
+  for (const key of Object.keys(childEnvironment)) {
+    if (key.toLowerCase() === updateInstallerPowerShellModuleAnalysisCacheEnvironment.toLowerCase()) {
+      delete childEnvironment[key];
+    }
+  }
+  childEnvironment[updateInstallerPowerShellModuleAnalysisCacheEnvironment] = 'NUL';
+  childEnvironment[updateInstallerSupervisorScriptEnvironment] = transport.environmentValue;
   const child = spawn(
     resolveWindowsPowerShellPath(environment.SystemRoot),
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', transport.encodedLoaderCommand],
     {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...environment, [updateInstallerSupervisorScriptEnvironment]: transport.environmentValue }
+      env: childEnvironment
     }
   );
   let stdout = '';
@@ -314,6 +323,7 @@ describe('controlled Windows update installer launcher', () => {
     const environment: NodeJS.ProcessEnv = {
       SystemRoot: String.raw`C:\Windows`,
       KEEP: 'preserved',
+      psmoduleanalysiscachepath: 'shared-cache-must-not-survive',
       YOUYU_UPDATE_HANDOFF_PATH: 'source-environment-must-not-be-relied-on'
     };
 
@@ -338,6 +348,8 @@ describe('controlled Windows update installer launcher', () => {
     expect(String(options.env[updateInstallerBootstrapScriptEnvironment]).length).toBeGreaterThan(0);
     expect(String(options.env[updateInstallerSupervisorScriptEnvironment]).length).toBeLessThan(20_000);
     expect(String(options.env[updateInstallerSupervisorLoaderEnvironment])).not.toContain(handoff.nonce);
+    expect(options.env[updateInstallerPowerShellModuleAnalysisCacheEnvironment]).toBe('NUL');
+    expect(options.env.psmoduleanalysiscachepath).toBeUndefined();
     expect(environment[updateInstallerLauncherPayloadEnvironment]).toBeUndefined();
     expect(options.env.KEEP).toBe('preserved');
 
@@ -533,6 +545,10 @@ describe('controlled Windows update installer launcher', () => {
     const script = createUpdateInstallerLauncherScript();
     const bootstrapScript = createUpdateInstallerBootstrapScript();
     const elevatedScript = createElevatedUpdateInstallerScript();
+    const loaderScript = Buffer.from(
+      createUpdateInstallerSupervisorTransport('exit 0').encodedLoaderCommand,
+      'base64'
+    ).toString('utf16le');
 
     expect(script).toContain('$arguments.Count -ne 11');
     expect(script).toContain('function Test-FullyQualifiedWindowsPath');
@@ -542,6 +558,12 @@ describe('controlled Windows update installer launcher', () => {
     expect(elevatedScript).toContain(
       'Start-Process -FilePath $installerPath -ArgumentList $argumentLine -WindowStyle Hidden -PassThru'
     );
+    expect(elevatedScript).toContain('Import-Module Microsoft.PowerShell.Security -ErrorAction Stop');
+    expect(elevatedScript).toContain('Import-Module CimCmdlets -ErrorAction Stop');
+    expect(loaderScript).toContain('Import-Module Microsoft.PowerShell.Management -ErrorAction Stop');
+    expect(loaderScript).toContain('Import-Module Microsoft.PowerShell.Security -ErrorAction Stop');
+    expect(loaderScript).toContain('Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop');
+    expect(loaderScript).toContain('Import-Module CimCmdlets -ErrorAction Stop');
     expect(elevatedScript).toContain("$taskkillArguments = '/PID ' + $rootProcessId + ' /T /F'");
     expect(elevatedScript.indexOf('$taskkill = Start-Process')).toBeLessThan(
       elevatedScript.indexOf('try { $trackedProcessIds = @(Get-ProcessTreeIds $rootProcessId)')
