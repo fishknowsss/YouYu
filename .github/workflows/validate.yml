@@ -44,7 +44,7 @@ jobs:
 
       - name: Test
         # Avoid a PowerShell 7 module path while retaining the runner's prewarmed PS5 analysis cache.
-        # Production launchers still scrub both settings; a dedicated poisoned-parent probe covers it.
+        # Spawn contracts and a lightweight real child prove production still scrubs both settings.
         shell: cmd
         run: |
           if not defined PSModuleAnalysisCachePath (
@@ -60,7 +60,10 @@ jobs:
             exit /b 1
           )
           set "PSModulePath="
-          npm test
+          node node_modules\vitest\vitest.mjs run --exclude tests/main/updateInstallerLauncher.test.ts
+          if errorlevel 1 exit /b 1
+          node node_modules\vitest\vitest.mjs run tests/main/updateInstallerLauncher.test.ts
+          if errorlevel 1 exit /b 1
 
       - name: Test Worker maintenance
         run: npm run test:worker

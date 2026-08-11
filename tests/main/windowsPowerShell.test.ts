@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { win32 } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   createWindowsPowerShellEnvironment,
@@ -74,6 +75,40 @@ describe('Windows PowerShell 5.1 process environment', () => {
       Object.keys(duplicateCacheEnvironment).some((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')
     ).toBe(false);
   });
+
+  it.runIf(process.platform === 'win32')(
+    'applies the production scrub before a real Windows PowerShell child rebuilds its native path',
+    () => {
+      const script = [
+        '[Console]::Out.WriteLine($PSVersionTable.PSVersion.ToString())',
+        "[Console]::Out.WriteLine([Environment]::GetEnvironmentVariable('PSModuleAnalysisCachePath', 'Process'))",
+        '[Console]::Out.WriteLine($PSHOME)',
+        '[Console]::Out.WriteLine($env:PSModulePath)'
+      ].join('\n');
+      const result = spawnSync(resolveWindowsPowerShellPath(), ['-NoProfile', '-NonInteractive', '-Command', script], {
+        encoding: 'utf8',
+        windowsHide: true,
+        env: createWindowsPowerShellEnvironment({
+          ...process.env,
+          PSModulePath: String.raw`C:\Program Files\PowerShell\7\Modules`,
+          PSModuleAnalysisCachePath: 'NUL'
+        })
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      const [version, cachePath, psHome, modulePath] = result.stdout.replaceAll('\r', '').split('\n');
+      expect(version).toMatch(/^5\.1\./);
+      expect(cachePath).toBe('');
+      const normalizedPaths = (modulePath ?? '')
+        .split(';')
+        .filter(Boolean)
+        .map((entry) => win32.normalize(entry).toLowerCase());
+      expect(normalizedPaths).toContain(win32.join(psHome ?? '', 'Modules').toLowerCase());
+      expect(normalizedPaths).not.toContain(
+        win32.normalize(String.raw`C:\Program Files\PowerShell\7\Modules`).toLowerCase()
+      );
+    }
+  );
 
   it.runIf(process.platform === 'win32')(
     'rebuilds the native module path and resolves the inbox Security module after a poisoned parent',

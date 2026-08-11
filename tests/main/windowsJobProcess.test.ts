@@ -7,13 +7,16 @@ import {
   spawnWindowsJobProcess,
   windowsJobNativeTypePowerShell
 } from '../../src/main/platform/windowsJobProcess';
+import { windowsPowerShellModuleAnalysisCacheEnvironment } from '../../src/main/platform/windowsPowerShell';
 import { createWindowsPowerShellFixtureEnvironment } from '../helpers/windowsPowerShellEnvironment';
 
-const spawnJobHostWithFixtureCache = ((command: string, args: readonly string[] = [], options: SpawnOptions = {}) =>
-  spawn(command, args, {
-    ...options,
-    env: createWindowsPowerShellFixtureEnvironment({ ...process.env, ...options?.env })
-  })) as unknown as typeof spawn;
+const spawnJobHostWithFixtureCache = ((command: string, args: readonly string[] = [], options: SpawnOptions = {}) => {
+  const environment = { ...(options.env ?? {}) };
+  const fixtureEnvironment = createWindowsPowerShellFixtureEnvironment(process.env);
+  const cachePath = fixtureEnvironment[windowsPowerShellModuleAnalysisCacheEnvironment];
+  if (cachePath) environment[windowsPowerShellModuleAnalysisCacheEnvironment] = cachePath;
+  return spawn(command, args, { ...options, env: environment });
+}) as unknown as typeof spawn;
 
 function spawnWindowsJobFixture(binaryPath: string, args: string[]) {
   return spawnWindowsJobProcess(binaryPath, args, { spawnHost: spawnJobHostWithFixtureCache });
