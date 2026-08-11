@@ -7,7 +7,7 @@ import {
 } from '../../src/main/platform/windowsPowerShell';
 
 describe('Windows PowerShell 5.1 process environment', () => {
-  it('removes every inherited PowerShell module-path variant and isolates the analysis cache', () => {
+  it('removes every inherited PowerShell module-path and cache override', () => {
     const source: NodeJS.ProcessEnv = {
       SystemRoot: String.raw`C:\Windows`,
       KEEP: 'preserved',
@@ -19,11 +19,12 @@ describe('Windows PowerShell 5.1 process environment', () => {
     const environment = createWindowsPowerShellEnvironment(source);
 
     expect(environment.KEEP).toBe('preserved');
-    expect(environment[windowsPowerShellModuleAnalysisCacheEnvironment]).toBe('NUL');
     expect(Object.keys(environment).some((key) => key.toLowerCase() === 'psmodulepath')).toBe(false);
-    expect(Object.keys(environment).filter((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toEqual([
-      windowsPowerShellModuleAnalysisCacheEnvironment
-    ]);
+    expect(
+      Object.keys(environment).some(
+        (key) => key.toLowerCase() === windowsPowerShellModuleAnalysisCacheEnvironment.toLowerCase()
+      )
+    ).toBe(false);
     expect(source.PSModulePath).toBe('PowerShell-7-modules');
   });
 

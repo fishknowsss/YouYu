@@ -294,10 +294,9 @@ describe('managed elevated process cancellation', () => {
         win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
       );
       expect(Object.keys(launcherOptions.env).some((key) => key.toLowerCase() === 'psmodulepath')).toBe(false);
-      expect(
-        Object.keys(launcherOptions.env).filter((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')
-      ).toEqual(['PSModuleAnalysisCachePath']);
-      expect(launcherOptions.env.PSModuleAnalysisCachePath).toBe('NUL');
+      expect(Object.keys(launcherOptions.env).some((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toBe(
+        false
+      );
     } finally {
       elevated.kill();
       for (const key of Object.keys(process.env)) {

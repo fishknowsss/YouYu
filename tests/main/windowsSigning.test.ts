@@ -16,11 +16,8 @@ describe('Windows code-signing gate', () => {
     });
 
     expect(environment.KEEP).toBe('preserved');
-    expect(environment.PSModuleAnalysisCachePath).toBe('NUL');
     expect(Object.keys(environment).some((key) => key.toLowerCase() === 'psmodulepath')).toBe(false);
-    expect(Object.keys(environment).filter((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toEqual([
-      'PSModuleAnalysisCachePath'
-    ]);
+    expect(Object.keys(environment).some((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toBe(false);
   });
 
   it('requires an explicit certificate source and publisher when enforcement is enabled', () => {

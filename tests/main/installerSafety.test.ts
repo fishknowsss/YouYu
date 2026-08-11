@@ -22,7 +22,7 @@ describe('Windows upgrade installer safety', () => {
     );
     expect(installer).toContain('Kernel32::SetEnvironmentVariable');
     expect(installer).toContain('SetEnvironmentVariable(t "PSModulePath", p 0)');
-    expect(installer).toContain('SetEnvironmentVariable(t "PSModuleAnalysisCachePath", t "NUL")');
+    expect(installer).toContain('SetEnvironmentVariable(t "PSModuleAnalysisCachePath", p 0)');
     expect(installer.indexOf('!insertmacro YouYuPrepareWindowsPowerShellEnvironment')).toBeLessThan(
       installer.indexOf('Call YouYuApplyUpdateHandoffArguments')
     );

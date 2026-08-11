@@ -44,10 +44,8 @@ jobs:
 
       - name: Test
         # Avoid passing PowerShell 7's PSModulePath through npm/Node into Windows PowerShell 5.1.
-        # The product/test launcher also scrubs it; the cache setting is a separate parallel-run guard.
+        # Product/test launchers also scrub inherited module and cache overrides before PS5.1 starts.
         shell: cmd
-        env:
-          PSModuleAnalysisCachePath: NUL
         run: npm test
 
       - name: Test Worker maintenance

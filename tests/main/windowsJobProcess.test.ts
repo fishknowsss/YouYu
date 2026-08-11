@@ -29,10 +29,7 @@ describe('Windows Job Object process host', () => {
         win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
       );
       expect(Object.keys(hostOptions.env).some((key) => key.toLowerCase() === 'psmodulepath')).toBe(false);
-      expect(Object.keys(hostOptions.env).filter((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toEqual([
-        'PSModuleAnalysisCachePath'
-      ]);
-      expect(hostOptions.env.PSModuleAnalysisCachePath).toBe('NUL');
+      expect(Object.keys(hostOptions.env).some((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toBe(false);
     } finally {
       for (const key of Object.keys(process.env)) {
         if (['psmodulepath', 'psmoduleanalysiscachepath'].includes(key.toLowerCase())) delete process.env[key];

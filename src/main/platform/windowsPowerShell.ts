@@ -15,10 +15,9 @@ export function createWindowsPowerShellEnvironment(source: NodeJS.ProcessEnv = p
     }
   }
 
-  // PowerShell 7 exports a module path that is incompatible with Windows PowerShell 5.1 when an
-  // intermediate Node/NSIS process preserves it. Absence makes 5.1 rebuild its native defaults;
-  // the separate NUL cache prevents concurrent 5.1 helpers from sharing an asynchronous cache file.
-  environment[windowsPowerShellModuleAnalysisCacheEnvironment] = 'NUL';
+  // PowerShell 7 exports module settings that are incompatible with Windows PowerShell 5.1 when an
+  // intermediate Node/NSIS process preserves them. Absence makes 5.1 rebuild its native module path
+  // and use its native cache; disabling that cache makes parallel clean-runner startup prohibitively slow.
   return environment;
 }
 

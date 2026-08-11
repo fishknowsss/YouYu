@@ -13,7 +13,6 @@ export function createWindowsPowerShellEnvironment(source = process.env) {
       delete environment[key];
     }
   }
-  environment.PSModuleAnalysisCachePath = 'NUL';
   return environment;
 }
 

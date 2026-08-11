@@ -350,8 +350,11 @@ describe('controlled Windows update installer launcher', () => {
     expect(String(options.env[updateInstallerBootstrapScriptEnvironment]).length).toBeGreaterThan(0);
     expect(String(options.env[updateInstallerSupervisorScriptEnvironment]).length).toBeLessThan(20_000);
     expect(String(options.env[updateInstallerSupervisorLoaderEnvironment])).not.toContain(handoff.nonce);
-    expect(options.env[updateInstallerPowerShellModuleAnalysisCacheEnvironment]).toBe('NUL');
-    expect(options.env.psmoduleanalysiscachepath).toBeUndefined();
+    expect(
+      Object.keys(options.env).some(
+        (key) => key.toLowerCase() === updateInstallerPowerShellModuleAnalysisCacheEnvironment.toLowerCase()
+      )
+    ).toBe(false);
     expect(
       Object.keys(options.env).some(
         (key) => key.toLowerCase() === updateInstallerPowerShellModulePathEnvironment.toLowerCase()

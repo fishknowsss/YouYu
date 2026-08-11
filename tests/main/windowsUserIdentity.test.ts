@@ -27,10 +27,7 @@ describe('Windows user identity boundary', () => {
     );
     expect(environment.KEEP).toBe('preserved');
     expect(Object.keys(environment).some((key) => key.toLowerCase() === 'psmodulepath')).toBe(false);
-    expect(Object.keys(environment).filter((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toEqual([
-      'PSModuleAnalysisCachePath'
-    ]);
-    expect(environment.PSModuleAnalysisCachePath).toBe('NUL');
+    expect(Object.keys(environment).some((key) => key.toLowerCase() === 'psmoduleanalysiscachepath')).toBe(false);
   });
 
   it('resolves and normalizes the current standard-user SID and session through an injected boundary', async () => {

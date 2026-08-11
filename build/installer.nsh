@@ -42,9 +42,9 @@ Var YouYuHandoffValidated
     SetErrorLevel 2
     Quit
   ${EndIf}
-  System::Call 'Kernel32::SetEnvironmentVariable(t "PSModuleAnalysisCachePath", t "NUL") i.r0'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "PSModuleAnalysisCachePath", p 0) i.r0'
   ${If} $0 == 0
-    DetailPrint "Unable to initialize the Windows PowerShell cache boundary."
+    DetailPrint "Unable to clear the inherited Windows PowerShell cache override."
     SetErrorLevel 2
     Quit
   ${EndIf}

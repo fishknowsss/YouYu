@@ -283,7 +283,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    npm run build
    ```
 
-   更新器或安装器的 Windows PowerShell 5.1 代码有改动时，相关真实 PowerShell 测试只能作为快速反馈，不能替代上面的完整 `npm test`。完整测试必须保留 Vitest 默认文件并行，以覆盖干净 Windows runner 的真实进程环境；由 Node、NSIS 或其他中间进程启动 5.1 前，必须大小写无关地移除父进程继承的 `PSModulePath`，让 5.1 重建原生模块路径。不得通过硬编码模块目录、缓存预热、失败重试或 `--no-file-parallelism` 掩盖跨版本模块解析故障。若只在干净 runner 失败，应按真实产品兼容问题处理，先减少模块依赖或收紧进程隔离，再继续发布。
+   更新器或安装器的 Windows PowerShell 5.1 代码有改动时，相关真实 PowerShell 测试只能作为快速反馈，不能替代上面的完整 `npm test`。完整测试必须保留 Vitest 默认文件并行，以覆盖干净 Windows runner 的真实进程环境；由 Node、NSIS 或其他中间进程启动 5.1 前，必须大小写无关地移除父进程继承的 `PSModulePath` 和 `PSModuleAnalysisCachePath`，让 5.1 重建原生模块路径并使用原生缓存。不得通过硬编码模块目录、禁用或预热缓存、放宽超时、失败重试或 `--no-file-parallelism` 掩盖跨版本模块解析故障。若只在干净 runner 失败，应按真实产品兼容问题处理，先减少模块依赖或收紧进程隔离，再继续发布。
 
    如果改动包含 UI，必须额外做关键尺寸或关键页面验证。优先覆盖最小窗口、断点附近窗口和本次改动页面；可以使用截图、DOM 快照或等价的可重复检查，并在最终说明中写明验证过的尺寸和页面。
 
