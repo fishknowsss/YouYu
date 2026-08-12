@@ -4,6 +4,9 @@ CREATE TABLE IF NOT EXISTS users (
   normalized_name TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL DEFAULT 'active',
   can_edit_managed_config INTEGER NOT NULL DEFAULT 0 CHECK (can_edit_managed_config IN (0, 1)),
+  can_edit_managed_config_override INTEGER CHECK (
+    can_edit_managed_config_override IS NULL OR can_edit_managed_config_override IN (0, 1)
+  ),
   created_at TEXT NOT NULL,
   merged_into_user_id TEXT,
   FOREIGN KEY (merged_into_user_id) REFERENCES users(id)
@@ -145,6 +148,7 @@ CREATE TABLE IF NOT EXISTS remote_config (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   version INTEGER NOT NULL DEFAULT 1,
   enabled INTEGER NOT NULL DEFAULT 1,
+  can_edit_managed_config INTEGER NOT NULL DEFAULT 1 CHECK (can_edit_managed_config IN (0, 1)),
   subscription_url TEXT,
   rule_profile TEXT,
   preferred_region TEXT NOT NULL DEFAULT 'jp',
@@ -159,9 +163,10 @@ CREATE TABLE IF NOT EXISTS remote_config (
 
 CREATE TABLE IF NOT EXISTS admin_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
-  traffic_limit_bytes INTEGER NOT NULL DEFAULT 3380139261952
+  traffic_limit_bytes INTEGER NOT NULL DEFAULT 695784701952
     CHECK (traffic_limit_bytes > 0 AND traffic_limit_bytes <= 9007199254740991),
-  traffic_expires_at TEXT NOT NULL DEFAULT '2026-08-11T20:00:00.000Z',
+  traffic_period_started_at TEXT NOT NULL DEFAULT '2026-08-12T00:25:00.000Z',
+  traffic_expires_at TEXT NOT NULL DEFAULT '2026-09-11T00:25:00.000Z',
   updated_at TEXT NOT NULL
 );
 

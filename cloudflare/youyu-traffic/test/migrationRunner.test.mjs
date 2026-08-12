@@ -53,8 +53,10 @@ test('migration runner repairs legacy subscription columns once and preserves th
   ]);
   assert.deepEqual(plan.columnsToAdd, [
     'users.can_edit_managed_config',
+    'users.can_edit_managed_config_override',
     'users.merged_into_user_id',
     'devices.device_key',
+    'remote_config.can_edit_managed_config',
     'remote_config.subscription_url',
     'remote_config.preferred_region',
     'remote_config.region_fallback',
@@ -71,7 +73,7 @@ test('migration runner repairs legacy subscription columns once and preserves th
     .run('user-1', 'https://example.com/alice', '2026-07-13T01:00:00.000Z');
   await applyWorkerMigrations(runner);
 
-  assert.equal(runner.alterStatements.length, 9);
+  assert.equal(runner.alterStatements.length, 12);
   assert.equal(
     database.prepare('SELECT subscription_url FROM remote_config WHERE id = 1').get().subscription_url,
     'https://example.com/global'
@@ -120,7 +122,7 @@ test('Wrangler runner retries transient API failures but not SQL failures', asyn
   assert.equal(sqlAttempts, 1);
 });
 
-test('migration runner repairs the quota expiry column and preserves later settings', async (context) => {
+test('migration runner repairs the quota period columns and preserves later settings', async (context) => {
   const database = new DatabaseSync(':memory:');
   context.after(() => database.close());
   database.exec(currentSchema);
@@ -137,19 +139,33 @@ test('migration runner repairs the quota expiry column and preserves later setti
   const runner = createSqliteRunner(database);
   const plan = await planWorkerMigrations(runner);
   assert.ok(plan.columnsToAdd.includes('admin_settings.traffic_expires_at'));
+  assert.ok(plan.columnsToAdd.includes('admin_settings.traffic_period_started_at'));
 
   await applyWorkerMigrations(runner);
   assert.equal(
     database.prepare('SELECT traffic_expires_at FROM admin_settings WHERE id = 1').get().traffic_expires_at,
-    '2026-08-11T20:00:00.000Z'
+    '2026-09-11T00:25:00.000Z'
   );
-  database.prepare('UPDATE admin_settings SET traffic_expires_at = ? WHERE id = 1').run('2026-09-01T00:00:00.000Z');
+  assert.equal(
+    database.prepare('SELECT traffic_period_started_at FROM admin_settings WHERE id = 1').get()
+      .traffic_period_started_at,
+    '2026-08-12T00:25:00.000Z'
+  );
+  database
+    .prepare('UPDATE admin_settings SET traffic_period_started_at = ?, traffic_expires_at = ? WHERE id = 1')
+    .run('2026-09-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z');
   await applyWorkerMigrations(runner);
   assert.equal(
     database.prepare('SELECT traffic_expires_at FROM admin_settings WHERE id = 1').get().traffic_expires_at,
+    '2026-10-01T00:00:00.000Z'
+  );
+  assert.equal(
+    database.prepare('SELECT traffic_period_started_at FROM admin_settings WHERE id = 1').get()
+      .traffic_period_started_at,
     '2026-09-01T00:00:00.000Z'
   );
   assert.equal(runner.alterStatements.filter((sql) => sql.includes('traffic_expires_at')).length, 1);
+  assert.equal(runner.alterStatements.filter((sql) => sql.includes('traffic_period_started_at')).length, 1);
 });
 
 test('migration runner refuses a remote-config-only database before writing', async (context) => {

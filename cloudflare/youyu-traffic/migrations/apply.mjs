@@ -20,7 +20,9 @@ const migrationFiles = [
   '2026-08-02-add-user-profiles-and-notices.sql',
   '2026-08-02-add-user-notice-audit.sql',
   '2026-08-10-add-node-region-policy.sql',
-  '2026-08-11-add-managed-config-permission.sql'
+  '2026-08-11-add-managed-config-permission.sql',
+  '2026-08-12-add-traffic-period-start.sql',
+  '2026-08-12-add-managed-config-default.sql'
 ].map((name) => resolve(migrationDirectory, name));
 const repairableColumns = new Map([
   ['remote_config.subscription_url', 'TEXT'],
@@ -30,12 +32,27 @@ const repairableColumns = new Map([
   ['user_remote_config.preferred_region', 'TEXT'],
   ['user_remote_config.region_fallback', 'TEXT'],
   ['users.can_edit_managed_config', 'INTEGER NOT NULL DEFAULT 0 CHECK (can_edit_managed_config IN (0, 1))'],
+  [
+    'users.can_edit_managed_config_override',
+    'INTEGER DEFAULT NULL CHECK (can_edit_managed_config_override IS NULL OR can_edit_managed_config_override IN (0, 1))'
+  ],
+  ['remote_config.can_edit_managed_config', 'INTEGER NOT NULL DEFAULT 1 CHECK (can_edit_managed_config IN (0, 1))'],
   ['users.merged_into_user_id', 'TEXT REFERENCES users(id)'],
   ['devices.device_key', 'TEXT'],
-  ['admin_settings.traffic_expires_at', "TEXT NOT NULL DEFAULT '2026-08-11T20:00:00.000Z'"]
+  ['admin_settings.traffic_expires_at', "TEXT NOT NULL DEFAULT '2026-09-11T00:25:00.000Z'"],
+  ['admin_settings.traffic_period_started_at', "TEXT NOT NULL DEFAULT '2026-08-12T00:25:00.000Z'"]
 ]);
 const requiredTableColumns = {
-  users: ['id', 'name', 'normalized_name', 'status', 'can_edit_managed_config', 'created_at', 'merged_into_user_id'],
+  users: [
+    'id',
+    'name',
+    'normalized_name',
+    'status',
+    'can_edit_managed_config',
+    'can_edit_managed_config_override',
+    'created_at',
+    'merged_into_user_id'
+  ],
   devices: [
     'id',
     'user_id',
@@ -64,6 +81,7 @@ const requiredTableColumns = {
     'id',
     'version',
     'enabled',
+    'can_edit_managed_config',
     'subscription_url',
     'rule_profile',
     'preferred_region',
@@ -75,7 +93,7 @@ const requiredTableColumns = {
     'anomaly_threshold_bytes',
     'updated_at'
   ],
-  admin_settings: ['id', 'traffic_limit_bytes', 'traffic_expires_at', 'updated_at'],
+  admin_settings: ['id', 'traffic_limit_bytes', 'traffic_period_started_at', 'traffic_expires_at', 'updated_at'],
   user_remote_config: [
     'user_id',
     'enabled',

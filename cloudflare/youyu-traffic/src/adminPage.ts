@@ -41,7 +41,7 @@ function quotaDonut(): string {
       <div class="donut-content">
         <span>使用率</span>
         <strong data-quota-percent>0%</strong>
-        <small data-quota-limit>3148 GB</small>
+        <small data-quota-limit>648 GB</small>
       </div>
     </div>
   </div>`;
@@ -160,15 +160,16 @@ export function adminPage(): string {
 
             <article class="panel accent-purple overview-quota" data-overview-pane="quota">
               <div class="panel-head">
-                <div class="panel-heading">${icon('chart')}<div><h2 class="panel-title">总流量额度</h2></div></div>
+                <div class="panel-heading">${icon('chart')}<div><h2 class="panel-title">本期流量</h2></div></div>
                 <button class="button ghost" type="button" data-go-config aria-label="编辑流量设置">${icon('edit', 'icon-sm')}</button>
               </div>
               <div class="panel-body quota-layout overview-quota-layout">
                 ${quotaDonut()}
                 <div class="quota-legend">
                   <div class="quota-line"><span class="quota-dot"></span><span>已用流量</span><strong data-quota-used>—</strong></div>
-                  <div class="quota-line"><span class="quota-dot muted"></span><span data-quota-balance-label>剩余流量</span><strong data-quota-balance>—</strong></div>
-                  <div class="quota-line"><span class="quota-dot red"></span><span>累计上限</span><strong data-quota-limit-value>3148 GB</strong></div>
+                  <div class="quota-line"><span class="quota-dot muted"></span><span>剩余流量</span><strong data-quota-balance>—</strong></div>
+                  <div class="quota-line"><span class="quota-dot limit"></span><span>套餐额度</span><strong data-quota-limit-value>648 GB</strong></div>
+                  <div class="quota-line quota-start"><span class="quota-dot period"></span><span>开始时间</span><strong data-quota-start>—</strong></div>
                   <div class="quota-line quota-expiry"><span class="quota-dot expiry"></span><span>到期时间</span><strong data-quota-expiry>—</strong></div>
                 </div>
               </div>
@@ -274,7 +275,7 @@ export function adminPage(): string {
                     <div class="section-title user-config-state"><span class="chip gray" id="userSubscriptionState">跟随全局</span></div>
                     <div class="form-grid">
                       <label class="field" for="userMode">模式<select id="userMode"><option value="follow">跟随全局</option><option value="custom">单独配置</option><option value="disabled">停用</option></select></label>
-                      <label class="field" for="userCanEditManagedConfig">自行配置<select id="userCanEditManagedConfig"><option value="false">不允许</option><option value="true">允许</option></select></label>
+                      <label class="field" for="userCanEditManagedConfig">自行配置<select id="userCanEditManagedConfig"><option value="inherit">跟随全局</option><option value="true">允许</option><option value="false">不允许</option></select></label>
                       <label class="field" for="userRuleProfile">规则<select id="userRuleProfile"><option value="ruleset">智能规则</option><option value="subscription">机场规则</option></select></label>
                       <label class="field" for="userPreferredRegion">优先地区<select id="userPreferredRegion"><option value="jp">日本</option><option value="hk">香港</option><option value="tw">台湾</option><option value="sg">新加坡</option><option value="us">美国</option><option value="kr">韩国</option><option value="auto">最低延迟</option></select></label>
                       <label class="field" for="userRegionFallback">地区不可用<select id="userRegionFallback"><option value="global">自动切换</option><option value="strict">保持地区</option></select></label>
@@ -336,7 +337,7 @@ export function adminPage(): string {
         <section class="view-panel" id="viewConfig" data-view-panel="config" hidden>
           <div class="section-switcher" data-section-switcher="config" role="tablist" aria-label="配置内容">
             <button class="is-active" type="button" role="tab" aria-selected="true" data-config-section="global">全局配置</button>
-            <button type="button" role="tab" aria-selected="false" data-config-section="quota">流量额度</button>
+            <button type="button" role="tab" aria-selected="false" data-config-section="quota">订阅周期</button>
             <button type="button" role="tab" aria-selected="false" data-config-section="distribution">配置分布</button>
           </div>
           <div class="management-grid">
@@ -348,6 +349,7 @@ export function adminPage(): string {
                     <label class="field wide" for="globalSubscription">订阅链接<input id="globalSubscription" placeholder="https://..." autocomplete="off" spellcheck="false" aria-describedby="globalSubscriptionError" /></label>
                     <div class="field-error wide" id="globalSubscriptionError" role="alert"></div>
                     <label class="field" for="globalEnabled">状态<select id="globalEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+                    <label class="field" for="globalCanEditManagedConfig">自行配置<select id="globalCanEditManagedConfig"><option value="true">允许</option><option value="false">不允许</option></select></label>
                     <label class="field" for="globalRuleProfile">规则<select id="globalRuleProfile"><option value="ruleset">智能规则</option><option value="subscription">机场规则</option></select></label>
                     <label class="field" for="globalPreferredRegion">优先地区<select id="globalPreferredRegion"><option value="jp">日本</option><option value="hk">香港</option><option value="tw">台湾</option><option value="sg">新加坡</option><option value="us">美国</option><option value="kr">韩国</option><option value="auto">最低延迟</option></select></label>
                     <label class="field" for="globalRegionFallback">地区不可用<select id="globalRegionFallback"><option value="global">自动切换</option><option value="strict">保持地区</option></select></label>
@@ -359,16 +361,17 @@ export function adminPage(): string {
 
             <div class="config-column">
               <article class="panel accent-blue" data-config-pane="quota">
-                <div class="panel-head"><div class="panel-heading">${icon('chart')}<div><h2 class="panel-title">总流量上限</h2></div></div></div>
+                <div class="panel-head"><div class="panel-heading">${icon('chart')}<div><h2 class="panel-title">订阅周期</h2></div></div></div>
                 <form class="panel-body quota-config-grid" id="trafficLimitForm">
                   <div class="quota-fields">
-                    <label class="field" for="trafficLimitGb">额度<div class="input-suffix"><input id="trafficLimitGb" type="number" min="1" step="1" inputmode="numeric" value="3148" /><span>GB</span></div></label>
+                    <label class="field" for="trafficLimitGb">套餐额度<div class="input-suffix"><input id="trafficLimitGb" type="number" min="1" step="1" inputmode="numeric" value="648" /><span>GB</span></div></label>
+                    <label class="field" for="trafficPeriodStartedAt">开始时间<input id="trafficPeriodStartedAt" type="datetime-local" step="60" required /></label>
                     <label class="field" for="trafficExpiresAt">到期时间<input id="trafficExpiresAt" type="datetime-local" step="60" required /></label>
                     <button class="button quota-save" id="saveTrafficLimit" type="submit">${icon('save', 'icon-sm')}保存</button>
                   </div>
                   ${quotaDonut()}
                 </form>
-                <div class="panel-body" style="padding-top:0"><div class="quota-legend"><div class="quota-line"><span class="quota-dot"></span><span>已用流量</span><strong data-quota-used>—</strong></div><div class="quota-line"><span class="quota-dot muted"></span><span data-quota-balance-label>剩余流量</span><strong data-quota-balance>—</strong></div></div></div>
+                <div class="panel-body" style="padding-top:0"><div class="quota-legend"><div class="quota-line"><span class="quota-dot"></span><span>本期已用</span><strong data-quota-used>—</strong></div><div class="quota-line"><span class="quota-dot muted"></span><span>剩余流量</span><strong data-quota-balance>—</strong></div></div></div>
               </article>
 
               <article class="panel accent-cyan" data-config-pane="distribution">

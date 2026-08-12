@@ -28,8 +28,23 @@ test('legacy database can apply every migration in order', () => {
     '2026-08-02-add-user-profiles-and-notices.sql',
     '2026-08-02-add-user-notice-audit.sql',
     '2026-08-10-add-node-region-policy.sql',
-    '2026-08-11-add-managed-config-permission.sql'
+    '2026-08-11-add-managed-config-permission.sql',
+    '2026-08-12-add-traffic-period-start.sql',
+    '2026-08-12-add-managed-config-default.sql'
   ]) {
+    if (name === '2026-08-12-add-traffic-period-start.sql') {
+      database.exec(
+        "ALTER TABLE admin_settings ADD COLUMN traffic_period_started_at TEXT NOT NULL DEFAULT '2026-08-12T00:25:00.000Z'"
+      );
+    }
+    if (name === '2026-08-12-add-managed-config-default.sql') {
+      database.exec(`
+        ALTER TABLE remote_config ADD COLUMN can_edit_managed_config INTEGER NOT NULL DEFAULT 1
+          CHECK (can_edit_managed_config IN (0, 1));
+        ALTER TABLE users ADD COLUMN can_edit_managed_config_override INTEGER DEFAULT NULL
+          CHECK (can_edit_managed_config_override IS NULL OR can_edit_managed_config_override IN (0, 1));
+      `);
+    }
     database.exec(readFileSync(new URL(`migrations/${name}`, baseUrl), 'utf8'));
   }
 
@@ -61,6 +76,7 @@ test('legacy database can apply every migration in order', () => {
   assert.ok(remoteColumns.includes('preferred_region'));
   assert.ok(remoteColumns.includes('region_fallback'));
   assert.ok(remoteColumns.includes('anomaly_threshold_bytes'));
+  assert.ok(remoteColumns.includes('can_edit_managed_config'));
   assert.equal(
     database.prepare('SELECT can_edit_managed_config FROM users LIMIT 1').get()?.can_edit_managed_config ?? 0,
     0
@@ -70,8 +86,17 @@ test('legacy database can apply every migration in order', () => {
     { preferred_region: 'jp', region_fallback: 'global' }
   );
   assert.equal(
+    database.prepare('SELECT can_edit_managed_config FROM remote_config WHERE id = 1').get().can_edit_managed_config,
+    1
+  );
+  assert.equal(
     database.prepare('SELECT traffic_expires_at FROM admin_settings WHERE id = 1').get().traffic_expires_at,
     '2026-08-11T20:00:00.000Z'
+  );
+  assert.equal(
+    database.prepare('SELECT traffic_period_started_at FROM admin_settings WHERE id = 1').get()
+      .traffic_period_started_at,
+    '2026-08-12T00:25:00.000Z'
   );
   assert.equal(
     database
@@ -300,6 +325,89 @@ test('admin settings migration installs the default traffic limit once and prese
   assert.equal(
     database.prepare('SELECT traffic_expires_at FROM admin_settings WHERE id = 1').get().traffic_expires_at,
     '2026-09-01T00:00:00.000Z'
+  );
+  database.close();
+});
+
+test('traffic period migration fills an empty start once and preserves later changes', () => {
+  const database = new DatabaseSync(':memory:');
+  database.exec(`
+    CREATE TABLE admin_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      traffic_limit_bytes INTEGER NOT NULL,
+      traffic_period_started_at TEXT,
+      traffic_expires_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO admin_settings
+      (id, traffic_limit_bytes, traffic_period_started_at, traffic_expires_at, updated_at)
+    VALUES (1, 695784701952, '', '2026-09-11T00:25:00.000Z', '2026-08-12T00:25:00.000Z');
+  `);
+  const migration = readFileSync(new URL('migrations/2026-08-12-add-traffic-period-start.sql', baseUrl), 'utf8');
+
+  database.exec(migration);
+  assert.equal(
+    database.prepare('SELECT traffic_period_started_at FROM admin_settings WHERE id = 1').get()
+      .traffic_period_started_at,
+    '2026-08-12T00:25:00.000Z'
+  );
+  database
+    .prepare('UPDATE admin_settings SET traffic_period_started_at = ? WHERE id = 1')
+    .run('2026-09-12T00:25:00.000Z');
+  database.exec(migration);
+  assert.equal(
+    database.prepare('SELECT traffic_period_started_at FROM admin_settings WHERE id = 1').get()
+      .traffic_period_started_at,
+    '2026-09-12T00:25:00.000Z'
+  );
+  database.close();
+});
+
+test('managed config default migration enables inheritance and preserves later policy choices', () => {
+  const database = new DatabaseSync(':memory:');
+  database.exec(currentSchema);
+  database.exec(`
+    INSERT INTO users (id, name, normalized_name, status, created_at)
+    VALUES ('user-1', 'Alice', 'alice', 'active', '2026-08-12T00:00:00.000Z');
+    INSERT INTO remote_config (id, updated_at)
+    VALUES (1, '2026-08-12T00:00:00.000Z');
+  `);
+  const migration = readFileSync(new URL('migrations/2026-08-12-add-managed-config-default.sql', baseUrl), 'utf8');
+
+  database.exec(migration);
+  assert.deepEqual(
+    {
+      ...database
+        .prepare(
+          `SELECT
+             remote_config.can_edit_managed_config,
+             users.can_edit_managed_config_override
+           FROM remote_config
+           CROSS JOIN users
+           WHERE remote_config.id = 1 AND users.id = 'user-1'`
+        )
+        .get()
+    },
+    { can_edit_managed_config: 1, can_edit_managed_config_override: null }
+  );
+
+  database.prepare('UPDATE remote_config SET can_edit_managed_config = 0 WHERE id = 1').run();
+  database.prepare('UPDATE users SET can_edit_managed_config_override = 0 WHERE id = ?').run('user-1');
+  database.exec(migration);
+  assert.deepEqual(
+    {
+      ...database
+        .prepare(
+          `SELECT
+             remote_config.can_edit_managed_config,
+             users.can_edit_managed_config_override
+           FROM remote_config
+           CROSS JOIN users
+           WHERE remote_config.id = 1 AND users.id = 'user-1'`
+        )
+        .get()
+    },
+    { can_edit_managed_config: 0, can_edit_managed_config_override: 0 }
   );
   database.close();
 });

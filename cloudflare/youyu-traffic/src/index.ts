@@ -65,6 +65,10 @@ type RemoteConfigInput = {
   regionFallback?: string | null;
 };
 
+type AdminRemoteConfigInput = RemoteConfigInput & {
+  canEditManagedConfig?: unknown;
+};
+
 type ClientConfigUpdateInput = {
   userId?: unknown;
   deviceId?: unknown;
@@ -97,11 +101,13 @@ type UserNoticeAcknowledgementInput = {
 
 type AdminTrafficLimitInput = {
   trafficLimitBytes?: unknown;
+  trafficPeriodStartedAt?: unknown;
   trafficExpiresAt?: unknown;
 };
 
 type AdminTrafficLimitRow = {
   trafficLimitBytes?: number | null;
+  trafficPeriodStartedAt?: string | null;
   trafficExpiresAt?: string | null;
   uploadBytes?: number | null;
   downloadBytes?: number | null;
@@ -109,12 +115,12 @@ type AdminTrafficLimitRow = {
 
 type AdminTrafficLimitSummary = {
   trafficLimitBytes: number;
+  trafficPeriodStartedAt: string;
   trafficExpiresAt: string;
   uploadBytes: number;
   downloadBytes: number;
   usedBytes: number;
   remainingBytes: number;
-  exceededBytes: number;
   usagePercent: number;
 };
 
@@ -136,6 +142,7 @@ type AdminTrafficTrendPoint = {
 type RemoteConfigRow = {
   version?: number;
   enabled?: number | null;
+  can_edit_managed_config?: number | null;
   subscription_url?: string | null;
   rule_profile?: string | null;
   preferred_region?: string | null;
@@ -168,7 +175,7 @@ type EffectiveDeviceConfigRow = RemoteConfigRow & {
   user_preferred_region?: string | null;
   user_region_fallback?: string | null;
   user_updated_at?: string | null;
-  can_edit_managed_config?: number | null;
+  user_can_edit_managed_config_override?: number | null;
   user_id?: string | null;
   user_name?: string | null;
   profile_updated_at?: string | null;
@@ -194,6 +201,11 @@ type RemoteControlConfig = {
   proxyRules: string[];
   anomalyThresholdBytes: number;
   updatedAt: string;
+};
+
+type ManagedConfigPermissionState = {
+  override: boolean | null;
+  effective: boolean;
 };
 
 type RemoteUserProfile = {
@@ -248,8 +260,9 @@ const USER_NOTICE_DURATION_STEP_MINUTES = 5;
 const USER_NOTICE_MAX_DURATION_MINUTES = 7 * 24 * 60;
 const TRAFFIC_TIME_ZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ANOMALY_THRESHOLD_BYTES = 1024 * 1024 * 1024;
-const DEFAULT_TRAFFIC_LIMIT_BYTES = 3148 * 1024 * 1024 * 1024;
-const DEFAULT_TRAFFIC_EXPIRES_AT = '2026-08-11T20:00:00.000Z';
+const DEFAULT_TRAFFIC_LIMIT_BYTES = 648 * 1024 * 1024 * 1024;
+const DEFAULT_TRAFFIC_PERIOD_STARTED_AT = '2026-08-12T00:25:00.000Z';
+const DEFAULT_TRAFFIC_EXPIRES_AT = '2026-09-11T00:25:00.000Z';
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -613,7 +626,11 @@ async function updateClientConfig(request: Request, env: Env): Promise<Response>
      WHERE users.id = ?
        AND users.status = 'active'
        AND users.merged_into_user_id IS NULL
-       AND users.can_edit_managed_config = 1
+       AND COALESCE(
+         users.can_edit_managed_config_override,
+         remote_config.can_edit_managed_config,
+         1
+       ) = 1
      ON CONFLICT(user_id) DO UPDATE SET
        ${columns.map((column) => `${column} = excluded.${column}`).join(', ')},
        updated_at = excluded.updated_at`
@@ -622,10 +639,17 @@ async function updateClientConfig(request: Request, env: Env): Promise<Response>
     .run();
   if (getD1Changes(result) === 0) {
     const user = await env.DB.prepare(
-      `SELECT status, merged_into_user_id AS mergedIntoUserId,
-              can_edit_managed_config AS canEditManagedConfig
+      `SELECT
+         users.status,
+         users.merged_into_user_id AS mergedIntoUserId,
+         COALESCE(
+           users.can_edit_managed_config_override,
+           remote_config.can_edit_managed_config,
+           1
+         ) AS canEditManagedConfig
        FROM users
-       WHERE id = ?`
+       LEFT JOIN remote_config ON remote_config.id = 1
+       WHERE users.id = ?`
     )
       .bind(canonicalUserId)
       .first<{ status?: string; mergedIntoUserId?: string | null; canEditManagedConfig?: number }>();
@@ -674,8 +698,8 @@ async function getAdminConfig(env: Env): Promise<Response> {
 }
 
 async function updateAdminConfig(request: Request, env: Env): Promise<Response> {
-  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as RemoteConfigInput;
-  assertSupportedRemoteConfigInput(input);
+  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as AdminRemoteConfigInput;
+  assertSupportedAdminRemoteConfigInput(input);
   const assignments: string[] = [];
   const bindings: unknown[] = [];
   const assign = (column: string, value: unknown): void => {
@@ -686,6 +710,12 @@ async function updateAdminConfig(request: Request, env: Env): Promise<Response> 
   if (hasOwnField(input, 'enabled')) {
     if (typeof input.enabled !== 'boolean') throw new HttpError(400, 'invalid enabled');
     assign('enabled', input.enabled ? 1 : 0);
+  }
+  if (hasOwnField(input, 'canEditManagedConfig')) {
+    if (typeof input.canEditManagedConfig !== 'boolean') {
+      throw new HttpError(400, 'invalid managed config permission');
+    }
+    assign('can_edit_managed_config', input.canEditManagedConfig ? 1 : 0);
   }
   if (hasOwnField(input, 'subscriptionUrl')) {
     assign('subscription_url', parseNullableSubscriptionUrl(input.subscriptionUrl));
@@ -718,8 +748,8 @@ async function updateAdminConfig(request: Request, env: Env): Promise<Response> 
   const now = new Date().toISOString();
   await env.DB.prepare(
     `INSERT OR IGNORE INTO remote_config
-       (id, version, enabled, subscription_url, rule_profile, preferred_region, region_fallback, preferred_node, preferred_strategy, direct_rules, proxy_rules, anomaly_threshold_bytes, updated_at)
-     VALUES (1, 1, 1, NULL, NULL, 'jp', 'global', NULL, NULL, '[]', '[]', 1073741824, ?)`
+       (id, version, enabled, can_edit_managed_config, subscription_url, rule_profile, preferred_region, region_fallback, preferred_node, preferred_strategy, direct_rules, proxy_rules, anomaly_threshold_bytes, updated_at)
+     VALUES (1, 1, 1, 1, NULL, NULL, 'jp', 'global', NULL, NULL, '[]', '[]', 1073741824, ?)`
   )
     .bind(now)
     .run();
@@ -739,26 +769,37 @@ async function getAdminTrafficLimit(env: Env): Promise<Response> {
 
 async function updateAdminTrafficLimit(request: Request, env: Env): Promise<Response> {
   const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as AdminTrafficLimitInput;
-  if (Object.keys(input).some((field) => field !== 'trafficLimitBytes' && field !== 'trafficExpiresAt')) {
+  if (
+    Object.keys(input).some(
+      (field) => field !== 'trafficLimitBytes' && field !== 'trafficPeriodStartedAt' && field !== 'trafficExpiresAt'
+    )
+  ) {
     throw new HttpError(400, 'unsupported traffic limit field');
   }
   const updatesLimit = hasOwnField(input, 'trafficLimitBytes');
+  const updatesPeriodStart = hasOwnField(input, 'trafficPeriodStartedAt');
   const updatesExpiry = hasOwnField(input, 'trafficExpiresAt');
-  if (!updatesLimit && !updatesExpiry) throw new HttpError(400, 'invalid traffic limit');
+  if (!updatesLimit && !updatesPeriodStart && !updatesExpiry) throw new HttpError(400, 'invalid traffic limit');
   const current = await getAdminTrafficLimitSummary(env);
   const trafficLimitBytes = updatesLimit ? parseTrafficLimitBytes(input.trafficLimitBytes) : current.trafficLimitBytes;
+  const trafficPeriodStartedAt = updatesPeriodStart
+    ? parseTrafficPeriodStartedAt(input.trafficPeriodStartedAt)
+    : current.trafficPeriodStartedAt;
   const trafficExpiresAt = updatesExpiry ? parseTrafficExpiresAt(input.trafficExpiresAt) : current.trafficExpiresAt;
+  requireValidTrafficPeriod(trafficPeriodStartedAt, trafficExpiresAt);
   const now = new Date().toISOString();
 
   await env.DB.prepare(
-    `INSERT INTO admin_settings (id, traffic_limit_bytes, traffic_expires_at, updated_at)
-     VALUES (1, ?, ?, ?)
+    `INSERT INTO admin_settings
+       (id, traffic_limit_bytes, traffic_period_started_at, traffic_expires_at, updated_at)
+     VALUES (1, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        traffic_limit_bytes = excluded.traffic_limit_bytes,
+       traffic_period_started_at = excluded.traffic_period_started_at,
        traffic_expires_at = excluded.traffic_expires_at,
        updated_at = excluded.updated_at`
   )
-    .bind(trafficLimitBytes, trafficExpiresAt, now)
+    .bind(trafficLimitBytes, trafficPeriodStartedAt, trafficExpiresAt, now)
     .run();
 
   return json(await getAdminTrafficLimitSummary(env));
@@ -766,13 +807,15 @@ async function updateAdminTrafficLimit(request: Request, env: Env): Promise<Resp
 
 async function getAdminUserConfig(env: Env, userId: string): Promise<Response> {
   await requireKnownUser(env, userId);
-  const [override, effective] = await Promise.all([
+  const [override, effective, permission] = await Promise.all([
     getUserRemoteConfig(env, userId),
-    getEffectiveRemoteConfig(env, userId)
+    getEffectiveRemoteConfig(env, userId),
+    getUserManagedConfigPermission(env, userId)
   ]);
   await requireKnownUser(env, userId);
   return json({
     canEditManagedConfig: effective.canEditManagedConfig,
+    canEditManagedConfigOverride: permission.override,
     override,
     effective
   });
@@ -781,18 +824,23 @@ async function getAdminUserConfig(env: Env, userId: string): Promise<Response> {
 async function updateAdminManagedConfigPermission(request: Request, env: Env, userId: string): Promise<Response> {
   const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as ManagedConfigPermissionInput;
   assertOnlyFields(input, ['canEditManagedConfig'], 'unsupported config permission field');
-  if (typeof input.canEditManagedConfig !== 'boolean') {
+  if (input.canEditManagedConfig !== null && typeof input.canEditManagedConfig !== 'boolean') {
     throw new HttpError(400, 'invalid managed config permission');
   }
   const result = await env.DB.prepare(
     `UPDATE users
-     SET can_edit_managed_config = ?
+     SET can_edit_managed_config_override = ?
      WHERE id = ? AND status = 'active' AND merged_into_user_id IS NULL`
   )
-    .bind(input.canEditManagedConfig ? 1 : 0, userId)
+    .bind(typeof input.canEditManagedConfig === 'boolean' ? (input.canEditManagedConfig ? 1 : 0) : null, userId)
     .run();
   if (getD1Changes(result) === 0) throw new HttpError(404, 'unknown user');
-  return json({ ok: true, canEditManagedConfig: input.canEditManagedConfig });
+  const permission = await getUserManagedConfigPermission(env, userId);
+  return json({
+    ok: true,
+    canEditManagedConfig: permission.effective,
+    canEditManagedConfigOverride: permission.override
+  });
 }
 
 async function updateAdminUserConfig(request: Request, env: Env, userId: string): Promise<Response> {
@@ -855,10 +903,18 @@ async function updateAdminUserConfig(request: Request, env: Env, userId: string)
 
   await deleteEmptyUserRemoteConfig(env, userId);
 
-  const override = await getUserRemoteConfig(env, userId);
-  const effective = await getEffectiveRemoteConfig(env, userId);
+  const [override, effective, permission] = await Promise.all([
+    getUserRemoteConfig(env, userId),
+    getEffectiveRemoteConfig(env, userId),
+    getUserManagedConfigPermission(env, userId)
+  ]);
   await requireKnownUser(env, userId);
-  return json({ canEditManagedConfig: effective.canEditManagedConfig, override, effective });
+  return json({
+    canEditManagedConfig: effective.canEditManagedConfig,
+    canEditManagedConfigOverride: permission.override,
+    override,
+    effective
+  });
 }
 
 async function syncGlobalConfigToUsers(env: Env): Promise<Response> {
@@ -883,10 +939,14 @@ async function resetAdminUserConfig(env: Env, userId: string): Promise<Response>
   )
     .bind(userId, userId)
     .run();
-  const effective = await getEffectiveRemoteConfig(env, userId);
+  const [effective, permission] = await Promise.all([
+    getEffectiveRemoteConfig(env, userId),
+    getUserManagedConfigPermission(env, userId)
+  ]);
   await requireKnownUser(env, userId);
   return json({
     canEditManagedConfig: effective.canEditManagedConfig,
+    canEditManagedConfigOverride: permission.override,
     override: null,
     effective
   });
@@ -2129,28 +2189,35 @@ async function getAdminTrafficLimitSummary(env: Env): Promise<AdminTrafficLimitS
   let row = await queryAdminTrafficLimitSummary(env);
   if (!row) {
     await env.DB.prepare(
-      `INSERT OR IGNORE INTO admin_settings (id, traffic_limit_bytes, traffic_expires_at, updated_at)
-       VALUES (1, ?, ?, ?)`
+      `INSERT OR IGNORE INTO admin_settings
+         (id, traffic_limit_bytes, traffic_period_started_at, traffic_expires_at, updated_at)
+       VALUES (1, ?, ?, ?, ?)`
     )
-      .bind(DEFAULT_TRAFFIC_LIMIT_BYTES, DEFAULT_TRAFFIC_EXPIRES_AT, new Date().toISOString())
+      .bind(
+        DEFAULT_TRAFFIC_LIMIT_BYTES,
+        DEFAULT_TRAFFIC_PERIOD_STARTED_AT,
+        DEFAULT_TRAFFIC_EXPIRES_AT,
+        new Date().toISOString()
+      )
       .run();
     row = await queryAdminTrafficLimitSummary(env);
   }
 
   const trafficLimitBytes = parseStoredTrafficLimitBytes(row?.trafficLimitBytes);
+  const trafficPeriodStartedAt = parseStoredTrafficPeriodStartedAt(row?.trafficPeriodStartedAt);
   const trafficExpiresAt = parseStoredTrafficExpiresAt(row?.trafficExpiresAt);
   const uploadBytes = normalizeBytes(row?.uploadBytes);
   const downloadBytes = normalizeBytes(row?.downloadBytes);
   const usedBytes = uploadBytes + downloadBytes;
   return {
     trafficLimitBytes,
+    trafficPeriodStartedAt,
     trafficExpiresAt,
     uploadBytes,
     downloadBytes,
     usedBytes,
     remainingBytes: Math.max(trafficLimitBytes - usedBytes, 0),
-    exceededBytes: Math.max(usedBytes - trafficLimitBytes, 0),
-    usagePercent: (usedBytes / trafficLimitBytes) * 100
+    usagePercent: Math.min((usedBytes / trafficLimitBytes) * 100, 100)
   };
 }
 
@@ -2158,14 +2225,19 @@ async function queryAdminTrafficLimitSummary(env: Env): Promise<AdminTrafficLimi
   return env.DB.prepare(
     `WITH traffic_totals AS (
        SELECT
-         COALESCE(SUM(traffic_daily.upload_bytes), 0) AS uploadBytes,
-         COALESCE(SUM(traffic_daily.download_bytes), 0) AS downloadBytes
-       FROM traffic_daily
-       INNER JOIN users ON users.id = traffic_daily.user_id
-       WHERE users.status = 'active' AND users.merged_into_user_id IS NULL
+         COALESCE(SUM(traffic_reports.upload_delta), 0) AS uploadBytes,
+         COALESCE(SUM(traffic_reports.download_delta), 0) AS downloadBytes
+       FROM traffic_reports
+       INNER JOIN users ON users.id = traffic_reports.user_id
+       INNER JOIN admin_settings ON admin_settings.id = 1
+       WHERE traffic_reports.created_at >= admin_settings.traffic_period_started_at
+         AND traffic_reports.created_at < admin_settings.traffic_expires_at
+         AND users.status = 'active'
+         AND users.merged_into_user_id IS NULL
      )
      SELECT
        admin_settings.traffic_limit_bytes AS trafficLimitBytes,
+       admin_settings.traffic_period_started_at AS trafficPeriodStartedAt,
        admin_settings.traffic_expires_at AS trafficExpiresAt,
        traffic_totals.uploadBytes,
        traffic_totals.downloadBytes
@@ -2383,7 +2455,12 @@ async function listUsers(env: Env, pagination: AdminPagination): Promise<Respons
        users.id,
        users.name,
        users.status,
-       users.can_edit_managed_config = 1 AS canEditManagedConfig,
+       COALESCE(
+         users.can_edit_managed_config_override,
+         remote_config.can_edit_managed_config,
+         1
+       ) = 1 AS canEditManagedConfig,
+       users.can_edit_managed_config_override AS canEditManagedConfigOverride,
        CASE
          WHEN user_remote_config.user_id IS NOT NULL AND user_remote_config.enabled = 0 THEN '已停用'
          WHEN user_remote_config.user_id IS NOT NULL AND COALESCE(TRIM(user_remote_config.subscription_url), '') <> '' THEN '单独订阅'
@@ -2514,8 +2591,8 @@ async function getGlobalRemoteConfig(env: Env): Promise<RemoteControlConfig> {
     const now = new Date().toISOString();
     await env.DB.prepare(
       `INSERT OR IGNORE INTO remote_config
-       (id, version, enabled, subscription_url, rule_profile, preferred_region, region_fallback, preferred_node, preferred_strategy, direct_rules, proxy_rules, anomaly_threshold_bytes, updated_at)
-       VALUES (1, 1, 1, NULL, NULL, 'jp', 'global', NULL, NULL, '[]', '[]', 1073741824, ?)`
+       (id, version, enabled, can_edit_managed_config, subscription_url, rule_profile, preferred_region, region_fallback, preferred_node, preferred_strategy, direct_rules, proxy_rules, anomaly_threshold_bytes, updated_at)
+       VALUES (1, 1, 1, 1, NULL, NULL, 'jp', 'global', NULL, NULL, '[]', '[]', 1073741824, ?)`
     )
       .bind(now)
       .run();
@@ -2523,7 +2600,7 @@ async function getGlobalRemoteConfig(env: Env): Promise<RemoteControlConfig> {
       version: 1,
       enabled: true,
       configSource: 'global',
-      canEditManagedConfig: false,
+      canEditManagedConfig: true,
       subscriptionUrl: undefined,
       ruleProfile: 'ruleset',
       preferredRegion: 'jp',
@@ -2572,29 +2649,39 @@ async function deleteEmptyUserRemoteConfig(env: Env, userId: string): Promise<vo
     .run();
 }
 
-async function getUserManagedConfigPermission(env: Env, userId: string): Promise<boolean> {
+async function getUserManagedConfigPermission(env: Env, userId: string): Promise<ManagedConfigPermissionState> {
   const row = await env.DB.prepare(
-    `SELECT can_edit_managed_config AS canEditManagedConfig
+    `SELECT
+       users.can_edit_managed_config_override AS permissionOverride,
+       COALESCE(
+         users.can_edit_managed_config_override,
+         remote_config.can_edit_managed_config,
+         1
+       ) AS effectivePermission
      FROM users
-     WHERE id = ? AND status = 'active' AND merged_into_user_id IS NULL`
+     LEFT JOIN remote_config ON remote_config.id = 1
+     WHERE users.id = ? AND users.status = 'active' AND users.merged_into_user_id IS NULL`
   )
     .bind(userId)
-    .first<{ canEditManagedConfig?: number | null }>();
+    .first<{ permissionOverride?: number | null; effectivePermission?: number | null }>();
   if (!row) throw new HttpError(404, 'unknown user');
-  return row.canEditManagedConfig === 1;
+  return {
+    override: typeof row.permissionOverride === 'number' ? row.permissionOverride === 1 : null,
+    effective: row.effectivePermission !== 0
+  };
 }
 
 async function getEffectiveRemoteConfig(env: Env, userId: string): Promise<RemoteControlConfig> {
-  const [global, override, canEditManagedConfig] = await Promise.all([
+  const [global, override, permission] = await Promise.all([
     getGlobalRemoteConfig(env),
     getUserRemoteConfig(env, userId),
     getUserManagedConfigPermission(env, userId)
   ]);
-  if (!override) return { ...global, canEditManagedConfig };
+  if (!override) return { ...global, canEditManagedConfig: permission.effective };
 
   return {
     ...global,
-    canEditManagedConfig,
+    canEditManagedConfig: permission.effective,
     enabled: typeof override.enabled === 'boolean' ? override.enabled : global.enabled,
     subscriptionUrl: override.subscriptionUrl ?? global.subscriptionUrl,
     ruleProfile: override.ruleProfile ?? global.ruleProfile,
@@ -2611,6 +2698,7 @@ async function getEffectiveClientStateForDevice(env: Env, deviceId: string): Pro
     `SELECT
        remote_config.version,
        remote_config.enabled,
+       remote_config.can_edit_managed_config,
        remote_config.subscription_url,
        remote_config.rule_profile,
        remote_config.preferred_region,
@@ -2622,7 +2710,7 @@ async function getEffectiveClientStateForDevice(env: Env, deviceId: string): Pro
        user_remote_config.preferred_region AS user_preferred_region,
        user_remote_config.region_fallback AS user_region_fallback,
        user_remote_config.updated_at AS user_updated_at,
-       users.can_edit_managed_config,
+       users.can_edit_managed_config_override AS user_can_edit_managed_config_override,
        users.id AS user_id,
        users.name AS user_name,
        COALESCE((
@@ -2656,9 +2744,13 @@ async function getEffectiveClientStateForDevice(env: Env, deviceId: string): Pro
   if (!row) throw new HttpError(409, 'device state changed');
 
   const global = normalizeRemoteConfigRow(row);
+  const canEditManagedConfig =
+    typeof row.user_can_edit_managed_config_override === 'number'
+      ? row.user_can_edit_managed_config_override === 1
+      : global.canEditManagedConfig;
   const config = {
     ...global,
-    canEditManagedConfig: row.can_edit_managed_config === 1,
+    canEditManagedConfig,
     enabled: typeof row.user_enabled === 'number' ? row.user_enabled === 1 : global.enabled,
     subscriptionUrl: normalizeStoredSubscriptionUrl(row.user_subscription_url) ?? global.subscriptionUrl,
     ruleProfile: normalizeOptionalRuleProfile(row.user_rule_profile) ?? global.ruleProfile,
@@ -2699,7 +2791,7 @@ function normalizeRemoteConfigRow(row: RemoteConfigRow): RemoteControlConfig {
     version: typeof row.version === 'number' && row.version > 0 ? row.version : 1,
     enabled: row.enabled !== 0,
     configSource: 'global',
-    canEditManagedConfig: false,
+    canEditManagedConfig: row.can_edit_managed_config !== 0,
     subscriptionUrl: normalizeStoredSubscriptionUrl(row.subscription_url),
     ruleProfile: normalizeRuleProfile(row.rule_profile),
     preferredRegion: normalizePreferredRegion(row.preferred_region),
@@ -3160,6 +3252,17 @@ function parseTrafficExpiresAt(value: unknown): string {
   return parseStrictIsoDateTime(value.trim(), 'invalid traffic expiry');
 }
 
+function parseTrafficPeriodStartedAt(value: unknown): string {
+  if (typeof value !== 'string') throw new HttpError(400, 'invalid traffic period start');
+  return parseStrictIsoDateTime(value.trim(), 'invalid traffic period start');
+}
+
+function requireValidTrafficPeriod(startedAt: string, expiresAt: string): void {
+  if (new Date(startedAt).getTime() >= new Date(expiresAt).getTime()) {
+    throw new HttpError(400, 'invalid traffic period');
+  }
+}
+
 function parseStrictIsoDateTime(text: string, errorMessage: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(
     text
@@ -3203,6 +3306,14 @@ function parseStoredTrafficExpiresAt(value: unknown): string {
   }
 }
 
+function parseStoredTrafficPeriodStartedAt(value: unknown): string {
+  try {
+    return parseTrafficPeriodStartedAt(value);
+  } catch {
+    return DEFAULT_TRAFFIC_PERIOD_STARTED_AT;
+  }
+}
+
 function parseAdminTrafficTrendRange(value: string | null): AdminTrafficTrendRange {
   if (value === null || value === '') return 'day';
   if (value === 'hour' || value === 'day' || value === 'month') return value;
@@ -3235,6 +3346,20 @@ function parseNullableConfigChoice(value: unknown, choices: string[], errorMessa
 
 function assertSupportedRemoteConfigInput(input: RemoteConfigInput): void {
   const supportedFields = new Set(['enabled', 'subscriptionUrl', 'ruleProfile', 'preferredRegion', 'regionFallback']);
+  if (Object.keys(input).some((field) => !supportedFields.has(field))) {
+    throw new HttpError(400, 'unsupported config field');
+  }
+}
+
+function assertSupportedAdminRemoteConfigInput(input: AdminRemoteConfigInput): void {
+  const supportedFields = new Set([
+    'enabled',
+    'canEditManagedConfig',
+    'subscriptionUrl',
+    'ruleProfile',
+    'preferredRegion',
+    'regionFallback'
+  ]);
   if (Object.keys(input).some((field) => !supportedFields.has(field))) {
     throw new HttpError(400, 'unsupported config field');
   }
@@ -3432,6 +3557,8 @@ function errorCodeFor(status: number, message: string): string {
     'invalid target user': 'INVALID_TARGET_USER',
     'invalid traffic expiry': 'INVALID_TRAFFIC_EXPIRY',
     'invalid traffic limit': 'INVALID_TRAFFIC_LIMIT',
+    'invalid traffic period': 'INVALID_TRAFFIC_PERIOD',
+    'invalid traffic period start': 'INVALID_TRAFFIC_PERIOD_START',
     'invalid traffic trend range': 'INVALID_TRAFFIC_TREND_RANGE',
     'invalid user': 'INVALID_USER',
     'invalid user merge': 'INVALID_USER_MERGE',

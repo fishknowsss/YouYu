@@ -3,8 +3,9 @@ export const ADMIN_SCRIPT = String.raw`
   'use strict';
 
   const GIB = 1073741824;
-  const DEFAULT_TRAFFIC_LIMIT = 3380139261952;
-  const DEFAULT_TRAFFIC_EXPIRY = '2026-08-11T20:00:00.000Z';
+  const DEFAULT_TRAFFIC_LIMIT = 695784701952;
+  const DEFAULT_TRAFFIC_PERIOD_START = '2026-08-12T00:25:00.000Z';
+  const DEFAULT_TRAFFIC_EXPIRY = '2026-09-11T00:25:00.000Z';
   const ADMIN_API_PAGE_SIZE = 200;
   const ADMIN_API_MAX_ROWS = 5000;
   const USER_NOTICE_DEFAULT_DURATION_MINUTES = 10;
@@ -27,10 +28,9 @@ export const ADMIN_SCRIPT = String.raw`
       downloadBytes: 0,
       usedBytes: 0,
       remainingBytes: DEFAULT_TRAFFIC_LIMIT,
-      exceededBytes: 0,
       usagePercent: 0,
-      trafficExpiresAt: DEFAULT_TRAFFIC_EXPIRY,
-      hasServerUsage: false
+      trafficPeriodStartedAt: DEFAULT_TRAFFIC_PERIOD_START,
+      trafficExpiresAt: DEFAULT_TRAFFIC_EXPIRY
     },
     trafficTrend: {
       range: 'day',
@@ -601,6 +601,8 @@ export const ADMIN_SCRIPT = String.raw`
     const data = await api('/api/admin/config', undefined, tokenOverride);
     const config = data.config || {};
     document.getElementById('globalEnabled').value = config.enabled === false ? 'false' : 'true';
+    document.getElementById('globalCanEditManagedConfig').value =
+      config.canEditManagedConfig === false ? 'false' : 'true';
     document.getElementById('globalSubscription').value = config.subscriptionUrl || '';
     document.getElementById('globalRuleProfile').value = normalizeRuleProfile(config.ruleProfile);
     document.getElementById('globalPreferredRegion').value = normalizePreferredRegion(config.preferredRegion);
@@ -622,7 +624,6 @@ export const ADMIN_SCRIPT = String.raw`
 
   async function loadTrafficLimit(tokenOverride) {
     const data = await api('/api/admin/traffic-limit', undefined, tokenOverride);
-    const hasUsage = Number.isFinite(Number(data.usedBytes));
     const limit = positiveNumber(data.trafficLimitBytes) || DEFAULT_TRAFFIC_LIMIT;
     state.quota = {
       trafficLimitBytes: limit,
@@ -630,12 +631,12 @@ export const ADMIN_SCRIPT = String.raw`
       downloadBytes: nonNegativeNumber(data.downloadBytes),
       usedBytes: nonNegativeNumber(data.usedBytes),
       remainingBytes: nonNegativeNumber(data.remainingBytes),
-      exceededBytes: nonNegativeNumber(data.exceededBytes),
       usagePercent: nonNegativeNumber(data.usagePercent),
-      trafficExpiresAt: normalizeTrafficExpiry(data.trafficExpiresAt),
-      hasServerUsage: hasUsage
+      trafficPeriodStartedAt: normalizeTrafficPeriodStart(data.trafficPeriodStartedAt),
+      trafficExpiresAt: normalizeTrafficExpiry(data.trafficExpiresAt)
     };
     document.getElementById('trafficLimitGb').value = formatEditableGb(limit);
+    document.getElementById('trafficPeriodStartedAt').value = formatShanghaiDateTimeInput(state.quota.trafficPeriodStartedAt);
     document.getElementById('trafficExpiresAt').value = formatShanghaiDateTimeInput(state.quota.trafficExpiresAt);
   }
 
@@ -681,30 +682,21 @@ export const ADMIN_SCRIPT = String.raw`
   }
 
   function renderQuota() {
-    const totals = aggregateUsers();
     const quota = Object.assign({}, state.quota);
-    if (!quota.hasServerUsage) {
-      quota.uploadBytes = totals.upload;
-      quota.downloadBytes = totals.download;
-      quota.usedBytes = totals.upload + totals.download;
-      quota.remainingBytes = Math.max(quota.trafficLimitBytes - quota.usedBytes, 0);
-      quota.exceededBytes = Math.max(quota.usedBytes - quota.trafficLimitBytes, 0);
-      quota.usagePercent = quota.trafficLimitBytes > 0 ? quota.usedBytes / quota.trafficLimitBytes * 100 : 0;
-    }
     const ring = Math.min(100, Math.max(0, quota.usagePercent));
     document.querySelectorAll('[data-quota-donut]').forEach((donut) => {
       donut.style.setProperty('--ring', String(ring));
-      donut.classList.toggle('danger', quota.usagePercent >= 100);
-      donut.classList.toggle('warning', quota.usagePercent >= 80 && quota.usagePercent < 100);
+      donut.classList.toggle('warning', quota.usagePercent >= 80);
     });
     document.querySelectorAll('[data-quota-percent]').forEach((element) => { element.textContent = formatPercent(quota.usagePercent); });
     document.querySelectorAll('[data-quota-limit]').forEach((element) => { element.textContent = formatQuotaLimit(quota.trafficLimitBytes); });
     document.querySelectorAll('[data-quota-used]').forEach((element) => { element.textContent = formatBytes(quota.usedBytes); });
     document.querySelectorAll('[data-quota-limit-value]').forEach((element) => { element.textContent = formatQuotaLimit(quota.trafficLimitBytes); });
-    document.querySelectorAll('[data-quota-balance-label]').forEach((element) => { element.textContent = quota.exceededBytes > 0 ? '超额流量' : '剩余流量'; });
     document.querySelectorAll('[data-quota-balance]').forEach((element) => {
-      element.textContent = formatBytes(quota.exceededBytes > 0 ? quota.exceededBytes : quota.remainingBytes);
-      element.classList.toggle('danger-text', quota.exceededBytes > 0);
+      element.textContent = formatBytes(quota.remainingBytes);
+    });
+    document.querySelectorAll('[data-quota-start]').forEach((element) => {
+      element.textContent = formatShanghaiDateTime(quota.trafficPeriodStartedAt);
     });
     document.querySelectorAll('[data-quota-expiry]').forEach((element) => {
       element.textContent = formatShanghaiDateTime(quota.trafficExpiresAt);
@@ -1211,8 +1203,9 @@ export const ADMIN_SCRIPT = String.raw`
   function renderUserConfig(name, data) {
     const override = data.override || null;
     const effective = data.effective || {};
-    const canEditManagedConfig = data.canEditManagedConfig === true;
-    userCanEditManagedConfigEl.value = canEditManagedConfig ? 'true' : 'false';
+    const permissionOverride = data.canEditManagedConfigOverride;
+    userCanEditManagedConfigEl.value =
+      typeof permissionOverride === 'boolean' ? (permissionOverride ? 'true' : 'false') : 'inherit';
     userCanEditManagedConfigEl.dataset.savedValue = userCanEditManagedConfigEl.value;
     setUserConfigFields(effective);
     setUserMode(getUserModeFromConfig(override));
@@ -1300,6 +1293,7 @@ export const ADMIN_SCRIPT = String.raw`
     if (!validateSubscriptionField('global')) return;
     const payload = {
       enabled: document.getElementById('globalEnabled').value === 'true',
+      canEditManagedConfig: document.getElementById('globalCanEditManagedConfig').value === 'true',
       subscriptionUrl: document.getElementById('globalSubscription').value.trim() || null,
       ruleProfile: document.getElementById('globalRuleProfile').value,
       preferredRegion: document.getElementById('globalPreferredRegion').value,
@@ -1312,6 +1306,8 @@ export const ADMIN_SCRIPT = String.raw`
     });
     const config = data.config || payload;
     document.getElementById('globalEnabled').value = config.enabled === false ? 'false' : 'true';
+    document.getElementById('globalCanEditManagedConfig').value =
+      config.canEditManagedConfig === false ? 'false' : 'true';
     document.getElementById('globalSubscription').value = config.subscriptionUrl || '';
     document.getElementById('globalRuleProfile').value = normalizeRuleProfile(config.ruleProfile);
     document.getElementById('globalPreferredRegion').value = normalizePreferredRegion(config.preferredRegion);
@@ -1347,6 +1343,7 @@ export const ADMIN_SCRIPT = String.raw`
 
   async function saveTrafficLimit() {
     const input = document.getElementById('trafficLimitGb');
+    const periodStartInput = document.getElementById('trafficPeriodStartedAt');
     const expiryInput = document.getElementById('trafficExpiresAt');
     const gb = Number(input.value);
     const bytes = Math.round(gb * GIB);
@@ -1356,6 +1353,13 @@ export const ADMIN_SCRIPT = String.raw`
       throw new Error('请输入有效的正数额度');
     }
     input.removeAttribute('aria-invalid');
+    const trafficPeriodStartedAt = parseShanghaiDateTimeInput(periodStartInput.value);
+    if (!trafficPeriodStartedAt) {
+      periodStartInput.setAttribute('aria-invalid', 'true');
+      periodStartInput.focus();
+      throw new Error('请输入有效的开始时间');
+    }
+    periodStartInput.removeAttribute('aria-invalid');
     const trafficExpiresAt = parseShanghaiDateTimeInput(expiryInput.value);
     if (!trafficExpiresAt) {
       expiryInput.setAttribute('aria-invalid', 'true');
@@ -1363,10 +1367,20 @@ export const ADMIN_SCRIPT = String.raw`
       throw new Error('请输入有效的到期时间');
     }
     expiryInput.removeAttribute('aria-invalid');
+    if (dateValue(trafficPeriodStartedAt) >= dateValue(trafficExpiresAt)) {
+      periodStartInput.setAttribute('aria-invalid', 'true');
+      expiryInput.setAttribute('aria-invalid', 'true');
+      periodStartInput.focus();
+      throw new Error('开始时间必须早于到期时间');
+    }
     const data = await api('/api/admin/traffic-limit', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ trafficLimitBytes: bytes, trafficExpiresAt: trafficExpiresAt })
+      body: JSON.stringify({
+        trafficLimitBytes: bytes,
+        trafficPeriodStartedAt: trafficPeriodStartedAt,
+        trafficExpiresAt: trafficExpiresAt
+      })
     });
     const limit = positiveNumber(data.trafficLimitBytes) || bytes;
     state.quota = {
@@ -1375,12 +1389,12 @@ export const ADMIN_SCRIPT = String.raw`
       downloadBytes: nonNegativeNumber(data.downloadBytes),
       usedBytes: nonNegativeNumber(data.usedBytes),
       remainingBytes: nonNegativeNumber(data.remainingBytes),
-      exceededBytes: nonNegativeNumber(data.exceededBytes),
       usagePercent: nonNegativeNumber(data.usagePercent),
-      trafficExpiresAt: normalizeTrafficExpiry(data.trafficExpiresAt || trafficExpiresAt),
-      hasServerUsage: true
+      trafficPeriodStartedAt: normalizeTrafficPeriodStart(data.trafficPeriodStartedAt || trafficPeriodStartedAt),
+      trafficExpiresAt: normalizeTrafficExpiry(data.trafficExpiresAt || trafficExpiresAt)
     };
     input.value = formatEditableGb(limit);
+    periodStartInput.value = formatShanghaiDateTimeInput(state.quota.trafficPeriodStartedAt);
     expiryInput.value = formatShanghaiDateTimeInput(state.quota.trafficExpiresAt);
     renderQuota();
     setStatus('流量设置已保存');
@@ -1431,8 +1445,9 @@ export const ADMIN_SCRIPT = String.raw`
     const userId = state.activeUserId;
     const userName = state.activeUserName;
     const sequence = state.userLoadSequence;
-    const previousValue = userCanEditManagedConfigEl.dataset.savedValue === 'true' ? 'true' : 'false';
-    const canEditManagedConfig = userCanEditManagedConfigEl.value === 'true';
+    const previousValue = userCanEditManagedConfigEl.dataset.savedValue || 'inherit';
+    const selectedValue = userCanEditManagedConfigEl.value;
+    const canEditManagedConfig = selectedValue === 'inherit' ? null : selectedValue === 'true';
     try {
       const data = await api(
         '/api/admin/users/' + encodeURIComponent(userId) + '/config-permission',
@@ -1443,10 +1458,17 @@ export const ADMIN_SCRIPT = String.raw`
         }
       );
       if (!isCurrentUserContext(userId, sequence)) return;
-      const accepted = data.canEditManagedConfig === true;
-      userCanEditManagedConfigEl.value = accepted ? 'true' : 'false';
+      const acceptedOverride = data.canEditManagedConfigOverride;
+      userCanEditManagedConfigEl.value =
+        typeof acceptedOverride === 'boolean' ? (acceptedOverride ? 'true' : 'false') : 'inherit';
       userCanEditManagedConfigEl.dataset.savedValue = userCanEditManagedConfigEl.value;
-      const message = userName + (accepted ? ' 已允许自行配置' : ' 已禁止自行配置');
+      const message =
+        userName +
+        (userCanEditManagedConfigEl.value === 'inherit'
+          ? ' 已改为跟随全局'
+          : userCanEditManagedConfigEl.value === 'true'
+            ? ' 已允许自行配置'
+            : ' 已禁止自行配置');
       setStatus(message);
       showToast(message);
     } catch (error) {
@@ -2114,6 +2136,11 @@ export const ADMIN_SCRIPT = String.raw`
     return time > 0 ? new Date(time).toISOString() : DEFAULT_TRAFFIC_EXPIRY;
   }
 
+  function normalizeTrafficPeriodStart(value) {
+    const time = dateValue(value);
+    return time > 0 ? new Date(time).toISOString() : DEFAULT_TRAFFIC_PERIOD_START;
+  }
+
   function shanghaiDateKey(value) {
     const time = value instanceof Date ? value.getTime() : dateValue(value);
     if (!Number.isFinite(time) || time <= 0) return '';
@@ -2193,7 +2220,7 @@ export const ADMIN_SCRIPT = String.raw`
   }
 
   function formatPercent(value) {
-    const percent = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
+    const percent = Number.isFinite(Number(value)) ? Math.min(100, Math.max(0, Number(value))) : 0;
     return percent.toFixed(1) + '%';
   }
 
@@ -2310,7 +2337,9 @@ export const ADMIN_SCRIPT = String.raw`
     if (status === 429) return '请求太频繁';
     if (status === 400) {
       if (error === 'invalid subscription url') return '订阅链接无效';
-      if (error === 'invalid traffic limit') return '累计流量上限无效';
+      if (error === 'invalid traffic limit') return '套餐额度无效';
+      if (error === 'invalid traffic period start') return '开始时间无效';
+      if (error === 'invalid traffic period') return '开始时间必须早于到期时间';
       if (error === 'invalid traffic expiry') return '流量到期时间无效';
       if (error === 'invalid traffic trend range') return '趋势范围无效';
       if (error === 'invalid name') return '用户名无效';

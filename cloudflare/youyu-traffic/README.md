@@ -38,7 +38,7 @@ repairable columns only when an existing table is missing them, applies the idem
 and validates the complete Worker schema. It refuses to write when the base `users`, `devices`, or `traffic_daily`
 schema is incomplete or when a critical primary-key/unique constraint has drifted; initialize that database with
 `schema.sql` first. Re-running it preserves existing subscription values.
-It also preserves administrator-edited traffic limits and expiry times.
+It also preserves administrator-edited traffic limits, subscription-period starts, and expiry times.
 It does not deploy the Worker.
 
 Use your own private value for `REGISTRATION_PASSPHRASE`.
@@ -98,11 +98,13 @@ POST /api/admin/config
 Authorization: Bearer <ADMIN_TOKEN>
 ```
 
-`POST /api/admin/config` and per-user config accept `enabled`, `subscriptionUrl`, `ruleProfile`, `preferredRegion`,
-and `regionFallback`. Supported profiles are `ruleset` (智能规则) and `subscription` (机场规则). Supported regions are
-`auto`, `jp`, `hk`, `tw`, `sg`, `us`, and `kr`; `regionFallback` is `global` (try other healthy regions and notify) or
-`strict` (do not cross regions). The global default is `jp` plus `global`. A per-user `null` clears that field's
-override so it inherits the global value. Leave the subscription empty to avoid a remote subscription override.
+`POST /api/admin/config` accepts `enabled`, `canEditManagedConfig`, `subscriptionUrl`, `ruleProfile`,
+`preferredRegion`, and `regionFallback`; per-user config accepts the same managed settings except
+`canEditManagedConfig`, which uses its separate permission endpoint. Supported profiles are `ruleset` (智能规则) and
+`subscription` (机场规则). Supported regions are `auto`, `jp`, `hk`, `tw`, `sg`, `us`, and `kr`; `regionFallback` is
+`global` (try other healthy regions and notify) or `strict` (do not cross regions). The global defaults are `jp`,
+`global`, and permission to edit managed config. A per-user `null` clears that field's override so it inherits the
+global value. Leave the subscription empty to avoid a remote subscription override.
 Config request bodies are limited to 64 KiB; removed controls are rejected instead of being silently stored. Built-in
 direct/proxy protections remain client-owned, and traffic anomaly detection uses the fixed 1 GiB threshold.
 Compatibility responses still contain empty `directRules` / `proxyRules` arrays for older clients.
@@ -119,21 +121,22 @@ X-YouYu-Signature: <device HMAC>
 ```
 
 The Worker verifies the body-bound device signature and only accepts `subscriptionUrl` and `ruleProfile`; status,
-region policy, and other admin-owned fields cannot be changed by a client. Client writes are denied by default. An
-administrator must first grant that user `canEditManagedConfig` through the user drawer or the authenticated endpoint:
+region policy, and other admin-owned fields cannot be changed by a client. Client writes follow the global
+`canEditManagedConfig` policy, which defaults to allowed. The user drawer can keep following that global value or set
+an explicit per-user exception through the authenticated endpoint:
 
 ```http
 POST /api/admin/users/<userId>/config-permission
 Authorization: Bearer <ADMIN_TOKEN>
 Content-Type: application/json
 
-{ "canEditManagedConfig": true }
+{ "canEditManagedConfig": false }
 ```
 
-Signed `GET /api/config` responses include the effective `config.canEditManagedConfig` capability, so the desktop can
-disable managed-setting edits even when its hidden professional mode is open. Revoking the capability blocks later
-client writes without silently deleting an existing override; resetting that user's config remains a separate admin
-action. A differing value becomes a per-user
+The per-user value accepts `true`, `false`, or `null`; `null` restores inheritance. Signed `GET /api/config` responses
+include the effective `config.canEditManagedConfig` capability, so the desktop can disable managed-setting edits even
+when its hidden professional mode is open. Revoking the capability blocks later client writes without silently
+deleting an existing config override; resetting that user's config remains a separate admin action. A differing value becomes a per-user
 override immediately, so the admin user drawer reports `单独配置`. A value equal to the current global value clears
 that field's override. Resetting the user to `跟随全局` removes the override, and the next automatic or manual client
 sync applies the current global config. Concurrent admin and client actions use the order in which D1 successfully
@@ -142,8 +145,8 @@ current global row inside the same SQL statement, avoiding a stale global snapsh
 `configSource` as `global` or
 `user`, allowing the desktop UI to show the same ownership that the Worker and Mihomo runtime actually use.
 
-The cumulative traffic limit is an admin-only dashboard setting and is never included in client or per-user remote
-configuration responses. It defaults to 3148 GiB (`3380139261952` bytes):
+The subscription traffic period is an admin-only dashboard setting and is never included in client or per-user remote
+configuration responses:
 
 ```http
 GET /api/admin/traffic-limit
@@ -151,12 +154,18 @@ POST /api/admin/traffic-limit
 Authorization: Bearer <ADMIN_TOKEN>
 ```
 
-`POST /api/admin/traffic-limit` accepts `trafficLimitBytes`, `trafficExpiresAt`, or both. The limit must be a positive
-safe integer. The expiry must be a complete ISO 8601 timestamp with `Z` or an explicit offset and is stored in UTC.
-The default expiry is `2026-08-11T20:00:00.000Z`, which is `2026-08-12 04:00` in `Asia/Shanghai`. The response sums
-`upload_bytes + download_bytes` across all active, unmerged users and reports the configured limit, upload, download,
-used, remaining, exceeded, and usage percentage values. This is a cumulative historical total, not a monthly billing
-period. The expiry is informational and does not clear historical traffic.
+`POST /api/admin/traffic-limit` accepts `trafficLimitBytes`, `trafficPeriodStartedAt`, `trafficExpiresAt`, or any
+combination of those fields. The limit must be a positive safe integer. Both timestamps must be complete ISO 8601
+values with `Z` or an explicit offset, are stored in UTC, and the start must be earlier than the expiry. The current
+period is 648 GiB (`695784701952` bytes), from `2026-08-12T00:25:00.000Z` through
+`2026-09-11T00:25:00.000Z` (`2026-08-12 08:25` through `2026-09-11 08:25` in `Asia/Shanghai`).
+
+The response sums trusted `traffic_reports` whose server receipt time is at or after the configured start and before
+the configured expiry, across active, unmerged users. Changing the start opens a new reporting period without deleting
+or rewriting historical daily totals. Because desktop clients report about every two minutes, a start placed between
+two reports can include the first report interval that crosses the boundary. Remaining traffic never goes below zero,
+usage percentage is capped at 100%, and the dashboard has no overage state because the upstream subscription enforces
+its own hard limit.
 
 The overview traffic chart uses authenticated aggregate data:
 
@@ -253,8 +262,9 @@ report id with a different device, byte delta, or normalized report timestamp is
 `appVersion` metadata are deliberately excluded from the hash so a legitimate delayed retry remains compatible after
 a merge or app update. Daily traffic totals in `traffic_daily` are not deleted. Report
 deletion is bounded to 20 batches of 500 rows per table and invocation so a backlog cannot monopolize one Worker run.
-Because `traffic_daily` is retained, the admin traffic-limit calculation also remains cumulative until a future
-explicit billing-period model is introduced.
+`traffic_daily` remains the permanent historical aggregate. The current subscription-period calculation uses the
+detailed `traffic_reports`; the configured monthly period therefore remains fully covered by the 90-day audit-row
+retention window.
 
 Exact deduplication has a deliberate storage tradeoff: UUID v4 report ids are unordered, so one high-water mark cannot
 prove that an arbitrary old id was already accepted. Only reports with a non-zero traffic mutation receive a permanent

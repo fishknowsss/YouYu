@@ -1685,7 +1685,17 @@ test('admin page exposes the fixed-viewport management workspace without removed
   assert.match(page, /data-stat="todayReported"/);
   assert.match(page, /class="metric-pair"/);
   assert.match(page, /<th class="num">上传<\/th><th class="num">下载<\/th>/);
+  assert.match(page, /id="trafficPeriodStartedAt" type="datetime-local"/);
   assert.match(page, /id="trafficExpiresAt" type="datetime-local"/);
+  assert.match(page, /id="globalCanEditManagedConfig"/);
+  assert.match(
+    page,
+    /id="userCanEditManagedConfig"><option value="inherit">跟随全局<\/option><option value="true">允许<\/option><option value="false">不允许<\/option>/
+  );
+  assert.match(page, /<h2 class="panel-title">本期流量<\/h2>/);
+  assert.match(page, /<h2 class="panel-title">订阅周期<\/h2>/);
+  assert.doesNotMatch(page, /超额流量|累计上限/);
+  assert.doesNotMatch(script, /exceededBytes/);
   assert.match(styles, /grid-template-areas:\s*"trend quota"\s*"users ranking"\s*"users anomalies"/);
   assert.doesNotMatch(page, /实时在线|当日在线/);
   assert.match(styles, /table\s*\{[^}]*table-layout:\s*fixed;/);
@@ -1697,7 +1707,6 @@ test('admin page exposes the fixed-viewport management workspace without removed
   assert.match(page, /value="ruleset">智能规则/);
   assert.match(page, /value="subscription">机场规则/);
   assert.match(page, /id="userCanEditManagedConfig"/);
-  assert.match(page, /<option value="false">不允许<\/option><option value="true">允许<\/option>/);
   assert.match(page, /data-drawer-tab="merge">合并用户/);
   assert.match(page, /data-drawer-tab="profile">资料通知/);
   assert.match(page, /id="userProfileName"[^>]*maxlength="80"/);
@@ -1771,7 +1780,11 @@ test('admin page never uses an unsubmitted token draft for API requests', async 
               page: { limit: 200, offset: 0, returned: 1, hasMore: true, nextOffset: 1 }
             }
         : url.pathname.includes('/traffic-limit')
-          ? { trafficLimitBytes: 3380139261952, trafficExpiresAt: '2026-08-11T20:00:00.000Z' }
+          ? {
+              trafficLimitBytes: 695784701952,
+              trafficPeriodStartedAt: '2026-08-12T00:25:00.000Z',
+              trafficExpiresAt: '2026-09-11T00:25:00.000Z'
+            }
           : url.pathname.includes('/traffic-trend')
             ? { points: [] }
             : { anomalies: [], page: { limit: 100, offset: 0, returned: 0, hasMore: false, nextOffset: null } };
@@ -1842,6 +1855,27 @@ test('admin page edits a user profile and plain-text targeted notice end to end'
     .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
   await waitFor(() => document.getElementById('adminWorkspace').hidden === false);
 
+  const globalPermissionSelect = document.getElementById('globalCanEditManagedConfig');
+  assert.equal(globalPermissionSelect.value, 'true');
+  globalPermissionSelect.value = 'false';
+  document
+    .getElementById('globalConfigForm')
+    .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(
+    () =>
+      database.queryAll('SELECT can_edit_managed_config FROM remote_config WHERE id = 1')[0]
+        ?.can_edit_managed_config === 0
+  );
+  globalPermissionSelect.value = 'true';
+  document
+    .getElementById('globalConfigForm')
+    .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(
+    () =>
+      database.queryAll('SELECT can_edit_managed_config FROM remote_config WHERE id = 1')[0]
+        ?.can_edit_managed_config === 1
+  );
+
   const detailButton = [...document.querySelectorAll('button')].find((button) => button.textContent === '详情');
   assert.ok(detailButton);
   detailButton.click();
@@ -1849,15 +1883,15 @@ test('admin page edits a user profile and plain-text targeted notice end to end'
   assert.equal(document.getElementById('userProfileName').value, 'Alice');
   assert.equal(document.getElementById('userNoticeDuration').value, '10');
   const permissionSelect = document.getElementById('userCanEditManagedConfig');
-  assert.equal(permissionSelect.value, 'false');
-  permissionSelect.value = 'true';
+  assert.equal(permissionSelect.value, 'inherit');
+  permissionSelect.value = 'false';
   permissionSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   await waitFor(
     () =>
-      database.queryAll('SELECT can_edit_managed_config FROM users WHERE id = ?', identity.userId)[0]
-        ?.can_edit_managed_config === 1
+      database.queryAll('SELECT can_edit_managed_config_override FROM users WHERE id = ?', identity.userId)[0]
+        ?.can_edit_managed_config_override === 0
   );
-  assert.equal(permissionSelect.value, 'true');
+  assert.equal(permissionSelect.value, 'false');
 
   const profileInput = document.getElementById('userProfileName');
   profileInput.value = 'Alice 修正';
@@ -1927,7 +1961,7 @@ test('admin writes reject non-object JSON and bodies larger than 64 KiB', async 
   }
 });
 
-test('admin traffic limit reports cumulative usage for active canonical users', async (context) => {
+test('admin traffic limit reports only the configured subscription period for active canonical users', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
   await database.batch([
@@ -1944,38 +1978,40 @@ test('admin traffic limit reports cumulative usage for active canonical users', 
         ('device-merged', 'user-merged', 'seed-merged', '2026-07-19T00:00:00.000Z', '2026-07-19T00:00:00.000Z'),
         ('device-disabled', 'user-disabled', 'seed-disabled', '2026-07-19T00:00:00.000Z', '2026-07-19T00:00:00.000Z')`),
     database.prepare(`
-      INSERT INTO traffic_daily (user_id, device_id, date, upload_bytes, download_bytes, updated_at) VALUES
-        ('user-1', 'device-1', '2026-07-18', 100, 200, '2026-07-19T00:00:00.000Z'),
-        ('user-1', 'device-1', '2026-07-19', 50, 75, '2026-07-19T00:00:00.000Z'),
-        ('user-2', 'device-2', '2026-07-19', 25, 50, '2026-07-19T00:00:00.000Z'),
-        ('user-merged', 'device-merged', '2026-07-19', 1000, 2000, '2026-07-19T00:00:00.000Z'),
-        ('user-disabled', 'device-disabled', '2026-07-19', 1000, 2000, '2026-07-19T00:00:00.000Z')`)
+      INSERT INTO traffic_reports
+        (id, user_id, device_id, upload_delta, download_delta, reported_at, created_at) VALUES
+        ('before-period', 'user-1', 'device-1', 1000, 2000, '2026-08-12T00:24:59.999Z', '2026-08-12T00:24:59.999Z'),
+        ('period-start', 'user-1', 'device-1', 100, 200, '2026-08-12T00:25:00.000Z', '2026-08-12T00:25:00.000Z'),
+        ('period-user-2', 'user-2', 'device-2', 25, 50, '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z'),
+        ('period-merged', 'user-merged', 'device-merged', 1000, 2000, '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z'),
+        ('period-disabled', 'user-disabled', 'device-disabled', 1000, 2000, '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z'),
+        ('at-expiry', 'user-1', 'device-1', 1000, 2000, '2026-09-11T00:25:00.000Z', '2026-09-11T00:25:00.000Z')`)
   ]);
 
   const defaultResponse = await getAdminTrafficLimit(database);
   assert.equal(defaultResponse.status, 200);
   assert.deepEqual(await defaultResponse.json(), {
-    trafficLimitBytes: 3380139261952,
-    trafficExpiresAt: '2026-08-11T20:00:00.000Z',
-    uploadBytes: 175,
-    downloadBytes: 325,
-    usedBytes: 500,
-    remainingBytes: 3380139261452,
-    exceededBytes: 0,
-    usagePercent: (500 / 3380139261952) * 100
+    trafficLimitBytes: 695784701952,
+    trafficPeriodStartedAt: '2026-08-12T00:25:00.000Z',
+    trafficExpiresAt: '2026-09-11T00:25:00.000Z',
+    uploadBytes: 125,
+    downloadBytes: 250,
+    usedBytes: 375,
+    remainingBytes: 695784701577,
+    usagePercent: (375 / 695784701952) * 100
   });
 
-  const updatedResponse = await updateAdminTrafficLimit(database, { trafficLimitBytes: 400 });
+  const updatedResponse = await updateAdminTrafficLimit(database, { trafficLimitBytes: 300 });
   assert.equal(updatedResponse.status, 200);
   assert.deepEqual(await updatedResponse.json(), {
-    trafficLimitBytes: 400,
-    trafficExpiresAt: '2026-08-11T20:00:00.000Z',
-    uploadBytes: 175,
-    downloadBytes: 325,
-    usedBytes: 500,
+    trafficLimitBytes: 300,
+    trafficPeriodStartedAt: '2026-08-12T00:25:00.000Z',
+    trafficExpiresAt: '2026-09-11T00:25:00.000Z',
+    uploadBytes: 125,
+    downloadBytes: 250,
+    usedBytes: 375,
     remainingBytes: 0,
-    exceededBytes: 100,
-    usagePercent: 125
+    usagePercent: 100
   });
 });
 
@@ -2009,12 +2045,30 @@ test('admin traffic limit strictly validates input and leaves the stored value u
   assert.equal((await current.json()).trafficLimitBytes, 1000);
 
   const expiryOnly = await updateAdminTrafficLimit(database, {
-    trafficExpiresAt: '2026-08-12T04:00:00+08:00'
+    trafficExpiresAt: '2026-09-11T08:25:00+08:00'
   });
   assert.equal(expiryOnly.status, 200);
   const expiryPayload = await expiryOnly.json();
   assert.equal(expiryPayload.trafficLimitBytes, 1000);
-  assert.equal(expiryPayload.trafficExpiresAt, '2026-08-11T20:00:00.000Z');
+  assert.equal(expiryPayload.trafficExpiresAt, '2026-09-11T00:25:00.000Z');
+
+  const startOnly = await updateAdminTrafficLimit(database, {
+    trafficPeriodStartedAt: '2026-08-12T08:25:00+08:00'
+  });
+  assert.equal(startOnly.status, 200);
+  assert.equal((await startOnly.json()).trafficPeriodStartedAt, '2026-08-12T00:25:00.000Z');
+
+  for (const trafficPeriodStartedAt of [
+    null,
+    '2026-08-12',
+    '2026-08-12T08:25:00',
+    '2026-02-30T08:25:00+08:00',
+    'not-a-date'
+  ]) {
+    const invalidStart = await updateAdminTrafficLimit(database, { trafficPeriodStartedAt });
+    assert.equal(invalidStart.status, 400, String(trafficPeriodStartedAt));
+    await assertWorkerError(invalidStart, 400, 'invalid traffic period start');
+  }
 
   for (const trafficExpiresAt of [
     null,
@@ -2026,6 +2080,21 @@ test('admin traffic limit strictly validates input and leaves the stored value u
     const invalidExpiry = await updateAdminTrafficLimit(database, { trafficExpiresAt });
     assert.equal(invalidExpiry.status, 400, String(trafficExpiresAt));
     await assertWorkerError(invalidExpiry, 400, 'invalid traffic expiry');
+  }
+
+  for (const input of [
+    {
+      trafficPeriodStartedAt: '2026-09-11T00:25:00.000Z',
+      trafficExpiresAt: '2026-09-11T00:25:00.000Z'
+    },
+    {
+      trafficPeriodStartedAt: '2026-09-11T00:25:00.001Z',
+      trafficExpiresAt: '2026-09-11T00:25:00.000Z'
+    }
+  ]) {
+    const invalidPeriod = await updateAdminTrafficLimit(database, input);
+    assert.equal(invalidPeriod.status, 400);
+    await assertWorkerError(invalidPeriod, 400, 'invalid traffic period');
   }
 
   const existingConfig = await updateAdminConfig(database, { trafficLimitBytes: 1000 });
@@ -2177,14 +2246,17 @@ test('admin traffic limit stays out of client and per-user remote config respons
 
   const clientConfig = (await (await getClientConfig(database, identity, deviceSeed)).json()).config;
   assert.equal(Object.hasOwn(clientConfig, 'trafficLimitBytes'), false);
+  assert.equal(Object.hasOwn(clientConfig, 'trafficPeriodStartedAt'), false);
   assert.equal(Object.hasOwn(clientConfig, 'trafficExpiresAt'), false);
 
   const userConfig = await getAdminUserConfig(database, identity.userId);
   assert.equal(userConfig.status, 200);
   const userConfigBody = await userConfig.json();
   assert.equal(Object.hasOwn(userConfigBody.effective, 'trafficLimitBytes'), false);
+  assert.equal(Object.hasOwn(userConfigBody.effective, 'trafficPeriodStartedAt'), false);
   assert.equal(Object.hasOwn(userConfigBody.effective, 'trafficExpiresAt'), false);
   assert.equal(Object.hasOwn(userConfigBody.override ?? {}, 'trafficLimitBytes'), false);
+  assert.equal(Object.hasOwn(userConfigBody.override ?? {}, 'trafficPeriodStartedAt'), false);
   assert.equal(Object.hasOwn(userConfigBody.override ?? {}, 'trafficExpiresAt'), false);
 });
 
@@ -2243,6 +2315,7 @@ test('global config rejects invalid recognized fields without changing stored co
 
   const baselineResponse = await updateAdminConfig(database, {
     enabled: true,
+    canEditManagedConfig: true,
     subscriptionUrl: 'https://example.com/sub',
     ruleProfile: 'ruleset',
     preferredRegion: 'jp',
@@ -2253,6 +2326,8 @@ test('global config rejects invalid recognized fields without changing stored co
 
   const cases = [
     { input: { enabled: 'true' }, error: 'invalid enabled' },
+    { input: { canEditManagedConfig: null }, error: 'invalid managed config permission' },
+    { input: { canEditManagedConfig: 'true' }, error: 'invalid managed config permission' },
     { input: { subscriptionUrl: 42 }, error: 'invalid subscription url' },
     { input: { enabled: false, ruleProfile: 'unsupported' }, error: 'invalid rule profile' },
     { input: { preferredRegion: 'uk' }, error: 'invalid preferred region' },
@@ -2623,7 +2698,7 @@ test('explicit null clears nullable global choices and restores the default rule
   assert.equal('subscriptionUrl' in config, false);
 });
 
-test('a signed client config save becomes a user override and an admin reset restores global ownership', async (context) => {
+test('managed config edits follow the global default and explicit per-user overrides', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
   const deviceSeed = '11111111-1111-4111-8111-111111111111';
@@ -2638,15 +2713,9 @@ test('a signed client config save becomes a user override and an admin reset res
   assert.equal(global.status, 200);
 
   const initial = await getClientConfig(database, identity, deviceSeed);
-  assert.equal((await initial.json()).config.canEditManagedConfig, false);
-  const forbidden = await updateClientConfig(database, identity, deviceSeed, {
-    ruleProfile: 'subscription'
-  });
-  await assertWorkerError(forbidden, 403, 'managed config editing forbidden', 'MANAGED_CONFIG_EDITING_FORBIDDEN');
-
-  const granted = await updateAdminManagedConfigPermission(database, identity.userId, true);
-  assert.equal(granted.status, 200);
-  assert.equal((await granted.json()).canEditManagedConfig, true);
+  assert.equal((await initial.json()).config.canEditManagedConfig, true);
+  const initialAdminView = await getAdminUserConfig(database, identity.userId);
+  assert.equal((await initialAdminView.json()).canEditManagedConfigOverride, null);
 
   const saved = await updateClientConfig(database, identity, deviceSeed, {
     subscriptionUrl: 'https://example.com/alice',
@@ -2697,11 +2766,45 @@ test('a signed client config save becomes a user override and an admin reset res
   const finalState = await getClientConfig(database, identity, deviceSeed);
   assert.equal((await finalState.json()).config.configSource, 'global');
 
-  assert.equal((await updateAdminManagedConfigPermission(database, identity.userId, false)).status, 200);
+  const denied = await updateAdminManagedConfigPermission(database, identity.userId, false);
+  assert.equal(denied.status, 200);
+  assert.deepEqual(await denied.json(), {
+    ok: true,
+    canEditManagedConfig: false,
+    canEditManagedConfigOverride: false
+  });
   const revoked = await updateClientConfig(database, identity, deviceSeed, {
     ruleProfile: 'subscription'
   });
   await assertWorkerError(revoked, 403, 'managed config editing forbidden', 'MANAGED_CONFIG_EDITING_FORBIDDEN');
+
+  const inherited = await updateAdminManagedConfigPermission(database, identity.userId, null);
+  assert.equal(inherited.status, 200);
+  assert.deepEqual(await inherited.json(), {
+    ok: true,
+    canEditManagedConfig: true,
+    canEditManagedConfigOverride: null
+  });
+  assert.equal((await updateClientConfig(database, identity, deviceSeed, { ruleProfile: 'subscription' })).status, 200);
+
+  const globallyDenied = await updateAdminConfig(database, { canEditManagedConfig: false });
+  assert.equal(globallyDenied.status, 200);
+  assert.equal((await globallyDenied.json()).config.canEditManagedConfig, false);
+  assert.equal(
+    (await (await getClientConfig(database, identity, deviceSeed)).json()).config.canEditManagedConfig,
+    false
+  );
+  const globallyRevoked = await updateClientConfig(database, identity, deviceSeed, { ruleProfile: 'ruleset' });
+  await assertWorkerError(globallyRevoked, 403, 'managed config editing forbidden', 'MANAGED_CONFIG_EDITING_FORBIDDEN');
+
+  const allowedException = await updateAdminManagedConfigPermission(database, identity.userId, true);
+  assert.equal(allowedException.status, 200);
+  assert.deepEqual(await allowedException.json(), {
+    ok: true,
+    canEditManagedConfig: true,
+    canEditManagedConfigOverride: true
+  });
+  assert.equal((await updateClientConfig(database, identity, deviceSeed, { ruleProfile: 'ruleset' })).status, 200);
 });
 
 test('client config compares against the global value inside its committed SQL write', async (context) => {
