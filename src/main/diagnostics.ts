@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { DiagnosticIssueKind } from '../shared/ipc';
+import { isExpectedOperationCancellation } from '../shared/operationCancellation';
 
 export type DiagnosticReportInput = {
   exportedAt: Date;
@@ -158,6 +159,19 @@ function normalizeDiagnosticLog(message: string, maxMessageLength: number): Norm
 
   const safeFullMessage = toSafeDiagnosticLine(message);
   if (!safeFullMessage) return undefined;
+  const nodeProbe = parseNodeProbeDiagnostic(message);
+  if (nodeProbe) {
+    const summaryMessage = boundDiagnosticMessage(
+      toSafeDiagnosticLine(`节点检测失败：${nodeProbe.node}`),
+      maxMessageLength
+    );
+    const exportMessage = boundDiagnosticMessage(safeFullMessage, maxMessageLength);
+    return {
+      summaryMessage,
+      exportMessage,
+      coalesceKey: `node-probe:${createHash('sha256').update(exportMessage).digest('hex')}`
+    };
+  }
   const warning = parseMihomoDialWarning(message);
   const exportMessage = warning
     ? boundMihomoDiagnosticMessage(safeFullMessage, maxMessageLength)
@@ -179,6 +193,41 @@ function normalizeDiagnosticLog(message: string, maxMessageLength: number): Norm
     exportMessage,
     coalesceKey: createMihomoWarningCoalesceKey(safeFullMessage)
   };
+}
+
+function parseNodeProbeDiagnostic(message: string): { node: string } | undefined {
+  const serialized = message.trim().match(/^\[node-probe\]\s+(.+)$/)?.[1];
+  if (!serialized) return undefined;
+
+  try {
+    const payload = JSON.parse(serialized) as unknown;
+    if (!isRecord(payload) || typeof payload.node !== 'string' || !payload.node.trim() || payload.node.length > 256) {
+      return undefined;
+    }
+    if (!Array.isArray(payload.checks) || payload.checks.length < 1 || payload.checks.length > 2) return undefined;
+    const valid = payload.checks.every((check) => {
+      if (!isRecord(check)) return false;
+      if (check.target !== 'gstatic-204' && check.target !== 'cloudflare-204') return false;
+      if (!isSafeNodeProbeReason(check.proxyDelay)) return false;
+      return check.providerHealthcheck === undefined || isSafeNodeProbeReason(check.providerHealthcheck);
+    });
+    return valid ? { node: payload.node.trim() } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isSafeNodeProbeReason(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^(?:HTTP [1-5]\d{2}|timeout|no valid delay|request failed|fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN)$/.test(
+      value
+    )
+  );
 }
 
 function createMihomoWarningCoalesceKey(safeMessage: string): string {
@@ -222,7 +271,7 @@ export function classifyDiagnosticIssue(message: string | undefined): Diagnostic
   if (!message?.trim()) return undefined;
   const value = message.toLowerCase();
 
-  if (/(?:operation canceled|node testing cancelled|aborterror|已取消)/i.test(value)) return undefined;
+  if (isExpectedOperationCancellation(message) || /(?:aborterror|已取消)/i.test(value)) return undefined;
   if (/(?:access (?:is )?denied|eacces|eperm|elevation|administrator|拒绝访问|权限|管理员)/i.test(value)) {
     return 'permission';
   }

@@ -1,4 +1,5 @@
 import type { AppSnapshot, OperationRequest } from '../shared/ipc';
+import { isExpectedOperationCancellation } from '../shared/operationCancellation';
 import { createOperationRequest } from './operationRequest';
 
 export type OperationRequestTracker = {
@@ -101,12 +102,7 @@ function isInputError(error: unknown): boolean {
 }
 
 function isOperationCancelled(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    message.includes('operation canceled') ||
-    message.includes('node testing cancelled') ||
-    message.includes('AbortError')
-  );
+  return isExpectedOperationCancellation(error);
 }
 
 export async function withTimeout<T>(
@@ -159,8 +155,7 @@ export function getActionErrorMessage(error: unknown): string {
   if (error instanceof ActionTimeoutError) return `${error.operation}超时`;
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('operation timed out')) return '操作超时';
-  if (message.includes('operation canceled')) return '已取消';
-  if (message.includes('node testing cancelled') || message.includes('AbortError')) return '已停止';
+  if (isExpectedOperationCancellation(error)) return '已取消';
   if (message.includes('missing subscription url')) return '先填写订阅地址';
   if (message.includes('no usable proxy node')) return '没有可用节点';
   if (message.includes('no proxy nodes')) return '没有可用节点';

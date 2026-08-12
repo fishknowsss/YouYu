@@ -57,6 +57,28 @@ describe('diagnostic log buffer', () => {
     ]);
   });
 
+  it('keeps node probe details in the export while rendering one concise deduplicated summary', () => {
+    const logs = new DiagnosticLogBuffer();
+    const failure =
+      '[node-probe] {"node":"日本 01 alice@example.com","checks":[{"target":"gstatic-204","proxyDelay":"timeout"},{"target":"cloudflare-204","proxyDelay":"HTTP 504","providerHealthcheck":"request failed"}]}';
+
+    logs.append(failure, new Date(2026, 7, 12, 9, 7, 25));
+    logs.append(failure, new Date(2026, 7, 12, 9, 7, 37));
+
+    expect(logs.getLogs()).toEqual([
+      '2026-08-12 09:07:25 - 2026-08-12 09:07:37 节点检测失败：日本 01 [已隐藏邮箱]（重复 2 次）'
+    ]);
+    const [exported] = logs.getExportLogs();
+    expect(exported).toContain('[node-probe]');
+    expect(exported).toContain('gstatic-204');
+    expect(exported).toContain('cloudflare-204');
+    expect(exported).toContain('providerHealthcheck');
+    expect(exported).toContain('HTTP 504');
+    expect(exported).toContain('request failed');
+    expect(exported).not.toContain('alice@example.com');
+    expect(exported).toContain('（重复 2 次）');
+  });
+
   it('keeps the renderer summary concise while exporting the latest safe full Mihomo failure sample', () => {
     const logs = new DiagnosticLogBuffer();
     const first =
@@ -230,6 +252,9 @@ describe('diagnostic export', () => {
   it('does not invent a diagnostic issue without an error', () => {
     expect(classifyDiagnosticIssue(undefined)).toBeUndefined();
     expect(classifyDiagnosticIssue('')).toBeUndefined();
+    expect(classifyDiagnosticIssue('启动失败: operation replaced')).toBeUndefined();
+    expect(classifyDiagnosticIssue('remote refresh superseded by manual refresh')).toBeUndefined();
+    expect(classifyDiagnosticIssue('connection aborted by peer')).toBe('network');
   });
 
   it.each([

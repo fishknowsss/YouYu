@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { join } from 'node:path';
+import { listPackage } from '@electron/asar';
 import { parse } from 'yaml';
 import { resolveBuildMode } from './build-mode.mjs';
 import {
@@ -37,12 +38,26 @@ const elevatedUpdateWrapperPath = join(releaseDir, 'win-unpacked', 'resources', 
 const packagedMihomoPath = join(releaseDir, 'win-unpacked', 'resources', 'mihomo', 'win-x64');
 const electronDefaultAppPath = join(releaseDir, 'win-unpacked', 'resources', 'default_app.asar');
 const electronVersionMarkerPath = join(releaseDir, 'win-unpacked', 'version');
+const packagedAppAsarPath = join(releaseDir, 'win-unpacked', 'resources', 'app.asar');
 
 await access(expectedInstallerPath);
 await access(expectedBlockmapPath);
 await access(expectedUpdateMetadataPath);
 await assertPathMissing(electronDefaultAppPath, 'Packaged app must not retain Electron default_app.asar');
 await assertPathMissing(electronVersionMarkerPath, 'Packaged app must not retain Electron version marker');
+
+const unexpectedPackagedOutput = listPackage(packagedAppAsarPath, { isPack: false }).filter((entry) => {
+  const normalized = entry.replaceAll('/', '\\').toLowerCase();
+  if (!normalized.startsWith('\\out\\')) return false;
+  return !['\\out\\main', '\\out\\preload', '\\out\\renderer'].some(
+    (allowed) => normalized === allowed || normalized.startsWith(`${allowed}\\`)
+  );
+});
+if (unexpectedPackagedOutput.length > 0) {
+  throw new Error(
+    `Packaged app contains non-desktop build output: ${unexpectedPackagedOutput.slice(0, 10).join(', ')}`
+  );
+}
 
 const sourceElevatedUpdateWrapper = await readFile(join(root, 'build', 'update-elevated-installer.ps1'));
 const packagedElevatedUpdateWrapper = await readFile(elevatedUpdateWrapperPath);

@@ -10,6 +10,31 @@ function createGate() {
 }
 
 describe('LatestOperationCoordinator', () => {
+  it('coalesces equivalent work while starting a fresh operation after it settles', async () => {
+    const coordinator = new LatestOperationCoordinator<string>();
+    const firstStarted = createGate();
+    const finishFirst = createGate();
+    const firstAction = vi.fn(async () => {
+      firstStarted.resolve();
+      await finishFirst.promise;
+      return 'first';
+    });
+    const joinedAction = vi.fn(async () => 'joined replacement');
+
+    const first = coordinator.coalesce(firstAction);
+    await firstStarted.promise;
+    const joined = coordinator.coalesce(joinedAction);
+    finishFirst.resolve();
+
+    await expect(first).resolves.toBe('first');
+    await expect(joined).resolves.toBe('first');
+    expect(firstAction).toHaveBeenCalledOnce();
+    expect(joinedAction).not.toHaveBeenCalled();
+
+    await expect(coordinator.coalesce(joinedAction)).resolves.toBe('joined replacement');
+    expect(joinedAction).toHaveBeenCalledOnce();
+  });
+
   it('waits for the superseded operation to settle before starting its replacement', async () => {
     const coordinator = new LatestOperationCoordinator<string>();
     const firstStarted = createGate();

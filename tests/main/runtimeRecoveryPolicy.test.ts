@@ -46,6 +46,7 @@ describe('runtime recovery policy', () => {
     ['remote config changed during mihomo start', 'REMOTE_REVISION_STALE'],
     ['YAMLParseError: bad indentation in config.yaml', 'CONFIG_INVALID'],
     ['operation canceled', 'OPERATION_ABORTED'],
+    ['operation replaced', 'OPERATION_ABORTED'],
     ['需要管理员权限才能继续', 'ELEVATION_CANCELED'],
     ['等待管理员授权超时', 'ELEVATION_CANCELED'],
     ['Failed to verify current-user proxy after enable', 'PROXY_APPLY_FAILED'],

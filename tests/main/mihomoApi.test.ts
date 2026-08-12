@@ -775,7 +775,76 @@ describe('createMihomoApiClient', () => {
     expect(decodeURIComponent(requestedUrls[1])).toContain('https://cp.cloudflare.com/generate_204');
   });
 
+  it('reports bounded endpoint and route details when every node-delay probe fails', async () => {
+    const onFailure = vi.fn();
+    const fetcher = vi.fn(async () => new Response(null, { status: 504 }));
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(api.testNodeDelay('日本 01', { onFailure })).resolves.toBeUndefined();
+    expect(onFailure).toHaveBeenCalledOnce();
+    expect(onFailure).toHaveBeenCalledWith({
+      checks: [
+        { target: 'gstatic-204', proxyDelay: 'HTTP 504' },
+        { target: 'cloudflare-204', proxyDelay: 'HTTP 504' }
+      ]
+    });
+    expect(JSON.stringify(onFailure.mock.calls)).not.toMatch(/generate_204|secret/);
+  });
+
+  it('retains a known low-level fetch cause without exposing its message or URL', async () => {
+    const onFailure = vi.fn();
+    const sensitiveCause = Object.assign(new Error('dial secret.example.com:443 for token=should-not-leak'), {
+      code: 'ECONNRESET'
+    });
+    const fetcher = vi.fn(async () => {
+      throw new TypeError('fetch failed', { cause: sensitiveCause });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(api.testNodeDelay('日本 02', { onFailure })).resolves.toBeUndefined();
+    expect(onFailure).toHaveBeenCalledWith({
+      checks: [
+        { target: 'gstatic-204', proxyDelay: 'ECONNRESET' },
+        { target: 'cloudflare-204', proxyDelay: 'ECONNRESET' }
+      ]
+    });
+    expect(JSON.stringify(onFailure.mock.calls)).not.toMatch(/secret|token|example\.com/);
+  });
+
+  it('keeps both proxy-delay and provider-healthcheck failures without exposing request URLs', async () => {
+    const onFailure = vi.fn();
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      const path = String(url);
+      if (path.endsWith('/providers/proxies')) {
+        return Response.json({ providers: { airport: { proxies: [{ name: '日本 provider' }] } } });
+      }
+      if (path.endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: { type: 'Selector', now: '日本 provider', all: ['日本 provider'] },
+            '日本 provider': {}
+          }
+        });
+      }
+      if (path.includes('/healthcheck?')) return new Response(null, { status: 504 });
+      if (path.includes('/delay?')) return new Response(null, { status: 502 });
+      return new Response(null, { status: 404 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await api.listNodes();
+    await expect(api.testNodeDelay('日本 provider', { onFailure })).resolves.toBeUndefined();
+    expect(onFailure).toHaveBeenCalledWith({
+      checks: [
+        { target: 'gstatic-204', proxyDelay: 'HTTP 502', providerHealthcheck: 'HTTP 504' },
+        { target: 'cloudflare-204', proxyDelay: 'HTTP 502', providerHealthcheck: 'HTTP 504' }
+      ]
+    });
+    expect(JSON.stringify(onFailure.mock.calls)).not.toMatch(/https?:|generate_204|secret/);
+  });
+
   it('keeps a node measurable when one independent probe succeeds', async () => {
+    const onFailure = vi.fn();
     const fetcher = vi.fn(async (url: string | URL | Request) => {
       const path = decodeURIComponent(String(url));
       if (path.endsWith('/proxies')) {
@@ -795,7 +864,8 @@ describe('createMihomoApiClient', () => {
     });
     const api = createMihomoApiClient({ secret: 'secret', fetcher });
 
-    await expect(api.testNodeDelay('half-open-node')).resolves.toBe(87);
+    await expect(api.testNodeDelay('half-open-node', { onFailure })).resolves.toBe(87);
+    expect(onFailure).not.toHaveBeenCalled();
     await expect(api.listNodes()).resolves.toEqual([
       { name: 'half-open-node', delay: 87, active: true, testState: 'tested' }
     ]);

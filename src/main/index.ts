@@ -27,7 +27,7 @@ import { LatestOperationCoordinator } from './latestOperationCoordinator';
 import { NodeSelectionCoordinator } from './nodeSelectionCoordinator';
 import { parseIpcArguments } from './ipcSchemas';
 import { connectivityServices, probeProxyExitRegionCode, testAllConnectivity, testConnectivity } from './connectivity';
-import { createMihomoApiClient } from './mihomo/api';
+import { createMihomoApiClient, type NodeDelayProbeFailure } from './mihomo/api';
 import {
   expectedExitRegionCode,
   isNodeInPreferredRegion,
@@ -91,6 +91,7 @@ import {
   type StrategyGroup,
   type StrategyKey
 } from '../shared/ipc';
+import { isExpectedOperationCancellation } from '../shared/operationCancellation';
 import { updateInstallingMessage } from '../shared/updateProgress';
 import { deferUpdateInstallerLaunch } from './updateInstallHandoff';
 import { launchDownloadedUpdateInstaller, resolveDownloadedUpdateInstallerPath } from './updateInstallerLauncher';
@@ -680,8 +681,9 @@ async function performRemoteConfigSync(options: RemoteConfigSyncExecutionOptions
         );
       }
     }
-    const recoverable = isRecoverableSyncError(reportedError);
-    if (!recoverable || (!options.quiet && options.throwOnError)) {
+    const expectedCancellation = isExpectedOperationCancellation(reportedError);
+    const recoverable = expectedCancellation || isRecoverableSyncError(reportedError);
+    if (!expectedCancellation && (!recoverable || (!options.quiet && options.throwOnError))) {
       appendLog(`remote config sync failed: ${formatError(reportedError)}`);
     }
     if (options.throwOnError) throw reportedError;
@@ -726,6 +728,7 @@ async function applyRemoteSubscription(
 }
 
 function isRecoverableSyncError(error: unknown): boolean {
+  if (isExpectedOperationCancellation(error)) return true;
   const message = formatError(error);
   return [
     'fetch failed',
@@ -1167,6 +1170,7 @@ const subscriptionCoordinator = createSubscriptionCoordinator<
   },
   async onBackgroundError(kind, error) {
     if (kind !== 'subscription') return;
+    if (isExpectedOperationCancellation(error)) return;
     recordError('后台刷新订阅失败', error);
     await broadcastSnapshot().catch((broadcastError) => console.error('broadcast snapshot failed', broadcastError));
     refreshTrayMenu();
@@ -1221,6 +1225,14 @@ async function readRuntimeNodeHealthContext(): Promise<RuntimeNodeHealthContext>
   return createRuntimeNodeHealthContext(settings, nodeName, running && lifecycle.getStatus() === 'running');
 }
 
+let pendingNodeProbeFailure: { nodeName: string; failure: NodeDelayProbeFailure } | undefined;
+
+function flushNodeProbeFailure(nodeName: string): void {
+  if (pendingNodeProbeFailure?.nodeName !== nodeName) return;
+  appendLog(`[node-probe] ${JSON.stringify({ node: nodeName, checks: pendingNodeProbeFailure.failure.checks })}`);
+  pendingNodeProbeFailure = undefined;
+}
+
 const nodeHealthCoordinator = createNodeHealthCoordinator<RuntimeNodeHealthContext, StoredNodeAvailability>({
   totalAvailabilityCount: connectivityServices.length,
   initialDelayMs: nodeHealthInitialDelayMs,
@@ -1229,18 +1241,27 @@ const nodeHealthCoordinator = createNodeHealthCoordinator<RuntimeNodeHealthConte
   failureThreshold: nodeHealthFailureThreshold,
   readContext: readRuntimeNodeHealthContext,
   async probeDelay(context, signal) {
+    pendingNodeProbeFailure = undefined;
     try {
-      return await createRuntimeMihomoApi({ secret: context.settings.controllerSecret }).testNodeDelay(
+      const delay = await createRuntimeMihomoApi({ secret: context.settings.controllerSecret }).testNodeDelay(
         context.nodeName,
-        { signal }
+        {
+          signal,
+          onFailure: (failure) => {
+            pendingNodeProbeFailure = { nodeName: context.nodeName, failure };
+          }
+        }
       );
+      if (typeof delay === 'number') pendingNodeProbeFailure = undefined;
+      return delay;
     } catch {
       signal.throwIfAborted();
+      pendingNodeProbeFailure = undefined;
       return undefined;
     }
   },
   async recoverNode(context, signal) {
-    return nodeSelectionCoordinator.replaceAutomatic(signal, async (operationSignal) => {
+    return nodeSelectionCoordinator.coalesceAutomatic(signal, async (operationSignal) => {
       const mihomoApi = createRuntimeMihomoApi({ secret: context.settings.controllerSecret });
       const selectedNode = isAutomaticStrategy(context.settings.strategy)
         ? context.settings.strategy === 'auto'
@@ -1269,8 +1290,14 @@ const nodeHealthCoordinator = createNodeHealthCoordinator<RuntimeNodeHealthConte
       return selectedNode;
     });
   },
-  onTransientFailure: (nodeName) => appendLog(`当前节点短暂异常，等待复查: ${nodeName}`),
-  onRecovering: (nodeName) => appendLog(`当前节点不可用，正在切换: ${nodeName}`),
+  onTransientFailure: (nodeName) => {
+    flushNodeProbeFailure(nodeName);
+    appendLog(`当前节点短暂异常，等待复查: ${nodeName}`);
+  },
+  onRecovering: (nodeName) => {
+    flushNodeProbeFailure(nodeName);
+    appendLog(`当前节点不可用，正在切换: ${nodeName}`);
+  },
   async onRecovered(nodeName, signal) {
     signal.throwIfAborted();
     appendLog(`已切换可用节点: ${nodeName}`);
@@ -1279,6 +1306,7 @@ const nodeHealthCoordinator = createNodeHealthCoordinator<RuntimeNodeHealthConte
     sendSnapshotToWindows(nextSnapshot);
   },
   async onBackgroundError(error) {
+    if (isExpectedOperationCancellation(error)) return;
     appendLog(`节点检查失败: ${formatError(error)}`);
     appRuntimeCoordinator.scheduleRecovery(nodeHealthRepairDelayMs);
   },
@@ -1352,9 +1380,7 @@ async function performRuntimeRecovery(signal: AbortSignal): Promise<AppSnapshot 
 }
 
 function isExpectedAppRuntimeCancellation(error: unknown): boolean {
-  return /app runtime .* (?:superseded|stopped)|app runtime coordinator disposed|proxy start canceled|operation cancel(?:ed|led)|aborted/i.test(
-    formatError(error)
-  );
+  return isExpectedOperationCancellation(error);
 }
 
 function isAutomaticStrategy(strategy: StrategyKey): strategy is Exclude<StrategyKey, 'manual' | 'direct'> {
@@ -1649,7 +1675,7 @@ function selectPreferredAutoNode(
     avoidNode?: string;
   } = {}
 ): Promise<string> {
-  return nodeSelectionCoordinator.replaceAutomatic(options.signal, (signal) =>
+  return nodeSelectionCoordinator.coalesceAutomatic(options.signal, (signal) =>
     performPreferredAutoNode({ ...options, signal })
   );
 }
@@ -1760,6 +1786,7 @@ async function performStartProxy(signal?: AbortSignal, requestedIntentGeneration
     try {
       await selectPreferredAutoNode({ signal });
     } catch (error) {
+      if (isExpectedOperationCancellation(error)) throw error;
       await lifecycle.stop().catch((stopError) => appendLog(`地区策略失败后停止代理失败: ${formatError(stopError)}`));
       throw error;
     }
@@ -2232,7 +2259,7 @@ function registerIpc() {
             sendSnapshotToWindows(snapshot);
             return snapshot;
           } catch (error) {
-            recordError('启动失败', error);
+            if (!isExpectedOperationCancellation(error)) recordError('启动失败', error);
             throw error;
           }
         }),
@@ -2304,7 +2331,7 @@ function registerIpc() {
             sendSnapshotToWindows(snapshot);
             return snapshot;
           } catch (error) {
-            recordError('自动选择节点失败', error);
+            if (!isExpectedOperationCancellation(error)) recordError('自动选择节点失败', error);
             throw error;
           }
         }),

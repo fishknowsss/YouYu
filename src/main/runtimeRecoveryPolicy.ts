@@ -29,7 +29,7 @@ export type RuntimeFailure = {
 
 function inferFailureCode(error: Error): RuntimeFailureCode {
   const message = error.message;
-  if (error.name === 'AbortError' || /operation cancell?ed|node testing cancelled|\baborted\b/i.test(message)) {
+  if (isExpectedOperationCancellation(error)) {
     return 'OPERATION_ABORTED';
   }
   if (/missing subscription url|no usable subscription nodes|subscription (?:invalid|failed)/i.test(message)) {
@@ -83,3 +83,4 @@ export async function runRuntimeOperationWithSafeRetry<T>(
     return operation();
   }
 }
+import { isExpectedOperationCancellation } from '../shared/operationCancellation';

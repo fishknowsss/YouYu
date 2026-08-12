@@ -88,6 +88,21 @@ describe('renderer action behavior', () => {
     expect(start).not.toHaveBeenCalled();
   });
 
+  it('does not run a full repair when automatic startup work is internally replaced', async () => {
+    const snapshot = { status: 'stopped' } as AppSnapshot;
+    const repair = vi.fn(async () => snapshot);
+    const api = {
+      getSnapshot: vi.fn(async () => snapshot),
+      start: vi.fn(async () => {
+        throw new Error('operation replaced');
+      }),
+      repair
+    } as unknown as NonNullable<Window['youyu']>;
+
+    await expect(startEasyProxy(api, createOperationRequestTracker())).rejects.toThrow('operation replaced');
+    expect(repair).not.toHaveBeenCalled();
+  });
+
   it('keeps registration single-flight across rapid duplicate submissions', async () => {
     const snapshot = createRegisteredRendererSnapshot();
     const firstRegistration = deferred<AppSnapshot>();

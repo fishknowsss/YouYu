@@ -20,23 +20,19 @@ export class LatestOperationCoordinator<Result> {
   replace(action: (context: LatestOperationContext) => Promise<Result>): Promise<Result> {
     return this.enqueueTransition(async () => {
       await this.cancelActive();
-
-      const controller = new AbortController();
-      const operation = {} as ActiveOperation<Result>;
-      operation.controller = controller;
-      operation.promise = Promise.resolve()
-        .then(() =>
-          action({
-            signal: controller.signal,
-            isCurrent: () => this.active === operation && !controller.signal.aborted
-          })
-        )
-        .finally(() => {
-          if (this.active === operation) this.active = undefined;
-        });
-      this.active = operation;
-      return operation;
+      return this.startOperation(action);
     }).then((operation) => operation.promise);
+  }
+
+  /**
+   * Joins the current operation when one is already running. This keeps
+   * background callers from canceling equivalent foreground work merely
+   * because their timers happened to fire later.
+   */
+  coalesce(action: (context: LatestOperationContext) => Promise<Result>): Promise<Result> {
+    return this.enqueueTransition(() => this.active ?? this.startOperation(action)).then(
+      (operation) => operation.promise
+    );
   }
 
   cancel(): Promise<void> {
@@ -50,13 +46,31 @@ export class LatestOperationCoordinator<Result> {
     });
   }
 
-  private enqueueTransition<Value>(action: () => Promise<Value>): Promise<Value> {
+  private enqueueTransition<Value>(action: () => Value | Promise<Value>): Promise<Value> {
     const result = this.transition.then(action, action);
     this.transition = result.then(
       () => undefined,
       () => undefined
     );
     return result;
+  }
+
+  private startOperation(action: (context: LatestOperationContext) => Promise<Result>): ActiveOperation<Result> {
+    const controller = new AbortController();
+    const operation = {} as ActiveOperation<Result>;
+    operation.controller = controller;
+    operation.promise = Promise.resolve()
+      .then(() =>
+        action({
+          signal: controller.signal,
+          isCurrent: () => this.active === operation && !controller.signal.aborted
+        })
+      )
+      .finally(() => {
+        if (this.active === operation) this.active = undefined;
+      });
+    this.active = operation;
+    return operation;
   }
 
   private async cancelActive(): Promise<void> {

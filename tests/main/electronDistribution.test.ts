@@ -58,4 +58,17 @@ describe('Electron Windows distribution', () => {
     expect(releaseValidation).toContain('assertPathMissing(electronDefaultAppPath');
     expect(releaseValidation).toContain('assertPathMissing(electronVersionMarkerPath');
   });
+
+  it('packages only desktop build output and validates the real ASAR boundary', async () => {
+    const config = await readFile('electron-builder.yml', 'utf8');
+    const releaseValidation = await readFile('scripts/validate-windows-release.ts', 'utf8');
+
+    expect(config).toContain('- out/main/**');
+    expect(config).toContain('- out/preload/**');
+    expect(config).toContain('- out/renderer/**');
+    expect(config).not.toMatch(/^\s*- out\/\*\*\s*$/m);
+    expect(releaseValidation).toContain("import { listPackage } from '@electron/asar';");
+    expect(releaseValidation).toContain('unexpectedPackagedOutput');
+    expect(releaseValidation).toContain('Packaged app contains non-desktop build output');
+  });
 });

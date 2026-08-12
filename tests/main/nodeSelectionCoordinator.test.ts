@@ -1,8 +1,92 @@
 import { readFile } from 'node:fs/promises';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createNodeHealthCoordinator } from '../../src/main/nodeHealthCoordinator';
 import { NodeSelectionCoordinator } from '../../src/main/nodeSelectionCoordinator';
 
 describe('NodeSelectionCoordinator', () => {
+  it('does not let background health recovery replace an in-flight startup selection', async () => {
+    const coordinator = new NodeSelectionCoordinator();
+    let startupReady!: () => void;
+    const startupStarted = new Promise<void>((resolve) => {
+      startupReady = resolve;
+    });
+    let finishStartup!: () => void;
+    const startupCanFinish = new Promise<void>((resolve) => {
+      finishStartup = resolve;
+    });
+    const backgroundAction = vi.fn(async () => 'background-node');
+
+    const startup = coordinator.replaceAutomatic(undefined, async (signal) => {
+      startupReady();
+      await startupCanFinish;
+      signal.throwIfAborted();
+      return 'startup-node';
+    });
+    await startupStarted;
+
+    const background = coordinator.coalesceAutomatic(undefined, backgroundAction);
+    await Promise.resolve();
+    expect(backgroundAction).not.toHaveBeenCalled();
+
+    finishStartup();
+    await expect(startup).resolves.toBe('startup-node');
+    await expect(background).resolves.toBe('startup-node');
+    expect(backgroundAction).not.toHaveBeenCalled();
+  });
+
+  it('completes startup when the real health coordinator reaches recovery during automatic selection', async () => {
+    const selection = new NodeSelectionCoordinator();
+    let currentNode = '香港 temporary';
+    let startupStarted!: () => void;
+    const startupDidStart = new Promise<void>((resolve) => {
+      startupStarted = resolve;
+    });
+    let finishStartup!: () => void;
+    const startupCanFinish = new Promise<void>((resolve) => {
+      finishStartup = resolve;
+    });
+    const startup = selection.coalesceAutomatic(undefined, async (signal) => {
+      startupStarted();
+      await startupCanFinish;
+      signal.throwIfAborted();
+      currentNode = '日本 selected';
+      return currentNode;
+    });
+    await startupDidStart;
+
+    let recoveryStarted!: () => void;
+    const recoveryDidStart = new Promise<void>((resolve) => {
+      recoveryStarted = resolve;
+    });
+    const competingRecovery = vi.fn(async () => 'background replacement');
+    const onBackgroundError = vi.fn();
+    const health = createNodeHealthCoordinator({
+      totalAvailabilityCount: 1,
+      initialDelayMs: 60_000,
+      intervalMs: 300_000,
+      retryDelayMs: 8_000,
+      failureThreshold: 1,
+      readContext: async () => ({ nodeName: currentNode, running: true, direct: false, revision: 'runtime-1' }),
+      probeDelay: async () => undefined,
+      recoverNode: async (_context, signal) => {
+        recoveryStarted();
+        return selection.coalesceAutomatic(signal, competingRecovery);
+      },
+      onBackgroundError
+    });
+    health.start();
+    const backgroundCheck = health.checkNow();
+    await recoveryDidStart;
+
+    finishStartup();
+    await expect(startup).resolves.toBe('日本 selected');
+    await expect(backgroundCheck).resolves.toBeUndefined();
+    expect(competingRecovery).not.toHaveBeenCalled();
+    expect(onBackgroundError).not.toHaveBeenCalled();
+    expect(health.inspect().health.nodeName).toBe('日本 selected');
+    health.dispose();
+  });
+
   it('waits for an aborted automatic rollback before applying a newer user choice', async () => {
     const coordinator = new NodeSelectionCoordinator();
     const events: string[] = [];
@@ -54,6 +138,29 @@ describe('NodeSelectionCoordinator', () => {
     await expect(automatic).rejects.toThrow('subscription refresh cancelled');
   });
 
+  it('lets a joining background caller stop waiting without aborting the shared startup selection', async () => {
+    const coordinator = new NodeSelectionCoordinator();
+    let finishStartup!: () => void;
+    const startupCanFinish = new Promise<void>((resolve) => {
+      finishStartup = resolve;
+    });
+    const startup = coordinator.replaceAutomatic(undefined, async () => {
+      await startupCanFinish;
+      return 'startup-node';
+    });
+    await Promise.resolve();
+
+    const backgroundAbort = new AbortController();
+    const backgroundAction = vi.fn(async () => 'background-node');
+    const background = coordinator.coalesceAutomatic(backgroundAbort.signal, backgroundAction);
+    backgroundAbort.abort(new Error('health monitor stopped'));
+
+    await expect(background).rejects.toThrow('health monitor stopped');
+    finishStartup();
+    await expect(startup).resolves.toBe('startup-node');
+    expect(backgroundAction).not.toHaveBeenCalled();
+  });
+
   it('routes background recovery and explicit selector writes through the same ownership boundary', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
     const healthRecovery = source.slice(source.indexOf('async recoverNode'), source.indexOf('onTransientFailure'));
@@ -66,8 +173,20 @@ describe('NodeSelectionCoordinator', () => {
       source.indexOf('ipcMain.handle(ipcChannels.setMode')
     );
 
-    expect(healthRecovery).toContain('nodeSelectionCoordinator.replaceAutomatic');
+    expect(healthRecovery).toContain('nodeSelectionCoordinator.coalesceAutomatic');
     expect(healthRecovery).toContain('performPreferredAutoNode');
+    const preferredSelection = source.slice(
+      source.indexOf('function selectPreferredAutoNode'),
+      source.indexOf('async function performPreferredAutoNode')
+    );
+    expect(preferredSelection).toContain('nodeSelectionCoordinator.coalesceAutomatic');
+    const startupSelection = source.slice(
+      source.indexOf("if (startedSettings.strategy === 'auto')"),
+      source.indexOf('trafficTracker.start()', source.indexOf("if (startedSettings.strategy === 'auto')"))
+    );
+    expect(startupSelection.indexOf('isExpectedOperationCancellation(error)')).toBeLessThan(
+      startupSelection.indexOf('lifecycle.stop()')
+    );
     expect(manualSelection.indexOf('nodeHealthCoordinator.invalidate()')).toBeLessThan(
       manualSelection.indexOf('nodeSelectionCoordinator.runUserAction')
     );

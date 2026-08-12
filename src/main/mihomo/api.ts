@@ -36,7 +36,7 @@ export type MihomoApiClient = {
   selectNode: (name: string) => Promise<void>;
   selectStrategy: (strategy: StrategyKey) => Promise<void>;
   setMode: (mode: MihomoMode) => Promise<void>;
-  testNodeDelay: (name: string, options?: { signal?: AbortSignal }) => Promise<number | undefined>;
+  testNodeDelay: (name: string, options?: NodeDelayProbeOptions) => Promise<number | undefined>;
   testAllNodes: (options?: {
     signal?: AbortSignal;
     onNodeTested?: (node: ProxyNode) => void | Promise<void>;
@@ -52,6 +52,31 @@ export type MihomoApiClient = {
   updateProvider: (options?: { signal?: AbortSignal }) => Promise<void>;
 };
 
+export type NodeDelayProbeReason =
+  | `HTTP ${number}`
+  | 'timeout'
+  | 'no valid delay'
+  | 'request failed'
+  | 'fetch failed'
+  | 'ECONNRESET'
+  | 'ECONNREFUSED'
+  | 'ETIMEDOUT'
+  | 'ENOTFOUND'
+  | 'EAI_AGAIN';
+
+export type NodeDelayProbeFailure = {
+  checks: Array<{
+    target: 'gstatic-204' | 'cloudflare-204';
+    proxyDelay: NodeDelayProbeReason;
+    providerHealthcheck?: NodeDelayProbeReason;
+  }>;
+};
+
+export type NodeDelayProbeOptions = {
+  signal?: AbortSignal;
+  onFailure?: (failure: NodeDelayProbeFailure) => void | Promise<void>;
+};
+
 export type BestNodeOptions = {
   avoidNode?: string;
   signal?: AbortSignal;
@@ -62,7 +87,10 @@ export type BestNodeOptions = {
 
 const selectorName = '节点选择';
 const providerName = 'airport';
-const delayTestUrls = ['https://www.gstatic.com/generate_204', 'https://cp.cloudflare.com/generate_204'];
+const delayTestTargets = [
+  { target: 'gstatic-204', url: 'https://www.gstatic.com/generate_204' },
+  { target: 'cloudflare-204', url: 'https://cp.cloudflare.com/generate_204' }
+] as const;
 const delayTestTimeoutMs = 2000;
 const delayTestConcurrency = 6;
 const nodeDelayCache = new Map<string, number>();
@@ -495,6 +523,44 @@ export function createMihomoApiClient(options: {
     return Boolean(signal?.aborted) || (error instanceof Error && error.name === 'AbortError');
   }
 
+  function summarizeNodeDelayProbeError(error: unknown): NodeDelayProbeReason {
+    const chain = collectErrorChain(error);
+    const message = chain.map((entry) => (entry instanceof Error ? entry.message : String(entry))).join(' ');
+    const status = message.match(/mihomo api failed:\s*(\d{3})/i)?.[1];
+    if (status) return `HTTP ${Number(status)}`;
+    if (
+      chain.some((entry) => entry instanceof Error && entry.name === 'TimeoutError') ||
+      /\btime(?:d? ?out|out)\b|operation was aborted due to timeout/i.test(message)
+    ) {
+      return 'timeout';
+    }
+
+    const code = chain
+      .map((entry) =>
+        typeof entry === 'object' && entry !== null && 'code' in entry && typeof entry.code === 'string'
+          ? entry.code.toUpperCase()
+          : undefined
+      )
+      .find(Boolean);
+    if (code && ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'].includes(code)) {
+      return code as NodeDelayProbeReason;
+    }
+    if (/fetch failed|failed to fetch/i.test(message)) return 'fetch failed';
+    return 'request failed';
+  }
+
+  function collectErrorChain(error: unknown): unknown[] {
+    const chain: unknown[] = [];
+    const visited = new Set<unknown>();
+    let current: unknown = error;
+    while (current !== undefined && current !== null && !visited.has(current) && chain.length < 4) {
+      chain.push(current);
+      visited.add(current);
+      current = typeof current === 'object' && current !== null && 'cause' in current ? current.cause : undefined;
+    }
+    return chain;
+  }
+
   function rankUsableNodes(nodes: ProxyNode[], options: BestNodeOptions): ProxyNode[] {
     const usable = nodes.filter((node) => typeof node.delay === 'number');
     if (!usable.length) return [];
@@ -612,32 +678,66 @@ export function createMihomoApiClient(options: {
     name: string,
     owner: NodeTestOwner,
     signal?: AbortSignal
-  ): Promise<{ delay: number | undefined; committed: boolean }> {
+  ): Promise<{ delay: number | undefined; committed: boolean; failure?: NodeDelayProbeFailure }> {
     try {
       const provider = nodeProviderCache.get(name);
       const results = await Promise.all(
-        delayTestUrls.map(async (url) => {
+        delayTestTargets.map(async ({ target, url }) => {
           try {
-            return await requestNodeDelay(name, url, signal);
+            const delay = await requestNodeDelay(name, url, signal);
+            return {
+              delay,
+              failure:
+                typeof delay === 'number'
+                  ? undefined
+                  : ({ target, proxyDelay: 'no valid delay' } satisfies NodeDelayProbeFailure['checks'][number])
+            };
           } catch (error) {
             if (isAbortError(error, signal)) throw error;
+            const proxyDelay = summarizeNodeDelayProbeError(error);
             if (provider) {
-              return requestProviderNodeDelay(provider, name, url, signal).catch((providerError) => {
+              try {
+                const delay = await requestProviderNodeDelay(provider, name, url, signal);
+                return {
+                  delay,
+                  failure:
+                    typeof delay === 'number'
+                      ? undefined
+                      : ({
+                          target,
+                          proxyDelay,
+                          providerHealthcheck: 'no valid delay'
+                        } satisfies NodeDelayProbeFailure['checks'][number])
+                };
+              } catch (providerError) {
                 if (isAbortError(providerError, signal)) throw providerError;
-                return undefined;
-              });
+                return {
+                  delay: undefined,
+                  failure: {
+                    target,
+                    proxyDelay,
+                    providerHealthcheck: summarizeNodeDelayProbeError(providerError)
+                  } satisfies NodeDelayProbeFailure['checks'][number]
+                };
+              }
             }
-            return undefined;
+            return {
+              delay: undefined,
+              failure: { target, proxyDelay } satisfies NodeDelayProbeFailure['checks'][number]
+            };
           }
         })
       );
 
-      const delays = results.filter((delay): delay is number => typeof delay === 'number');
+      const delays = results
+        .map((result) => result.delay)
+        .filter((delay): delay is number => typeof delay === 'number');
       nodeProbeSuccessCache.set(name, delays.length);
       const delay = delays.length
         ? Math.round(delays.reduce((sum, value) => sum + value, 0) / delays.length)
         : undefined;
-      if (!ownsNodeTest(name, owner)) return { delay, committed: false };
+      const failure = delay === undefined ? { checks: results.flatMap((result) => result.failure ?? []) } : undefined;
+      if (!ownsNodeTest(name, owner)) return { delay, committed: false, failure };
 
       if (typeof delay === 'number') {
         nodeDelayCache.set(name, delay);
@@ -648,7 +748,7 @@ export function createMihomoApiClient(options: {
         nodeTestStateCache.set(name, 'failed');
       }
       nodeTestOwners.delete(name);
-      return { delay, committed: true };
+      return { delay, committed: true, failure };
     } catch (error) {
       if (isAbortError(error, signal)) {
         restoreOwnedTestState(name, owner);
@@ -847,7 +947,11 @@ export function createMihomoApiClient(options: {
       }
 
       const owner = beginNodeTest(name);
-      return (await runOwnedNodeDelay(name, owner, options.signal)).delay;
+      const result = await runOwnedNodeDelay(name, owner, options.signal);
+      if (result.committed && result.failure?.checks.length && options.onFailure) {
+        await Promise.resolve(options.onFailure(result.failure)).catch(() => undefined);
+      }
+      return result.delay;
     },
     async testAllNodes(options = {}) {
       const nodes = await this.listNodes();
