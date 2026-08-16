@@ -71,4 +71,16 @@ describe('bound remote config authority', () => {
     expect(startFlow).toContain('runtimeIntent.cancel();');
     expect(startFlow).toContain('await lifecycle');
   });
+
+  it('treats sanitized remote transport failures as recoverable quiet-sync errors', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const recoverable = source.slice(
+      source.indexOf('function isRecoverableSyncError'),
+      source.indexOf('function clearLastError')
+    );
+
+    expect(recoverable).toContain("'REQUEST_FAILED'");
+    expect(recoverable).toContain("'FETCH_FAILED'");
+    expect(recoverable).toContain("'TIMEOUT'");
+  });
 });

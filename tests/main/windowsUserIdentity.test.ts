@@ -20,7 +20,7 @@ describe('Windows user identity boundary', () => {
     });
 
     expect(defaultRunner).toMatch(
-      /execFileAsync\(\s*resolveWindowsPowerShellPath\(\),[\s\S]*?env: createWindowsPowerShellEnvironment\(\)/
+      /execFileAsync\(\s*resolveWindowsPowerShellPath\(\),[\s\S]*?timeout: 15000,[\s\S]*?env: createWindowsPowerShellEnvironment\(\)/
     );
     expect(resolveWindowsPowerShellPath(String.raw`C:\Windows`)).toBe(
       String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`

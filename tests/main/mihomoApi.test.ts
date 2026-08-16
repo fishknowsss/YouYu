@@ -1211,6 +1211,43 @@ describe('createMihomoApiClient', () => {
     expect(autoNow).toBe('fast-node');
   });
 
+  it('delay-tests preferred-region nodes before other regions when selecting automatically', async () => {
+    const autoTarget = strategyTargets.auto;
+    let autoNow = '🇭🇰Hong Kong 01';
+    const nodeNames = ['🇭🇰Hong Kong 01', '🇭🇰Hong Kong 02', '🇯🇵Japan 01', '🇺🇸US 01'];
+    const delayRequests: string[] = [];
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: { type: 'Selector', now: autoTarget, all: [autoTarget, ...nodeNames] },
+            [autoTarget]: { type: 'URLTest', now: autoNow, all: nodeNames },
+            ...Object.fromEntries(nodeNames.map((name) => [name, {}]))
+          }
+        });
+      }
+      if (path.includes('/delay')) {
+        const name = decodeURIComponent(path.match(/\/proxies\/([^/]+)\/delay/)?.[1] ?? '');
+        delayRequests.push(name);
+        return Response.json({ delay: name.includes('Japan') ? 80 : 40 });
+      }
+      const body = JSON.parse(String(init?.body ?? '{}')) as { name?: string };
+      if (path.endsWith(`/proxies/${encodeURIComponent(autoTarget)}`) && body.name) autoNow = body.name;
+      return new Response(null, { status: 204 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(
+      api.selectBestUsableNodeForStrategy('auto', {
+        policy: { preferredRegion: 'jp', regionFallback: 'global' }
+      })
+    ).resolves.toBe('🇯🇵Japan 01');
+    expect(autoNow).toBe('🇯🇵Japan 01');
+    expect(delayRequests.every((name) => name.includes('Japan'))).toBe(true);
+    expect(delayRequests.some((name) => name.includes('Hong Kong') || name.includes('US'))).toBe(false);
+  });
+
   it('restores every changed selector when all auto-strategy candidates fail verification', async () => {
     const autoTarget = strategyTargets.auto;
     let mainNow = 'manual-node';

@@ -161,7 +161,7 @@ export async function validateMihomoSourceArchive(archivePath, manifest) {
     throw new Error(`Mihomo source archive SHA256 mismatch: expected ${manifest.sourceArchive.sha256}, got ${sha256}`);
   }
 
-  const listing = spawnSync('tar', ['-tzf', archivePath], {
+  const listing = spawnSync(resolveTarExecutable(), ['-tzf', archivePath], {
     encoding: 'utf8',
     windowsHide: true,
     timeout: 30_000,
@@ -352,6 +352,12 @@ function assertEqual(actual, expected, label) {
   if (actual !== expected) {
     throw new Error(`Mihomo manifest ${label} must be ${JSON.stringify(expected)}`);
   }
+}
+
+function resolveTarExecutable() {
+  if (process.platform !== 'win32') return 'tar';
+  const root = (process.env.SystemRoot ?? 'C:\\Windows').trim();
+  return join(root, 'System32', 'tar.exe');
 }
 
 function isRecord(value) {

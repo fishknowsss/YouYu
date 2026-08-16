@@ -11,6 +11,7 @@ import { EXTERNAL_RESPONSE_BODY_LIMITS, readFetchTextBounded } from '../http/bou
 import { selectMihomoProcessSpawner, spawnWindowsJobProcess } from '../platform/windowsJobProcess';
 import { buildMihomoConfig, isBlockedSelectableNodeName, strategyTargets } from './config';
 import { monitorMihomoWarningLogs } from './controllerLogStream';
+import { isNodeInPreferredRegion, resolveNodeSelectionPolicy, type NodeSelectionPolicy } from './nodeSelectionPolicy';
 
 type SpawnedProcess = {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
@@ -323,18 +324,32 @@ function pickDefaultNode(nodes: string[]): string | undefined {
   return sortDefaultCandidates(nodes)[0];
 }
 
-function pickStartupNode(nodes: string[], selectedNode: string): string | undefined {
-  const saved = selectedNode.trim();
-  if (saved && nodes.includes(saved)) {
-    return saved;
+function pickPreferredOrDefaultNode(nodes: string[], policy: NodeSelectionPolicy): string | undefined {
+  if (policy.preferredRegion !== 'auto') {
+    const preferred = nodes.filter((node) => isNodeInPreferredRegion(node, policy.preferredRegion));
+    if (preferred.length) return sortDefaultCandidates(preferred)[0];
+    if (policy.regionFallback === 'strict') return undefined;
   }
 
   return pickDefaultNode(nodes);
 }
 
-function pickUsableNodeForGroup(proxies: Record<string, MihomoProxyItem>, group: string): string | undefined {
+function pickStartupNode(nodes: string[], selectedNode: string, policy: NodeSelectionPolicy): string | undefined {
+  const saved = selectedNode.trim();
+  if (saved && nodes.includes(saved)) {
+    return saved;
+  }
+
+  return pickPreferredOrDefaultNode(nodes, policy);
+}
+
+function pickUsableNodeForGroup(
+  proxies: Record<string, MihomoProxyItem>,
+  group: string,
+  policy: NodeSelectionPolicy
+): string | undefined {
   const groupNodes = collectUsableNodes(proxies, proxies[group]?.all ?? []);
-  return pickDefaultNode(groupNodes);
+  return pickPreferredOrDefaultNode(groupNodes, policy);
 }
 
 async function selectNode(port: number, secret: string, group: string, node: string): Promise<void> {
@@ -374,6 +389,7 @@ async function waitForUsableProxies(
   port: number,
   selectedNode: string,
   strategy: AppSettings['strategy'],
+  policy: NodeSelectionPolicy,
   logLine?: (line: string) => void,
   signal?: AbortSignal
 ): Promise<void> {
@@ -394,7 +410,7 @@ async function waitForUsableProxies(
       const target =
         strategyTarget && selector?.item.all?.includes(strategyTarget)
           ? strategyTarget
-          : pickStartupNode(nodes, selectedNode);
+          : pickStartupNode(nodes, selectedNode, policy);
       if (target && (!currentNode || builtInProxyNames.has(currentNode) || currentNode !== target)) {
         const primarySteps = resolveSelectionSteps(proxies, selector?.name ?? selectorName, target);
         const steps = collectSyncedSelectionSteps(proxies, target, primarySteps);
@@ -407,7 +423,7 @@ async function waitForUsableProxies(
           }
         }
         if (strategyTarget && target === strategyTarget) {
-          const usableStrategyNode = pickUsableNodeForGroup(proxies, strategyTarget);
+          const usableStrategyNode = pickUsableNodeForGroup(proxies, strategyTarget, policy);
           if (usableStrategyNode) {
             await selectNode(port, secret, strategyTarget, usableStrategyNode);
           }
@@ -746,7 +762,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
       ]);
     }
 
-    return { workDir, configPath, settings, ports, remoteConfigSnapshot };
+    return { workDir, configPath, settings, ports, remoteConfigSnapshot, remoteConfig };
   }
 
   async function stopCurrentChild(current = child) {
@@ -796,9 +812,10 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         signal?.throwIfAborted();
-        const { workDir, configPath, settings, ports, remoteConfigSnapshot } = await writeConfig(signal);
+        const { workDir, configPath, settings, ports, remoteConfigSnapshot, remoteConfig } = await writeConfig(signal);
         const startupNode = settings.selectedNode;
         const startupStrategy = settings.strategy;
+        const startupPolicy = resolveNodeSelectionPolicy(remoteConfig);
         options.logLine?.(
           `mihomo starting: mixed-port=${ports.mixedPort}, controller=${ports.controllerPort}, dns=${ports.dnsPort ?? 1053}`
         );
@@ -922,6 +939,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
                     ports.controllerPort,
                     startupNode,
                     startupStrategy,
+                    startupPolicy,
                     options.logLine,
                     signal
                   );

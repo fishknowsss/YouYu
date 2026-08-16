@@ -40,6 +40,7 @@ export type MihomoApiClient = {
   testAllNodes: (options?: {
     signal?: AbortSignal;
     onNodeTested?: (node: ProxyNode) => void | Promise<void>;
+    nodes?: ProxyNode[];
   }) => Promise<void>;
   selectBestUsableNode: (options?: BestNodeOptions) => Promise<string | undefined>;
   selectBestUsableNodeForStrategy: (
@@ -581,6 +582,26 @@ export function createMihomoApiClient(options: {
     return [...preferred, ...sorted.filter((node) => !preferred.includes(node))];
   }
 
+  function partitionNodesByPolicy(
+    nodes: ProxyNode[],
+    options: BestNodeOptions
+  ): { preferred: ProxyNode[]; remaining: ProxyNode[] } {
+    const policy = options.policy ?? automaticNodeSelectionPolicy;
+    if (policy.preferredRegion === 'auto') {
+      return { preferred: nodes, remaining: [] };
+    }
+
+    const preferred = nodes.filter((node) => isNodeInPreferredRegion(node.name, policy.preferredRegion));
+    if (!preferred.length) {
+      return { preferred: nodes, remaining: [] };
+    }
+
+    return {
+      preferred,
+      remaining: policy.regionFallback === 'global' ? nodes.filter((node) => !preferred.includes(node)) : []
+    };
+  }
+
   async function isVerifiedCandidate(node: ProxyNode, options: BestNodeOptions): Promise<boolean> {
     if (!options.verifyNode) return true;
     try {
@@ -854,8 +875,14 @@ export function createMihomoApiClient(options: {
       await waitForSelectedNode(name);
     },
     async selectBestUsableNodeForStrategy(strategy, options = {}) {
-      await this.testAllNodes({ signal: options.signal });
-      const candidates = rankUsableNodes(await this.listNodes(), options);
+      const listed = await this.listNodes();
+      const { preferred, remaining } = partitionNodesByPolicy(listed, options);
+      await this.testAllNodes({ signal: options.signal, nodes: preferred });
+      let candidates = rankUsableNodes(await this.listNodes(), options);
+      if (!candidates.length && remaining.length) {
+        await this.testAllNodes({ signal: options.signal, nodes: remaining });
+        candidates = rankUsableNodes(await this.listNodes(), options);
+      }
       if (!candidates.length) return undefined;
 
       const data = await readProxies();
@@ -891,10 +918,27 @@ export function createMihomoApiClient(options: {
           }
         };
         const rejectedCandidates: ProxyNode[] = [];
-        for (const candidate of candidates) {
-          await selectCandidate(candidate);
-          if (await isVerifiedCandidate(candidate, options)) return candidate.name;
-          rejectedCandidates.push(candidate);
+        const tryCandidates = async (pool: ProxyNode[]) => {
+          for (const candidate of pool) {
+            await selectCandidate(candidate);
+            if (await isVerifiedCandidate(candidate, options)) return candidate.name;
+            rejectedCandidates.push(candidate);
+          }
+          return undefined;
+        };
+        const selectedPreferred = await tryCandidates(candidates);
+        if (selectedPreferred) return selectedPreferred;
+        if (remaining.length) {
+          const testedRemaining = new Set(candidates.map((candidate) => candidate.name));
+          const untestedRemaining = remaining.filter((node) => !testedRemaining.has(node.name));
+          if (untestedRemaining.length) {
+            await this.testAllNodes({ signal: options.signal, nodes: untestedRemaining });
+          }
+          const extra = rankUsableNodes(await this.listNodes(), options).filter(
+            (node) => remaining.some((item) => item.name === node.name) && !testedRemaining.has(node.name)
+          );
+          const selectedFallback = await tryCandidates(extra);
+          if (selectedFallback) return selectedFallback;
         }
         for (const candidate of rejectedCandidates) {
           if (!options.verifyFallbackNode) break;
@@ -954,7 +998,7 @@ export function createMihomoApiClient(options: {
       return result.delay;
     },
     async testAllNodes(options = {}) {
-      const nodes = await this.listNodes();
+      const nodes = options.nodes ?? (await this.listNodes());
       const queue = [...nodes];
       const workers = Array.from({ length: Math.min(delayTestConcurrency, queue.length) }, async () => {
         while (queue.length && !options.signal?.aborted) {
@@ -992,12 +1036,34 @@ export function createMihomoApiClient(options: {
       assertNotAborted(options.signal);
     },
     async selectBestUsableNode(options = {}) {
-      await this.testAllNodes({ signal: options.signal });
-      const candidates = rankUsableNodes(await this.listNodes(), options);
-      for (const candidate of candidates) {
-        assertNotAborted(options.signal);
-        await this.selectNode(candidate.name);
-        if (await isVerifiedCandidate(candidate, options)) return candidate.name;
+      const listed = await this.listNodes();
+      const { preferred, remaining } = partitionNodesByPolicy(listed, options);
+      await this.testAllNodes({ signal: options.signal, nodes: preferred });
+      let candidates = rankUsableNodes(await this.listNodes(), options);
+      if (!candidates.length && remaining.length) {
+        await this.testAllNodes({ signal: options.signal, nodes: remaining });
+        candidates = rankUsableNodes(await this.listNodes(), options);
+      }
+      const tryCandidates = async (pool: ProxyNode[]) => {
+        for (const candidate of pool) {
+          assertNotAborted(options.signal);
+          await this.selectNode(candidate.name);
+          if (await isVerifiedCandidate(candidate, options)) return candidate.name;
+        }
+        return undefined;
+      };
+      const selectedPreferred = await tryCandidates(candidates);
+      if (selectedPreferred) return selectedPreferred;
+      if (remaining.length) {
+        const tested = new Set(candidates.map((candidate) => candidate.name));
+        const untestedRemaining = remaining.filter((node) => !tested.has(node.name));
+        if (untestedRemaining.length) {
+          await this.testAllNodes({ signal: options.signal, nodes: untestedRemaining });
+        }
+        const extra = rankUsableNodes(await this.listNodes(), options).filter(
+          (node) => remaining.some((item) => item.name === node.name) && !tested.has(node.name)
+        );
+        return tryCandidates(extra);
       }
       return undefined;
     },

@@ -71,7 +71,7 @@ async function defaultRunPowerShell(script: string): Promise<string> {
   const { stdout } = await execFileAsync(
     resolveWindowsPowerShellPath(),
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned', '-Command', script],
-    { windowsHide: true, timeout: 5000, env: createWindowsPowerShellEnvironment() }
+    { windowsHide: true, timeout: 15000, env: createWindowsPowerShellEnvironment() }
   );
   return String(stdout);
 }

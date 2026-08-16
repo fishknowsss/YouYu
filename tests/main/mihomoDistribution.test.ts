@@ -107,6 +107,10 @@ describe('bundled Mihomo distribution', () => {
     expect(sourceScript).toContain('await validateMihomoSourceArchive(sourceCachePath, manifest)');
     expect(sourceScript).toContain('source-${manifest.sourceArchive.sha256}.tar.gz');
 
+    const distributionSource = await readFile('scripts/mihomo-distribution.mjs', 'utf8');
+    expect(distributionSource).toContain("join(root, 'System32', 'tar.exe')");
+    expect(distributionSource).toMatch(/spawnSync\(\s*resolveTarExecutable\(\)/);
+
     for (const path of ['scripts/smoke-test.ts', 'scripts/validate-windows-release.ts']) {
       expect(await readFile(path, 'utf8'), path).toContain('validateMihomoDistribution');
     }

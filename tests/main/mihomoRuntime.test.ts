@@ -1296,6 +1296,59 @@ proxies:
     expect(autoNow).toBe('香港 01');
   });
 
+  it('prefers a Japan node inside the auto strategy group before the first Hong Kong node', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const child = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.killed = false;
+    child.kill = vi.fn();
+    let selectorNow = 'DIRECT';
+    let autoNow = '🇭🇰Hong Kong ムラサメ';
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/version')) {
+        return Response.json({ version: 'test' });
+      }
+      if (path.endsWith('/proxies') && !init?.method) {
+        return Response.json({
+          proxies: {
+            节点选择: {
+              now: selectorNow,
+              all: ['自动选择', 'DIRECT']
+            },
+            自动选择: {
+              now: autoNow,
+              all: ['🇭🇰Hong Kong ムラサメ', '🇯🇵Japan ムラサメ', '美国 01']
+            },
+            '🇭🇰Hong Kong ムラサメ': {},
+            '🇯🇵Japan ムラサメ': {},
+            '美国 01': {}
+          }
+        });
+      }
+
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      if (path.endsWith('/proxies/%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9')) selectorNow = body.name;
+      if (path.endsWith('/proxies/%E8%87%AA%E5%8A%A8%E9%80%89%E6%8B%A9')) autoNow = body.name;
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      spawnProcess: () => child as never
+    });
+
+    await runtime.start();
+
+    expect(selectorNow).toBe('自动选择');
+    expect(autoNow).toBe('🇯🇵Japan ムラサメ');
+  });
+
   it('keeps the local auto strategy ahead of deprecated remote startup preferences', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);

@@ -735,12 +735,16 @@ function isRecoverableSyncError(error: unknown): boolean {
     'Failed to fetch',
     'request timed out',
     'proxy connect timed out',
+    'timed out',
     'aborted',
     'ECONNRESET',
     'ECONNREFUSED',
     'ETIMEDOUT',
     'ENOTFOUND',
-    'EAI_AGAIN'
+    'EAI_AGAIN',
+    'REQUEST_FAILED',
+    'FETCH_FAILED',
+    'TIMEOUT'
   ].some((needle) => message.includes(needle));
 }
 
@@ -1784,7 +1788,8 @@ async function performStartProxy(signal?: AbortSignal, requestedIntentGeneration
   const startedSettings = await settingsStore.read();
   if (startedSettings.strategy === 'auto') {
     try {
-      await selectPreferredAutoNode({ signal });
+      const selectedNode = await selectPreferredAutoNode({ signal });
+      appendLog(`已自动选择可用节点: ${selectedNode}`);
     } catch (error) {
       if (isExpectedOperationCancellation(error)) throw error;
       await lifecycle.stop().catch((stopError) => appendLog(`地区策略失败后停止代理失败: ${formatError(stopError)}`));
