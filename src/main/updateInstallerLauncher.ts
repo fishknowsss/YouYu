@@ -126,6 +126,7 @@ export function signalUpdateInstallerCancellation(
 export function createElevatedUpdateInstallerScript(): string {
   return [
     "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
     '$cancellationPath = $null',
     '$installer = $null',
     '$installerBoundaryClosed = $false',
@@ -297,6 +298,7 @@ function createUpdateInstallerPowerShellTransport(
   const environmentValue = gzipSync(scriptBytes, { level: 9 }).toString('base64');
   const loaderScript = [
     "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
     '$compressedStream = $null',
     '$gzipStream = $null',
     '$reader = $null',
@@ -340,10 +342,19 @@ export function createUpdateInstallerSupervisorTransport(script: string): {
   return createUpdateInstallerPowerShellTransport(script, updateInstallerSupervisorScriptEnvironment);
 }
 
+export function createUpdateInstallerBootstrapTransport(script = createUpdateInstallerBootstrapScript()): {
+  environmentValue: string;
+  encodedLoaderCommand: string;
+} {
+  return createUpdateInstallerPowerShellTransport(script, updateInstallerBootstrapScriptEnvironment);
+}
+
 export function createUpdateInstallerBootstrapScript(): string {
   return [
     "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
     '$outer = $null',
+    '$outerErrorPath = $null',
     '$readyPath = $null',
     '$readyPathValidated = $false',
     '$cancellationPath = $null',
@@ -430,20 +441,41 @@ export function createUpdateInstallerBootstrapScript(): string {
     '      return $false',
     '    }',
     '  }',
+    '  function Read-OuterSupervisorError([string] $path) {',
+    '    try {',
+    "      if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return '' }",
+    "      $text = ((Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue) + '' ).Trim()",
+    '      if ($text.Length -gt 600) { $text = $text.Substring($text.Length - 600) }',
+    '      return $text',
+    '    } catch {',
+    "      return '' ",
+    '    }',
+    '  }',
+    "  $outerErrorPath = $readyPath + '.stderr.log'",
     '  Remove-Item -LiteralPath $readyPath -Force -ErrorAction SilentlyContinue',
+    '  Remove-Item -LiteralPath $outerErrorPath -Force -ErrorAction SilentlyContinue',
     '  $startedAtEpochMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()',
     "  $outerArgumentLine = '-NoProfile -NonInteractive -EncodedCommand ' + $outerLoaderCommand",
-    "  $outer = Start-Process -FilePath ([IO.Path]::Combine($PSHOME, 'powershell.exe')) -ArgumentList $outerArgumentLine -WindowStyle Hidden -PassThru",
+    "  $outer = Start-Process -FilePath ([IO.Path]::Combine($PSHOME, 'powershell.exe')) -ArgumentList $outerArgumentLine -WindowStyle Hidden -RedirectStandardError $outerErrorPath -PassThru",
     "  if ($null -eq $outer -or [int] $outer.Id -le 0) { throw 'update supervisor did not start' }",
     '  [void] $outer.WaitForExit(250)',
-    "  if ($outer.HasExited) { throw 'update supervisor exited before bootstrap readiness' }",
+    '  if ($outer.HasExited) {',
+    '    $outerError = Read-OuterSupervisorError $outerErrorPath',
+    "    if ([string]::IsNullOrWhiteSpace($outerError)) { throw 'update supervisor exited before bootstrap readiness' }",
+    "    throw ('update supervisor exited before bootstrap readiness: ' + $outerError)",
+    '  }',
     '  $deadline = [DateTimeOffset]::UtcNow.AddMilliseconds($timeoutMs)',
     '  while ([DateTimeOffset]::UtcNow -lt $deadline) {',
-    "    if ($outer.HasExited) { throw ('update supervisor exited before authenticated readiness with exit code ' + [int] $outer.ExitCode) }",
+    '    if ($outer.HasExited) {',
+    '      $outerError = Read-OuterSupervisorError $outerErrorPath',
+    "      if ([string]::IsNullOrWhiteSpace($outerError)) { throw ('update supervisor exited before authenticated readiness with exit code ' + [int] $outer.ExitCode) }",
+    "      throw ('update supervisor exited before authenticated readiness with exit code ' + [int] $outer.ExitCode + ': ' + $outerError)",
+    '    }',
     '    if (Test-PrivateSupervisorReadyFile $readyPath $targetUserSid ([int] $outer.Id) $nonce $handoffPath $startedAtEpochMs) {',
     '      $outer.Refresh()',
     "      if ($outer.HasExited) { throw 'update supervisor exited during authenticated readiness' }",
     '      Remove-Item -LiteralPath $readyPath -Force -ErrorAction SilentlyContinue',
+    '      if (-not [string]::IsNullOrWhiteSpace($outerErrorPath)) { Remove-Item -LiteralPath $outerErrorPath -Force -ErrorAction SilentlyContinue }',
     `      [Console]::Out.WriteLine('${updateInstallerSupervisorReadyMessage}')`,
     '      [Console]::Out.Flush()',
     '      exit 0',
@@ -461,6 +493,7 @@ export function createUpdateInstallerBootstrapScript(): string {
     '    } catch { }',
     '  }',
     '  if ($readyPathValidated) { Remove-Item -LiteralPath $readyPath -Force -ErrorAction SilentlyContinue }',
+    '  if (-not [string]::IsNullOrWhiteSpace($outerErrorPath)) { Remove-Item -LiteralPath $outerErrorPath -Force -ErrorAction SilentlyContinue }',
     "  [Console]::Error.WriteLine(('YouYu update launcher: ' + $_.Exception.Message))",
     '  exit 1',
     '}'
@@ -470,6 +503,7 @@ export function createUpdateInstallerBootstrapScript(): string {
 export function createUpdateInstallerLauncherScript(): string {
   return [
     "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
     '$started = $null',
     '$cancellationPath = $null',
     '$cancellationPathValidated = $false',
@@ -812,6 +846,8 @@ export function sanitizeUpdateInstallerLauncherDiagnostic(value: string): string
     return code <= 0x1f || code === 0x7f ? ' ' : character;
   }).join('');
   return withoutControlCharacters
+    .replace(/#<\s*CLIXML/gi, ' ')
+    .replace(/<Objs\b[\s\S]*?(?:<\/Objs>|$)/gi, ' ')
     .replace(/https?:\/\/\S+/gi, '<url>')
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, '<nonce>')
     .replace(/S-1-\d+(?:-\d+){2,14}/gi, '<sid>')
@@ -895,10 +931,7 @@ export async function launchDownloadedUpdateInstaller(options: UpdateInstallerLa
     'utf8'
   ).toString('base64');
   const powershellPath = options.powershellPath ?? resolveWindowsPowerShellPath(options.environment?.SystemRoot);
-  const bootstrapTransport = createUpdateInstallerPowerShellTransport(
-    createUpdateInstallerBootstrapScript(),
-    updateInstallerBootstrapScriptEnvironment
-  );
+  const bootstrapTransport = createUpdateInstallerBootstrapTransport();
   environment[updateInstallerBootstrapScriptEnvironment] = bootstrapTransport.environmentValue;
   const launcher = (options.spawnLauncher ?? spawn)(
     powershellPath,

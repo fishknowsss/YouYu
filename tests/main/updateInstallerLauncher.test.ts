@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createWindowsPowerShellFixtureEnvironment } from '../helpers/windowsPowerShellEnvironment';
 import {
   createUpdateInstallerBootstrapScript,
+  createUpdateInstallerBootstrapTransport,
   createElevatedUpdateInstallerScript,
   createUpdateInstallerLauncherScript,
   createUpdateInstallerSupervisorTransport,
@@ -595,6 +596,14 @@ describe('controlled Windows update installer launcher', () => {
       '$acknowledgementDeadline = [DateTimeOffset]::UtcNow.AddMilliseconds($acknowledgementTimeoutMs)'
     );
     expect(script).toContain('update acknowledgement payload does not match its handoff');
+    expect(script).toContain("$ProgressPreference = 'SilentlyContinue'");
+    expect(bootstrapScript).toContain("$ProgressPreference = 'SilentlyContinue'");
+    expect(elevatedScript).toContain("$ProgressPreference = 'SilentlyContinue'");
+    expect(loaderScript).toContain("$ProgressPreference = 'SilentlyContinue'");
+    expect(bootstrapScript).toContain('-RedirectStandardError $outerErrorPath');
+    expect(bootstrapScript.indexOf("$ErrorActionPreference = 'Stop'")).toBeLessThan(
+      bootstrapScript.indexOf("$ProgressPreference = 'SilentlyContinue'")
+    );
     expect(script).toContain('$acl.AreAccessRulesProtected');
     expect(script).toContain('$rules.Count -ne 1');
     expect(script).toContain('Remove-Item Env:YOUYU_UPDATE_INSTALLER_LAUNCH_PAYLOAD');
@@ -1019,7 +1028,8 @@ describe('controlled Windows update installer launcher', () => {
       "[IO.File]::WriteAllText($sentinelPath, 'finished', (New-Object Text.UTF8Encoding($false)))"
     ].join('\n');
     const supervisorTransport = createUpdateInstallerSupervisorTransport(sentinelScript);
-    const bootstrapEncodedCommand = Buffer.from(createUpdateInstallerBootstrapScript(), 'utf16le').toString('base64');
+    const bootstrapTransport = createUpdateInstallerBootstrapTransport();
+    expect(bootstrapTransport.encodedLoaderCommand.length).toBeLessThan(8000);
     const bootstrapPayload = Buffer.from(
       JSON.stringify({
         version: '1',
@@ -1035,7 +1045,7 @@ describe('controlled Windows update installer launcher', () => {
     ).toString('base64');
     const parentScript = [
       "const { spawn } = require('node:child_process');",
-      `const child = spawn(${JSON.stringify(powershellPath)}, ['-NoProfile', '-NonInteractive', '-EncodedCommand', ${JSON.stringify(bootstrapEncodedCommand)}], { detached: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: process.env });`,
+      `const child = spawn(${JSON.stringify(powershellPath)}, ['-NoProfile', '-NonInteractive', '-EncodedCommand', ${JSON.stringify(bootstrapTransport.encodedLoaderCommand)}], { detached: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: process.env });`,
       "let output = ''; let diagnostic = ''; let ready = false;",
       "child.once('error', (error) => { console.error(error.message); process.exitCode = 1; });",
       "child.stderr.on('data', (chunk) => { diagnostic += chunk.toString(); });",
@@ -1043,13 +1053,17 @@ describe('controlled Windows update installer launcher', () => {
       "child.once('close', (code) => { if (!ready) { console.error('bootstrap exited before readiness: ' + code + ' ' + diagnostic); process.exitCode = 1; } });"
     ].join('\n');
 
+    const parentScriptPath = join(fixtureRoot, 'short-lived-parent.js');
+    await writeFile(parentScriptPath, parentScript, 'utf8');
+
     try {
-      const parent = spawn(process.execPath, ['-e', parentScript], {
+      const parent = spawn(process.execPath, [parentScriptPath], {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: createWindowsPowerShellFixtureEnvironment({
           ...process.env,
           [updateInstallerBootstrapPayloadEnvironment]: bootstrapPayload,
+          [updateInstallerBootstrapScriptEnvironment]: bootstrapTransport.environmentValue,
           [updateInstallerSupervisorLoaderEnvironment]: supervisorTransport.encodedLoaderCommand,
           [updateInstallerSupervisorScriptEnvironment]: supervisorTransport.environmentValue,
           YOUYU_TEST_SUPERVISOR_READY_PATH: readyPath,
@@ -1102,5 +1116,17 @@ describe('controlled Windows update installer launcher', () => {
     expect(diagnostic).not.toContain(handoff.targetUserSid);
     expect(diagnostic).not.toContain('example.com');
     expect(diagnostic.length).toBeLessThanOrEqual(400);
+  });
+
+  it('drops PowerShell progress CLIXML from launcher diagnostics so the real supervisor error remains readable', () => {
+    const diagnostic = sanitizeUpdateInstallerLauncherDiagnostic(
+      'YouYu update launcher: update supervisor exited before authenticated readiness with exit code 1 #< CLIXML\n<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04"><Obj S="progress" RefId="0"><TN RefId="0"><T>System.Management.Automation.PSCustomObject</T><T>System.Object</T></TN><MS><I64 N="SourceId">1</I64><PR N="Record"><AV>正在准备首次使用模块。</AV><AI>0</AI><Nil /><PI>-1</PI><PC>-1</PC><T>Completed</T><SR>-1</SR><SD> </SD></PR></MS></Obj></Objs>'
+    );
+    expect(diagnostic).toContain(
+      'YouYu update launcher: update supervisor exited before authenticated readiness with exit code 1'
+    );
+    expect(diagnostic).not.toMatch(/CLIXML/i);
+    expect(diagnostic).not.toContain('<Objs');
+    expect(diagnostic).not.toContain('首次使用模块');
   });
 });

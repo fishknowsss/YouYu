@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $cancellationPath = $null
 $installer = $null
 $installerBoundaryClosed = $false
