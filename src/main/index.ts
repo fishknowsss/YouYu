@@ -57,6 +57,7 @@ import {
   type StoredNodeAvailability
 } from './storage/nodeHealth';
 import { createNodeHealthCoordinator, type NodeHealthContext } from './nodeHealthCoordinator';
+import { createNodeSwitchCooldown } from './nodeSwitchCooldown';
 import { resolvePetNoticePlacement } from './noticePlacement';
 import { resolveDefaultSubscriptionUrl } from './defaultSubscription';
 import { formatReportedAppVersion, resolveAppVersion } from './appVersion';
@@ -283,8 +284,11 @@ const nodeHealthInitialDelayMs = 3000;
 const currentNodeDelayRefreshMs = 5 * 60 * 1000;
 const nodeHealthIntervalMs = currentNodeDelayRefreshMs;
 const nodeHealthRepairDelayMs = 3000;
-const nodeHealthRetryDelayMs = 8000;
-const nodeHealthFailureThreshold = 2;
+const nodeHealthRetryDelayMs = 15000;
+const nodeHealthFailureThreshold = 3;
+const nodeHealthProbeTimeoutMs = 4000;
+const nodeSwitchCooldownMs = 15 * 60 * 1000;
+const nodeSwitchCooldown = createNodeSwitchCooldown({ cooldownMs: nodeSwitchCooldownMs });
 const remoteConfigSyncIntervalMs = 3 * 60 * 1000;
 const remoteConfigWakeCooldownMs = 12 * 1000;
 const updatePeriodicIntervalMs = 30 * 60 * 1000;
@@ -1251,6 +1255,7 @@ const nodeHealthCoordinator = createNodeHealthCoordinator<RuntimeNodeHealthConte
         context.nodeName,
         {
           signal,
+          timeoutMs: nodeHealthProbeTimeoutMs,
           onFailure: (failure) => {
             pendingNodeProbeFailure = { nodeName: context.nodeName, failure };
           }
@@ -1267,20 +1272,31 @@ const nodeHealthCoordinator = createNodeHealthCoordinator<RuntimeNodeHealthConte
   async recoverNode(context, signal) {
     return nodeSelectionCoordinator.coalesceAutomatic(signal, async (operationSignal) => {
       const mihomoApi = createRuntimeMihomoApi({ secret: context.settings.controllerSecret });
+      const avoidNodes = nodeSwitchCooldown.avoidWith(context.nodeName);
       const selectedNode = isAutomaticStrategy(context.settings.strategy)
         ? context.settings.strategy === 'auto'
-          ? await performPreferredAutoNode({ avoidNode: context.nodeName, signal: operationSignal }).catch((error) => {
+          ? await performPreferredAutoNode({
+              avoidNodes,
+              allowAvoidFallback: false,
+              signal: operationSignal
+            }).catch((error) => {
               operationSignal.throwIfAborted();
               appendLog(`自动地区节点恢复失败: ${formatError(error)}`);
               return undefined;
             })
           : await mihomoApi.selectBestUsableNodeForStrategy(context.settings.strategy, {
-              avoidNode: context.nodeName,
+              avoidNodes,
+              allowAvoidFallback: false,
               signal: operationSignal
             })
-        : await mihomoApi.selectBestUsableNode({ avoidNode: context.nodeName, signal: operationSignal });
+        : await mihomoApi.selectBestUsableNode({
+            avoidNodes,
+            allowAvoidFallback: false,
+            signal: operationSignal
+          });
       operationSignal.throwIfAborted();
       if (!selectedNode) return undefined;
+      nodeSwitchCooldown.remember(context.nodeName);
       await settingsStore.update(
         isAutomaticStrategy(context.settings.strategy)
           ? { strategy: context.settings.strategy, selectedNode: null }
@@ -1301,6 +1317,9 @@ const nodeHealthCoordinator = createNodeHealthCoordinator<RuntimeNodeHealthConte
   onRecovering: (nodeName) => {
     flushNodeProbeFailure(nodeName);
     appendLog(`当前节点不可用，正在切换: ${nodeName}`);
+  },
+  onRecoverySkipped: (nodeName) => {
+    appendLog(`当前节点探测未通过，暂时没有更好的候选节点，先继续使用: ${nodeName}`);
   },
   async onRecovered(nodeName, signal) {
     signal.throwIfAborted();
@@ -1677,6 +1696,8 @@ function selectPreferredAutoNode(
   options: {
     signal?: AbortSignal;
     avoidNode?: string;
+    avoidNodes?: string[];
+    allowAvoidFallback?: boolean;
   } = {}
 ): Promise<string> {
   return nodeSelectionCoordinator.coalesceAutomatic(options.signal, (signal) =>
@@ -1684,7 +1705,12 @@ function selectPreferredAutoNode(
   );
 }
 
-async function performPreferredAutoNode(options: { signal: AbortSignal; avoidNode?: string }): Promise<string> {
+async function performPreferredAutoNode(options: {
+  signal: AbortSignal;
+  avoidNode?: string;
+  avoidNodes?: string[];
+  allowAvoidFallback?: boolean;
+}): Promise<string> {
   const settings = await settingsStore.read();
   const policy = await readNodeSelectionPolicy();
   const expectedRegion = expectedExitRegionCode(policy.preferredRegion);
@@ -1694,6 +1720,8 @@ async function performPreferredAutoNode(options: { signal: AbortSignal; avoidNod
   const mihomoApi = createRuntimeMihomoApi({ secret: settings.controllerSecret });
   const selectedNode = await mihomoApi.selectBestUsableNodeForStrategy('auto', {
     avoidNode: options.avoidNode,
+    avoidNodes: options.avoidNodes,
+    allowAvoidFallback: options.allowAvoidFallback,
     policy,
     signal: options.signal,
     verifyNode: async (nodeName, signal) => {

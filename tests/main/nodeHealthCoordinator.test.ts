@@ -112,6 +112,36 @@ describe('createNodeHealthCoordinator', () => {
     coordinator.dispose();
   });
 
+  it('stays on the current node when recovery finds no better candidate', async () => {
+    vi.useFakeTimers();
+    const recoverNode = vi.fn(async () => undefined);
+    const onBackgroundError = vi.fn();
+    const onRecoverySkipped = vi.fn();
+    const coordinator = createNodeHealthCoordinator({
+      totalAvailabilityCount: 15,
+      initialDelayMs: 60_000,
+      intervalMs: 300_000,
+      retryDelayMs: 8_000,
+      failureThreshold: 2,
+      readContext: async () => context(),
+      probeDelay: vi.fn(async () => undefined),
+      recoverNode,
+      onBackgroundError,
+      onRecoverySkipped
+    });
+    coordinator.start();
+
+    await coordinator.checkNow();
+    await coordinator.checkNow();
+
+    expect(recoverNode).toHaveBeenCalledOnce();
+    expect(onRecoverySkipped).toHaveBeenCalledWith('JP Tokyo');
+    expect(onBackgroundError).not.toHaveBeenCalled();
+    expect(coordinator.inspect().health).toMatchObject({ nodeName: 'JP Tokyo', delayStatus: 'failed' });
+    expect(coordinator.inspect().failures).toEqual({ nodeName: 'JP Tokyo', count: 0 });
+    coordinator.dispose();
+  });
+
   it('resets consecutive background failures after a successful manual delay result', async () => {
     vi.useFakeTimers();
     const recoverNode = vi.fn(async () => 'US West');

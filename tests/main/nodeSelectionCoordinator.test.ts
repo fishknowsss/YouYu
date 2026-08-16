@@ -192,4 +192,21 @@ describe('NodeSelectionCoordinator', () => {
     );
     expect(strategySelection).toContain('nodeSelectionCoordinator.runUserAction');
   });
+
+  it('uses a longer health probe, three failures, and same-region cooldown before switching', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    expect(source).toContain('const nodeHealthProbeTimeoutMs = 4000');
+    expect(source).toContain('const nodeHealthRetryDelayMs = 15000');
+    expect(source).toContain('const nodeHealthFailureThreshold = 3');
+    expect(source).toContain('createNodeSwitchCooldown');
+
+    const healthProbe = source.slice(source.indexOf('async probeDelay'), source.indexOf('async recoverNode'));
+    expect(healthProbe).toContain('timeoutMs: nodeHealthProbeTimeoutMs');
+
+    const healthRecovery = source.slice(source.indexOf('async recoverNode'), source.indexOf('onTransientFailure'));
+    expect(healthRecovery).toContain('allowAvoidFallback: false');
+    expect(healthRecovery).toContain('avoidNodes');
+    expect(healthRecovery).toContain('nodeSwitchCooldown.remember');
+    expect(source).toContain('onRecoverySkipped');
+  });
 });

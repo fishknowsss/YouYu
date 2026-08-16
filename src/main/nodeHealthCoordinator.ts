@@ -19,6 +19,7 @@ type NodeHealthCoordinatorOptions<Context extends NodeHealthContext, Availabilit
   recoverNode?: (context: Readonly<Context>, signal: AbortSignal) => Promise<string | undefined>;
   onTransientFailure?: (nodeName: string, failureCount: number) => void | Promise<void>;
   onRecovering?: (nodeName: string) => void | Promise<void>;
+  onRecoverySkipped?: (nodeName: string) => void | Promise<void>;
   onRecovered?: (nodeName: string, signal: AbortSignal) => void | Promise<void>;
   onBackgroundError?: (error: unknown) => void | Promise<void>;
   onHealthChanged?: (health: CurrentNodeHealth) => void | Promise<void>;
@@ -430,7 +431,13 @@ export function createNodeHealthCoordinator<Context extends NodeHealthContext, A
         await verifyDelayOperation(operation);
         const selectedNode = await options.recoverNode?.(operationContext, operation.controller.signal);
         operation.controller.signal.throwIfAborted();
-        if (!selectedNode) throw new Error('no usable node');
+        if (!selectedNode) {
+          failureCount = 0;
+          nextDelayMs = options.intervalMs;
+          await options.onRecoverySkipped?.(operationContext.nodeName);
+          await verifyDelayOperation(operation);
+          return;
+        }
         const recoveredContext = await readLatestContext();
         operation.controller.signal.throwIfAborted();
         if (!usable(recoveredContext) || recoveredContext.nodeName !== selectedNode) {

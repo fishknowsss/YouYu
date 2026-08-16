@@ -75,11 +75,14 @@ export type NodeDelayProbeFailure = {
 
 export type NodeDelayProbeOptions = {
   signal?: AbortSignal;
+  timeoutMs?: number;
   onFailure?: (failure: NodeDelayProbeFailure) => void | Promise<void>;
 };
 
 export type BestNodeOptions = {
   avoidNode?: string;
+  avoidNodes?: string[];
+  allowAvoidFallback?: boolean;
   signal?: AbortSignal;
   policy?: NodeSelectionPolicy;
   verifyNode?: (name: string, signal?: AbortSignal) => Promise<boolean>;
@@ -259,8 +262,8 @@ export function createMihomoApiClient(options: {
     nodeTestOwners.delete(name);
   }
 
-  function normalizeDelay(delay: unknown): number | undefined {
-    return typeof delay === 'number' && delay > 0 && delay < delayTestTimeoutMs ? delay : undefined;
+  function normalizeDelay(delay: unknown, timeoutMs = delayTestTimeoutMs): number | undefined {
+    return typeof delay === 'number' && delay > 0 && delay < timeoutMs ? delay : undefined;
   }
 
   function resolveCurrentNode(proxies: Record<string, MihomoProxyItem>, selector: MihomoProxyItem | undefined) {
@@ -562,12 +565,22 @@ export function createMihomoApiClient(options: {
     return chain;
   }
 
+  function collectAvoidedNodeNames(options: BestNodeOptions): Set<string> {
+    const names = new Set<string>();
+    if (options.avoidNode?.trim()) names.add(options.avoidNode);
+    for (const name of options.avoidNodes ?? []) {
+      if (name.trim()) names.add(name);
+    }
+    return names;
+  }
+
   function rankUsableNodes(nodes: ProxyNode[], options: BestNodeOptions): ProxyNode[] {
     const usable = nodes.filter((node) => typeof node.delay === 'number');
     if (!usable.length) return [];
 
-    const candidates = options.avoidNode ? usable.filter((node) => node.name !== options.avoidNode) : usable;
-    const targetPool = candidates.length ? candidates : usable;
+    const avoided = collectAvoidedNodeNames(options);
+    const candidates = avoided.size ? usable.filter((node) => !avoided.has(node.name)) : usable;
+    const targetPool = candidates.length ? candidates : options.allowAvoidFallback === false ? [] : usable;
     const byHealthThenDelay = (left: ProxyNode, right: ProxyNode) => {
       const healthDifference =
         (nodeProbeSuccessCache.get(right.name) ?? 0) - (nodeProbeSuccessCache.get(left.name) ?? 0);
@@ -665,26 +678,32 @@ export function createMihomoApiClient(options: {
     }
   }
 
-  async function requestNodeDelay(name: string, url: string, signal?: AbortSignal): Promise<number | undefined> {
+  async function requestNodeDelay(
+    name: string,
+    url: string,
+    signal?: AbortSignal,
+    timeoutMs = delayTestTimeoutMs
+  ): Promise<number | undefined> {
     const response = await request(
-      `/proxies/${encodeURIComponent(name)}/delay?timeout=${delayTestTimeoutMs}&url=${encodeURIComponent(url)}`,
+      `/proxies/${encodeURIComponent(name)}/delay?timeout=${timeoutMs}&url=${encodeURIComponent(url)}`,
       {
         headers: headers(),
         signal
       }
     );
     const data = (await response.json()) as MihomoDelayResponse;
-    return normalizeDelay(data.delay);
+    return normalizeDelay(data.delay, timeoutMs);
   }
 
   async function requestProviderNodeDelay(
     provider: string,
     name: string,
     url: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    timeoutMs = delayTestTimeoutMs
   ): Promise<number | undefined> {
     const response = await request(
-      `/providers/proxies/${encodeURIComponent(provider)}/${encodeURIComponent(name)}/healthcheck?timeout=${delayTestTimeoutMs}&url=${encodeURIComponent(url)}`,
+      `/providers/proxies/${encodeURIComponent(provider)}/${encodeURIComponent(name)}/healthcheck?timeout=${timeoutMs}&url=${encodeURIComponent(url)}`,
       {
         method: 'GET',
         headers: headers(),
@@ -692,20 +711,21 @@ export function createMihomoApiClient(options: {
       }
     );
     const data = (await response.json()) as MihomoDelayResponse;
-    return normalizeDelay(data.delay);
+    return normalizeDelay(data.delay, timeoutMs);
   }
 
   async function runOwnedNodeDelay(
     name: string,
     owner: NodeTestOwner,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    timeoutMs = delayTestTimeoutMs
   ): Promise<{ delay: number | undefined; committed: boolean; failure?: NodeDelayProbeFailure }> {
     try {
       const provider = nodeProviderCache.get(name);
       const results = await Promise.all(
         delayTestTargets.map(async ({ target, url }) => {
           try {
-            const delay = await requestNodeDelay(name, url, signal);
+            const delay = await requestNodeDelay(name, url, signal, timeoutMs);
             return {
               delay,
               failure:
@@ -718,7 +738,7 @@ export function createMihomoApiClient(options: {
             const proxyDelay = summarizeNodeDelayProbeError(error);
             if (provider) {
               try {
-                const delay = await requestProviderNodeDelay(provider, name, url, signal);
+                const delay = await requestProviderNodeDelay(provider, name, url, signal, timeoutMs);
                 return {
                   delay,
                   failure:
@@ -879,7 +899,7 @@ export function createMihomoApiClient(options: {
       const { preferred, remaining } = partitionNodesByPolicy(listed, options);
       await this.testAllNodes({ signal: options.signal, nodes: preferred });
       let candidates = rankUsableNodes(await this.listNodes(), options);
-      if (!candidates.length && remaining.length) {
+      if (!candidates.length && remaining.length && options.allowAvoidFallback !== false) {
         await this.testAllNodes({ signal: options.signal, nodes: remaining });
         candidates = rankUsableNodes(await this.listNodes(), options);
       }
@@ -991,7 +1011,7 @@ export function createMihomoApiClient(options: {
       }
 
       const owner = beginNodeTest(name);
-      const result = await runOwnedNodeDelay(name, owner, options.signal);
+      const result = await runOwnedNodeDelay(name, owner, options.signal, options.timeoutMs);
       if (result.committed && result.failure?.checks.length && options.onFailure) {
         await Promise.resolve(options.onFailure(result.failure)).catch(() => undefined);
       }
@@ -1040,7 +1060,7 @@ export function createMihomoApiClient(options: {
       const { preferred, remaining } = partitionNodesByPolicy(listed, options);
       await this.testAllNodes({ signal: options.signal, nodes: preferred });
       let candidates = rankUsableNodes(await this.listNodes(), options);
-      if (!candidates.length && remaining.length) {
+      if (!candidates.length && remaining.length && options.allowAvoidFallback !== false) {
         await this.testAllNodes({ signal: options.signal, nodes: remaining });
         candidates = rankUsableNodes(await this.listNodes(), options);
       }

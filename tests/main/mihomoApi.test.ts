@@ -775,6 +775,18 @@ describe('createMihomoApiClient', () => {
     expect(decodeURIComponent(requestedUrls[1])).toContain('https://cp.cloudflare.com/generate_204');
   });
 
+  it('lets a health probe use a longer delay timeout and keep a 2s-plus result', async () => {
+    const requestedUrls: string[] = [];
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      requestedUrls.push(String(url));
+      return Response.json({ delay: 2600 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(api.testNodeDelay('日本 春日野 悠', { timeoutMs: 4000 })).resolves.toBe(2600);
+    expect(requestedUrls.every((url) => url.includes('timeout=4000'))).toBe(true);
+  });
+
   it('reports bounded endpoint and route details when every node-delay probe fails', async () => {
     const onFailure = vi.fn();
     const fetcher = vi.fn(async () => new Response(null, { status: 504 }));
@@ -1074,6 +1086,45 @@ describe('createMihomoApiClient', () => {
 
     await expect(api.selectBestUsableNode({ avoidNode: 'broken-node' })).resolves.toBe('fast-node');
     expect(selected).toBe('fast-node');
+  });
+
+  it('does not fall back to an avoided Japan node when health recovery forbids ping-pong', async () => {
+    let selected = '日本 春日野 悠';
+    const nodeNames = ['日本 春日野 悠', '日本 春日野 穹'];
+    const delays: Record<string, number> = {
+      '日本 春日野 悠': 180,
+      '日本 春日野 穹': 190
+    };
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith('/proxies')) {
+        return Response.json({
+          proxies: {
+            Main: {
+              type: 'Selector',
+              now: selected,
+              all: nodeNames
+            },
+            ...Object.fromEntries(nodeNames.map((name) => [name, {}]))
+          }
+        });
+      }
+      if (path.includes('/delay')) {
+        const name = decodeURIComponent(path.match(/\/proxies\/([^/]+)\/delay/)?.[1] ?? '');
+        return Response.json({ delay: delays[name] ?? 2000 });
+      }
+      selected = JSON.parse(String(init?.body ?? '{}')).name ?? selected;
+      return new Response(null, { status: 204 });
+    });
+    const api = createMihomoApiClient({ secret: 'secret', fetcher });
+
+    await expect(
+      api.selectBestUsableNodeForStrategy('auto', {
+        avoidNodes: ['日本 春日野 悠', '日本 春日野 穹'],
+        allowAvoidFallback: false
+      })
+    ).resolves.toBeUndefined();
+    expect(selected).toBe('日本 春日野 悠');
   });
 
   it('prefers a usable Japan node over a faster non-Japan node', async () => {
