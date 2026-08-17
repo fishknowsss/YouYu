@@ -499,16 +499,36 @@ input:disabled, select:disabled, textarea:disabled { background: #eef1f6; color:
 input::placeholder { color: #98a2b7; }
 select.compact { width: auto; min-width: 132px; }
 .users-table { min-width: 960px; }
-.users-table col.col-name { width: 14%; }
-.users-table col.col-subscription { width: 12%; }
-.users-table col.col-version { width: 10%; }
-.users-table col.col-devices { width: 7%; }
-.users-table col.col-upload { width: 10%; }
-.users-table col.col-download { width: 10%; }
-.users-table col.col-total { width: 11%; }
-.users-table col.col-anomalies { width: 7%; }
-.users-table col.col-seen { width: 13%; }
+.users-table col.col-select { width: 36px; }
+.users-table col.col-name { width: 13%; }
+.users-table col.col-subscription { width: 11%; }
+.users-table col.col-version { width: 9%; }
+.users-table col.col-notice { width: 8%; }
+.users-table col.col-devices { width: 6%; }
+.users-table col.col-upload { width: 9%; }
+.users-table col.col-download { width: 9%; }
+.users-table col.col-total { width: 10%; }
+.users-table col.col-anomalies { width: 6%; }
+.users-table col.col-seen { width: 12%; }
 .users-table col.col-actions { width: 6%; }
+.users-table .select-cell { width: 36px; text-align: center; }
+.users-table .select-cell input { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: var(--purple); }
+.users-selection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 4px 10px;
+}
+.users-selection span { color: var(--ink-soft); font-size: 13px; font-weight: 650; }
+.users-selection .button { min-width: 72px; }
+.notice-receipts { margin-top: 16px; }
+.receipt-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.receipt-list li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.receipt-list .receipt-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receipt-list .receipt-state { color: var(--ink-soft); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.notice-status { font-variant-numeric: tabular-nums; }
+#broadcastDialog { width: min(520px, calc(100vw - 32px)); }
 .client-version { overflow: hidden; color: var(--ink-soft); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .users-table .button { min-width: 58px; }
 
@@ -1079,10 +1099,10 @@ dialog::backdrop { backdrop-filter: none; }
 @media (max-width: 1100px) {
   .users-table col.col-upload,
   .users-table col.col-download,
-  .users-table th:nth-child(4),
-  .users-table td:nth-child(4),
-  .users-table th:nth-child(5),
-  .users-table td:nth-child(5) { display: none; }
+  .users-table th:nth-child(7),
+  .users-table td:nth-child(7),
+  .users-table th:nth-child(8),
+  .users-table td:nth-child(8) { display: none; }
   .users-table { min-width: 0; }
   .users-table col.col-name { width: 18%; }
   .users-table col.col-subscription { width: 15%; }

@@ -366,6 +366,210 @@ test('targeted notices use server-calculated durations, are idempotent, and reap
   assert.equal((await (await getClientConfig(database, identity, deviceSeed)).json()).notice, undefined);
 });
 
+test('admin notice receipts show which devices have acknowledged the current revision', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const firstSeed = '11111111-1111-4111-8111-111111111111';
+  const secondSeed = '22222222-2222-4222-8222-222222222222';
+  const first = await (
+    await activate(database, { name: 'Alice', deviceSeed: firstSeed, deviceName: 'ALICE-PC' })
+  ).json();
+  const second = await (
+    await activate(database, { name: 'Alice', deviceSeed: secondSeed, deviceName: 'ALICE-LAPTOP' })
+  ).json();
+
+  await requestAdminConfig(
+    database,
+    `/api/admin/users/${encodeURIComponent(first.userId)}/notice`,
+    JSON.stringify({
+      message: '今晚维护',
+      tone: 'warning',
+      durationMinutes: 30,
+      enabled: true,
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    })
+  );
+  assert.equal((await acknowledgeNotice(database, first, firstSeed, 1)).status, 200);
+
+  const response = await requestAdmin(database, `/api/admin/users/${encodeURIComponent(first.userId)}/notice`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.notice.revision, 1);
+  assert.equal(body.notice.enabled, true);
+  assert.equal(body.acknowledgedCount, 1);
+  assert.equal(body.deviceCount, 2);
+  assert.deepEqual(
+    body.acknowledgements
+      .map((entry) => ({
+        deviceId: entry.deviceId,
+        deviceName: entry.deviceName,
+        acknowledged: Boolean(entry.acknowledgedAt)
+      }))
+      .sort((left, right) => left.deviceName.localeCompare(right.deviceName)),
+    [
+      { deviceId: second.deviceId, deviceName: 'ALICE-LAPTOP', acknowledged: false },
+      { deviceId: first.deviceId, deviceName: 'ALICE-PC', acknowledged: true }
+    ]
+  );
+  assert.match(
+    body.acknowledgements.find((entry) => entry.deviceId === first.deviceId).acknowledgedAt,
+    /^\d{4}-\d{2}-\d{2}T/
+  );
+
+  const listed = (await (await requestAdmin(database, '/api/admin/users')).json()).users;
+  assert.equal(listed.length, 1);
+  assert.deepEqual(
+    {
+      revision: listed[0].notice.revision,
+      enabled: listed[0].notice.enabled,
+      tone: listed[0].notice.tone,
+      acknowledgedCount: listed[0].notice.acknowledgedCount,
+      deviceCount: listed[0].notice.deviceCount
+    },
+    {
+      revision: 1,
+      enabled: true,
+      tone: 'warning',
+      acknowledgedCount: 1,
+      deviceCount: 2
+    }
+  );
+});
+
+test('admin notice broadcast fans out the same notice to selected users and is idempotent', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const aliceSeed = '11111111-1111-4111-8111-111111111111';
+  const bobSeed = '22222222-2222-4222-8222-222222222222';
+  const carolSeed = '33333333-3333-4333-8333-333333333333';
+  const alice = await (await activate(database, { name: 'Alice', deviceSeed: aliceSeed })).json();
+  const bob = await (await activate(database, { name: 'Bob', deviceSeed: bobSeed })).json();
+  const carol = await (await activate(database, { name: 'Carol', deviceSeed: carolSeed })).json();
+  const requestId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const createdAt = Date.now();
+
+  const created = await requestAdminConfig(
+    database,
+    '/api/admin/notices/broadcast',
+    JSON.stringify({
+      userIds: [alice.userId, bob.userId, alice.userId],
+      message: '今晚维护',
+      tone: 'warning',
+      durationMinutes: 20,
+      requestId
+    })
+  );
+  assert.equal(created.status, 200);
+  const createdBody = await created.json();
+  assert.equal(createdBody.ok, true);
+  assert.equal(createdBody.alreadyApplied, false);
+  assert.equal(createdBody.requestId, requestId);
+  assert.equal(createdBody.sent, 2);
+  assert.equal(createdBody.failed.length, 0);
+  assert.equal(createdBody.notices.length, 2);
+  assert.equal(new Set(createdBody.notices.map((entry) => entry.userId)).size, 2);
+  for (const entry of createdBody.notices) {
+    assert.equal(entry.notice.revision, 1);
+    assert.equal(entry.notice.enabled, true);
+    assert.equal(entry.notice.message, '今晚维护');
+    assert.equal(entry.notice.tone, 'warning');
+    assert.equal(entry.notice.durationMinutes, 20);
+    assert.ok(Date.parse(entry.notice.expiresAt) >= createdAt + 20 * 60 * 1000 - 1000);
+  }
+
+  assert.equal((await (await getClientConfig(database, alice, aliceSeed)).json()).notice.message, '今晚维护');
+  assert.equal((await (await getClientConfig(database, bob, bobSeed)).json()).notice.message, '今晚维护');
+  assert.equal((await (await getClientConfig(database, carol, carolSeed)).json()).notice, undefined);
+
+  const replay = await requestAdminConfig(
+    database,
+    '/api/admin/notices/broadcast',
+    JSON.stringify({
+      userIds: [bob.userId, alice.userId],
+      message: '今晚维护',
+      tone: 'warning',
+      durationMinutes: 20,
+      requestId
+    })
+  );
+  assert.equal(replay.status, 200);
+  const replayBody = await replay.json();
+  assert.equal(replayBody.alreadyApplied, true);
+  assert.equal(replayBody.sent, 2);
+  assert.equal((await (await getClientConfig(database, alice, aliceSeed)).json()).notice.revision, 1);
+
+  const conflicting = await requestAdminConfig(
+    database,
+    '/api/admin/notices/broadcast',
+    JSON.stringify({
+      userIds: [alice.userId, bob.userId],
+      message: '改期了',
+      tone: 'info',
+      durationMinutes: 20,
+      requestId
+    })
+  );
+  await assertWorkerError(conflicting, 409, 'notice request conflict');
+
+  const unknown = await requestAdminConfig(
+    database,
+    '/api/admin/notices/broadcast',
+    JSON.stringify({
+      userIds: [alice.userId, 'ffffffff-ffff-4fff-8fff-ffffffffffff'],
+      message: '今晚维护',
+      tone: 'warning',
+      durationMinutes: 20,
+      requestId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    })
+  );
+  await assertWorkerError(unknown, 400, 'unknown user');
+
+  const empty = await requestAdminConfig(
+    database,
+    '/api/admin/notices/broadcast',
+    JSON.stringify({
+      userIds: [],
+      message: '今晚维护',
+      tone: 'warning',
+      durationMinutes: 20,
+      requestId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    })
+  );
+  await assertWorkerError(empty, 400, 'invalid notice users');
+});
+
+test('admin notice broadcast can stop selected users notices', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const aliceSeed = '11111111-1111-4111-8111-111111111111';
+  const bobSeed = '22222222-2222-4222-8222-222222222222';
+  const alice = await (await activate(database, { name: 'Alice', deviceSeed: aliceSeed })).json();
+  const bob = await (await activate(database, { name: 'Bob', deviceSeed: bobSeed })).json();
+  await requestAdminConfig(
+    database,
+    '/api/admin/notices/broadcast',
+    JSON.stringify({
+      userIds: [alice.userId, bob.userId],
+      message: '今晚维护',
+      tone: 'info',
+      durationMinutes: 10,
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    })
+  );
+
+  const reset = await requestAdminConfig(
+    database,
+    '/api/admin/notices/reset',
+    JSON.stringify({ userIds: [alice.userId] })
+  );
+  assert.equal(reset.status, 200);
+  const resetBody = await reset.json();
+  assert.equal(resetBody.ok, true);
+  assert.equal(resetBody.cleared, 1);
+  assert.equal((await (await getClientConfig(database, alice, aliceSeed)).json()).notice, undefined);
+  assert.equal((await (await getClientConfig(database, bob, bobSeed)).json()).notice.message, '今晚维护');
+});
+
 test('a stable device key reuses one physical device when the signing seed is recreated', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
@@ -1717,6 +1921,12 @@ test('admin page exposes the fixed-viewport management workspace without removed
   assert.match(page, /id="decreaseUserNoticeDuration" type="button"/);
   assert.match(page, /id="increaseUserNoticeDuration" type="button"/);
   assert.match(page, /保存通知/);
+  assert.match(page, /id="broadcastNotice"/);
+  assert.match(page, /id="resetSelectedNotices"/);
+  assert.match(page, /id="broadcastDialog"/);
+  assert.match(page, /id="selectVisibleUsers"/);
+  assert.match(page, /id="noticeReceiptList"/);
+  assert.match(page, /<th>通知<\/th>/);
   assert.doesNotMatch(page, /userNoticeExpiresAt/);
   assert.doesNotMatch(page, /id="activeUserId"/);
   assert.doesNotMatch(page, /id="userNoticeEnabled"/);
@@ -1936,6 +2146,80 @@ test('admin page edits a user profile and plain-text targeted notice end to end'
   );
 });
 
+test('admin page broadcasts a notice to selected users and shows read receipts', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const aliceSeed = '11111111-1111-4111-8111-111111111111';
+  const bobSeed = '22222222-2222-4222-8222-222222222222';
+  const alice = await (
+    await activate(database, { name: 'Alice', deviceSeed: aliceSeed, deviceName: 'ALICE-PC' })
+  ).json();
+  const bob = await (await activate(database, { name: 'Bob', deviceSeed: bobSeed, deviceName: 'BOB-PC' })).json();
+  const env = { DB: database, REGISTRATION_PASSPHRASE: registrationPassphrase, ADMIN_TOKEN: adminToken };
+  const page = await (await worker.fetch(new Request('https://worker.example/admin'), env)).text();
+  const script = await (await worker.fetch(new Request('https://worker.example/admin/assets/app.js'), env)).text();
+  const dom = new JSDOM(page, { runScripts: 'outside-only', url: 'https://worker.example/admin' });
+  context.after(() => dom.window.close());
+  const document = dom.window.document;
+  dom.window.fetch = async (input, init = {}) => {
+    const url = new URL(String(input), 'https://worker.example');
+    return worker.fetch(
+      new Request(url, {
+        method: init.method,
+        headers: init.headers,
+        body: typeof init.body === 'string' ? init.body : undefined
+      }),
+      env
+    );
+  };
+  dom.window.eval(script);
+  document.getElementById('token').value = adminToken;
+  document
+    .getElementById('authPanel')
+    .dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(() => document.getElementById('adminWorkspace').hidden === false);
+
+  document.querySelector('[data-view="users"]').click();
+  await waitFor(() => document.querySelectorAll('#users tr[data-user-id]').length === 2);
+  assert.equal(document.getElementById('broadcastNotice').disabled, true);
+
+  document.getElementById('selectFilteredUsers').click();
+  await waitFor(() => document.getElementById('userSelectionCount').textContent === '已选 2 人');
+  assert.equal(document.getElementById('broadcastNotice').disabled, false);
+
+  document.getElementById('broadcastNotice').click();
+  await waitFor(
+    () => document.getElementById('broadcastDialog').open || document.getElementById('broadcastDialog').hasAttribute('open')
+  );
+  assert.equal(document.getElementById('broadcastTargetSummary').textContent, '发给 2 人');
+  document.getElementById('broadcastNoticeMessage').value = '今晚维护';
+  document.getElementById('broadcastNoticeTone').value = 'warning';
+  document.getElementById('broadcastNoticeDuration').value = '10';
+  document.getElementById('confirmBroadcastNotice').click();
+  await waitFor(
+    () =>
+      database.queryAll('SELECT COUNT(*) AS count FROM user_notices WHERE enabled = 1 AND message = ?', '今晚维护')[0]
+        .count === 2
+  );
+  await waitFor(() => [...document.querySelectorAll('#users .notice-status')].every((cell) => cell.textContent === '0/1'));
+
+  const aliceRow = [...document.querySelectorAll('#users tr[data-user-id]')].find(
+    (row) => row.querySelector('.name-cell')?.textContent === 'Alice'
+  );
+  aliceRow.querySelector('button').click();
+  await waitFor(() => document.getElementById('drawerContent').hidden === false);
+  document.querySelector('[data-drawer-tab="profile"]').click();
+  await waitFor(() => document.getElementById('noticeReceiptSummary').textContent === '0/1');
+  assert.match(document.getElementById('noticeReceiptList').textContent, /ALICE-PC/);
+  assert.match(document.getElementById('noticeReceiptList').textContent, /未读/);
+
+  assert.equal((await acknowledgeNotice(database, alice, aliceSeed, 1)).status, 200);
+  aliceRow.querySelector('button').click();
+  await waitFor(() => document.getElementById('noticeReceiptSummary').textContent === '1/1');
+  assert.doesNotMatch(document.getElementById('noticeReceiptList').textContent, /未读/);
+  assert.equal(database.queryAll('SELECT message FROM user_notices WHERE user_id = ?', bob.userId)[0].message, '今晚维护');
+});
+
 test('admin writes reject non-object JSON and bodies larger than 64 KiB', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
@@ -1945,7 +2229,9 @@ test('admin writes reject non-object JSON and bodies larger than 64 KiB', async 
     '/api/admin/config',
     '/api/admin/traffic-limit',
     '/api/admin/users/user-1/config',
-    '/api/admin/users/user-1/config-permission'
+    '/api/admin/users/user-1/config-permission',
+    '/api/admin/notices/broadcast',
+    '/api/admin/notices/reset'
   ]) {
     const nonObject = await requestAdminConfig(database, path, '[]');
     assert.equal(nonObject.status, 400, path);

@@ -216,13 +216,21 @@ export function adminPage(): string {
                   <select class="compact" id="userSortDirection" aria-label="排序方向"><option value="desc">降序</option><option value="asc">升序</option></select>
                 </div>
               </div>
+              <div class="users-selection">
+                <span id="userSelectionCount">已选 0 人</span>
+                <button class="button secondary" id="selectFilteredUsers" type="button">全选筛选</button>
+                <button class="button" id="broadcastNotice" type="button" disabled>发通知</button>
+                <button class="button secondary" id="resetSelectedNotices" type="button" disabled>停止</button>
+              </div>
               <div class="table-wrap">
                 <table class="users-table">
-                  <colgroup><col class="col-name" /><col class="col-subscription" /><col class="col-version" /><col class="col-devices" /><col class="col-upload" /><col class="col-download" /><col class="col-total" /><col class="col-anomalies" /><col class="col-seen" /><col class="col-actions" /></colgroup>
+                  <colgroup><col class="col-select" /><col class="col-name" /><col class="col-subscription" /><col class="col-version" /><col class="col-notice" /><col class="col-devices" /><col class="col-upload" /><col class="col-download" /><col class="col-total" /><col class="col-anomalies" /><col class="col-seen" /><col class="col-actions" /></colgroup>
                   <thead><tr>
+                    <th class="select-cell"><input id="selectVisibleUsers" type="checkbox" aria-label="选择本页" /></th>
                     <th><button class="sort-button" type="button" data-user-sort="name">姓名<span class="sort-mark" aria-hidden="true">↕</span></button></th>
                     <th><button class="sort-button" type="button" data-user-sort="subscriptionState">订阅<span class="sort-mark" aria-hidden="true">↕</span></button></th>
                     <th>客户端</th>
+                    <th>通知</th>
                     <th class="num"><button class="sort-button" type="button" data-user-sort="devices">设备<span class="sort-mark" aria-hidden="true">↕</span></button></th>
                     <th class="num"><button class="sort-button" type="button" data-user-sort="uploadBytes">上传<span class="sort-mark" aria-hidden="true">↕</span></button></th>
                     <th class="num"><button class="sort-button" type="button" data-user-sort="downloadBytes">下载<span class="sort-mark" aria-hidden="true">↕</span></button></th>
@@ -312,6 +320,10 @@ export function adminPage(): string {
                     </div>
                     <div class="drawer-actions"><button class="button" id="saveUserNotice" type="submit">${icon('save', 'icon-sm')}保存通知</button><button class="button secondary" id="clearUserNotice" type="button">${icon('reset', 'icon-sm')}停止通知</button></div>
                   </form>
+                  <div class="notice-receipts" id="noticeReceipts">
+                    <div class="section-title"><h3>已读</h3><span id="noticeReceiptSummary">0/0</span></div>
+                    <ul class="receipt-list" id="noticeReceiptList"></ul>
+                  </div>
                 </section>
                 <section class="drawer-section" id="drawerTrafficSection" role="tabpanel" aria-labelledby="drawerTabTraffic" data-drawer-section="traffic" hidden>
                   <div class="table-wrap drawer-traffic-wrap"><table class="traffic-table"><colgroup><col style="width:22%" /><col style="width:30%" /><col style="width:16%" /><col style="width:16%" /><col style="width:16%" /></colgroup><thead><tr><th>日期</th><th>设备</th><th class="num">上传</th><th class="num">下载</th><th class="num">总量</th></tr></thead><tbody id="details"></tbody></table></div>
@@ -420,6 +432,27 @@ export function adminPage(): string {
       <p id="confirmText"></p>
       <label class="field hidden" id="confirmPhraseWrap" for="confirmPhrase">确认内容<input id="confirmPhrase" autocomplete="off" /></label>
       <div class="button-row"><button class="button secondary" type="submit" value="cancel">取消</button><button class="button" id="confirmAccept" type="submit" value="confirm">确认</button></div>
+    </form>
+  </dialog>
+  <dialog id="broadcastDialog" aria-labelledby="broadcastDialogTitle">
+    <form class="dialog-form notice-editor" id="broadcastNoticeForm">
+      <div class="section-title"><h3 id="broadcastDialogTitle">发通知</h3></div>
+      <p id="broadcastTargetSummary">发给 0 人</p>
+      <div class="form-grid">
+        <label class="field" for="broadcastNoticeTone">级别<select id="broadcastNoticeTone"><option value="info">提示</option><option value="warning">警告</option></select></label>
+        <div class="field notice-duration-field">
+          <span id="broadcastNoticeDurationLabel">持续时间</span>
+          <div class="duration-stepper" role="group" aria-labelledby="broadcastNoticeDurationLabel">
+            <button class="stepper-button" id="decreaseBroadcastNoticeDuration" type="button" aria-label="减少持续时间">−</button>
+            <input id="broadcastNoticeDuration" type="number" min="5" max="10080" step="5" inputmode="numeric" value="10" aria-describedby="broadcastNoticeError" />
+            <span class="duration-unit" aria-hidden="true">分钟</span>
+            <button class="stepper-button" id="increaseBroadcastNoticeDuration" type="button" aria-label="增加持续时间">+</button>
+          </div>
+        </div>
+        <label class="field wide" for="broadcastNoticeMessage">内容<textarea id="broadcastNoticeMessage" maxlength="500" rows="4" aria-describedby="broadcastNoticeError"></textarea></label>
+        <div class="field-error wide" id="broadcastNoticeError" role="alert"></div>
+      </div>
+      <div class="button-row"><button class="button secondary" id="cancelBroadcastNotice" type="button">取消</button><button class="button" id="confirmBroadcastNotice" type="submit">发送</button></div>
     </form>
   </dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

@@ -92,6 +92,11 @@ seen device row that has a non-empty version, populated by activation, authentic
 traffic reporting. They are inventory metadata, not a live-online signal. New desktop builds label internal and
 no-pet channels as `-IN` and `-NO`; older clients can legitimately report an unlabelled version string.
 
+Each user-list item also includes `notice`. It is `null` when the user has no notice row; otherwise it contains the
+current `revision`, `enabled`, `tone`, `expiresAt`, `acknowledgedCount`, and `deviceCount`. `acknowledgedCount` is the
+number of device rows that have acknowledged the current revision. The admin page uses this for the compact `已读`
+column (`1/2` or `—`).
+
 ```http
 GET /api/admin/config
 POST /api/admin/config
@@ -203,17 +208,32 @@ updates its local display name only when `profile.userId` still matches its curr
 whose server-side user was merged, the response keeps the request's verified alias ID in `profile.userId` while using
 the canonical target name, so existing installations can accept the corrected display name without changing IDs.
 
-The same admin view can manage one revisioned, plain-text notice per user:
+The same admin view can manage one revisioned, plain-text notice per user, or fan the same notice out to selected
+users:
 
 ```http
 GET /api/admin/users/<userId>/notice
 POST /api/admin/users/<userId>/notice
 POST /api/admin/users/<userId>/notice/reset
-Authorization: Bearer <ADMIN_TOKEN>
+POST /api/admin/notices/broadcast
+POST /api/admin/notices/reset
+Authorization: Bearer ***
 Content-Type: application/json
 
 { "enabled": true, "message": "今晚维护", "tone": "warning", "durationMinutes": 10, "requestId": "<uuid>" }
 ```
+
+`GET /api/admin/users/<userId>/notice` also returns `acknowledgements`, `acknowledgedCount`, and `deviceCount`. Each
+acknowledgement row is a device with `deviceId`, `deviceName`, `lastSeenAt`, and `acknowledgedAt` (`null` when unread).
+
+`POST /api/admin/notices/broadcast` accepts `userIds` (1–200 unique UUIDs), `message`, `tone`, `durationMinutes`, and
+`requestId`. It writes the same enabled notice to each selected user through the existing per-user notice slot, so
+current 1.7.x clients receive it without an app update. Duplicate IDs are ignored. An unknown, merged, or inactive
+user rejects the whole request. The batch `requestId` is turned into a stable per-user request ID, so retries with the
+same payload are idempotent and a changed payload conflicts. The response reports `sent`, `failed`, `alreadyApplied`,
+and the resulting per-user notices.
+
+`POST /api/admin/notices/reset` accepts `{ "userIds": [...] }` and stops delivery for those users.
 
 Messages are limited to 500 characters and are data only: no HTML, link, command, or rich-content field is accepted.
 Only `info` and `warning` tones are supported. `durationMinutes` defaults to 10, must be an integer multiple of 5

@@ -60,7 +60,9 @@ export const ADMIN_SCRIPT = String.raw`
     mergePreviewState: null,
     mergeRequestId: '',
     profileRequestId: '',
-    noticeRequestId: ''
+    noticeRequestId: '',
+    broadcastRequestId: '',
+    selectedUserIds: new Set()
   };
 
   const adminShell = document.getElementById('adminShell');
@@ -108,6 +110,20 @@ export const ADMIN_SCRIPT = String.raw`
   const userNoticeMessage = document.getElementById('userNoticeMessage');
   const userNoticeDuration = document.getElementById('userNoticeDuration');
   const userNoticeError = document.getElementById('userNoticeError');
+  const userSelectionCount = document.getElementById('userSelectionCount');
+  const selectVisibleUsers = document.getElementById('selectVisibleUsers');
+  const selectFilteredUsers = document.getElementById('selectFilteredUsers');
+  const broadcastNoticeButton = document.getElementById('broadcastNotice');
+  const resetSelectedNoticesButton = document.getElementById('resetSelectedNotices');
+  const broadcastDialog = document.getElementById('broadcastDialog');
+  const broadcastNoticeForm = document.getElementById('broadcastNoticeForm');
+  const broadcastTargetSummary = document.getElementById('broadcastTargetSummary');
+  const broadcastNoticeTone = document.getElementById('broadcastNoticeTone');
+  const broadcastNoticeMessage = document.getElementById('broadcastNoticeMessage');
+  const broadcastNoticeDuration = document.getElementById('broadcastNoticeDuration');
+  const broadcastNoticeError = document.getElementById('broadcastNoticeError');
+  const noticeReceiptSummary = document.getElementById('noticeReceiptSummary');
+  const noticeReceiptList = document.getElementById('noticeReceiptList');
   const mergeTargetEl = document.getElementById('mergeTarget');
   const mergePreviewEl = document.getElementById('mergePreview');
   const mergePreviewSummary = document.getElementById('mergePreviewSummary');
@@ -149,6 +165,10 @@ export const ADMIN_SCRIPT = String.raw`
       return;
     }
     if (event.key !== 'Escape') return;
+    if (broadcastDialog && (broadcastDialog.open || broadcastDialog.hasAttribute('open'))) {
+      closeBroadcastDialog();
+      return;
+    }
     if (!adminWorkspace.hidden && !authPanel.hidden) setAuthPanelOpen(false);
     else if (userDrawer.classList.contains('is-open')) closeUserContext();
   });
@@ -215,6 +235,21 @@ export const ADMIN_SCRIPT = String.raw`
   document.getElementById('increaseUserNoticeDuration').addEventListener('click', () => adjustUserNoticeDuration(USER_NOTICE_DURATION_STEP_MINUTES));
   userNoticeTone.addEventListener('change', () => { state.noticeRequestId = ''; });
   [userNoticeMessage, userNoticeDuration].forEach((element) => element.addEventListener('input', () => { state.noticeRequestId = ''; }));
+  selectVisibleUsers.addEventListener('change', () => {
+    toggleVisibleUserSelection(selectVisibleUsers.checked);
+  });
+  selectFilteredUsers.addEventListener('click', selectAllFilteredUsers);
+  broadcastNoticeButton.addEventListener('click', openBroadcastDialog);
+  resetSelectedNoticesButton.addEventListener('click', () => runAction(resetSelectedNoticesButton, '停用中', resetSelectedNotices));
+  broadcastNoticeForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    runAction(document.getElementById('confirmBroadcastNotice'), '发送中', submitBroadcastNotice);
+  });
+  document.getElementById('cancelBroadcastNotice').addEventListener('click', closeBroadcastDialog);
+  document.getElementById('decreaseBroadcastNoticeDuration').addEventListener('click', () => adjustBroadcastNoticeDuration(-USER_NOTICE_DURATION_STEP_MINUTES));
+  document.getElementById('increaseBroadcastNoticeDuration').addEventListener('click', () => adjustBroadcastNoticeDuration(USER_NOTICE_DURATION_STEP_MINUTES));
+  broadcastNoticeTone.addEventListener('change', () => { state.broadcastRequestId = ''; });
+  [broadcastNoticeMessage, broadcastNoticeDuration].forEach((element) => element.addEventListener('input', () => { state.broadcastRequestId = ''; }));
   userModeEl.addEventListener('change', updateUserModeState);
   userCanEditManagedConfigEl.addEventListener('change', () =>
     runAction(null, '保存中', saveUserManagedConfigPermission)
@@ -1014,8 +1049,9 @@ export const ADMIN_SCRIPT = String.raw`
     const visible = filtered.slice(start, start + state.userPageSize);
     usersBody.replaceChildren();
     updateUserSortHeaders();
+    pruneUserSelection();
     if (!visible.length) {
-      appendEmptyTableRow(usersBody, 10, '暂无符合条件的用户');
+      appendEmptyTableRow(usersBody, 12, '暂无符合条件的用户');
     } else {
       visible.forEach((user) => {
         const row = document.createElement('tr');
@@ -1026,6 +1062,17 @@ export const ADMIN_SCRIPT = String.raw`
         row.tabIndex = 0;
         row.setAttribute('aria-label', displayName + '，查看详情');
         if (user.id === state.activeUserId) row.classList.add('is-active');
+        const selectCell = appendTableCell(row, undefined, 'select-cell');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.setAttribute('aria-label', '选择' + displayName);
+        checkbox.checked = Boolean(user.id) && state.selectedUserIds.has(user.id);
+        checkbox.addEventListener('click', (event) => event.stopPropagation());
+        checkbox.addEventListener('change', (event) => {
+          event.stopPropagation();
+          setUserSelected(user.id, checkbox.checked);
+        });
+        selectCell.appendChild(checkbox);
         appendTableCell(row, displayName, 'name-cell', displayName);
         appendTableCell(row).appendChild(createSubscriptionBadge(user.subscriptionState));
         appendTableCell(
@@ -1034,6 +1081,7 @@ export const ADMIN_SCRIPT = String.raw`
           'client-version',
           user.appVersionReportedAt ? '最近版本上报：' + formatTime(user.appVersionReportedAt) : '尚未收到客户端版本上报'
         );
+        appendTableCell(row, formatNoticeStatus(user), 'notice-status');
         appendTableCell(row, logicalDevices, 'num', '逻辑设备 ' + logicalDevices + '，原始记录 ' + deviceRecords);
         appendTableCell(row, formatBytes(nonNegativeNumber(user.uploadBytes)), 'num');
         appendTableCell(row, formatBytes(nonNegativeNumber(user.downloadBytes)), 'num');
@@ -1061,6 +1109,7 @@ export const ADMIN_SCRIPT = String.raw`
     userPageSummary.textContent = filtered.length + ' 条' + (filtered.length ? ' · ' + state.userPage + '/' + totalPages + ' 页' : '');
     renderPagination(userPagination, state.userPage, totalPages, (page) => { state.userPage = page; renderUsers(); });
     revealSelectedUser(state.activeUserId);
+    updateUserSelectionUi(visible);
   }
 
   function updateUserSortHeaders() {
@@ -1094,7 +1143,7 @@ export const ADMIN_SCRIPT = String.raw`
     renderUserProfile(user);
     renderUserConfig(name, responses[0]);
     renderUserTraffic(name, state.activeUserTrafficRows);
-    renderUserManagement(responses[2].user || user, responses[3].notice || null);
+    renderUserManagement(responses[2].user || user, responses[3]);
     drawerPlaceholder.hidden = true;
     drawerContent.hidden = false;
     setDrawerTab('config');
@@ -1212,12 +1261,13 @@ export const ADMIN_SCRIPT = String.raw`
     setUserSubscriptionState(effective, override);
   }
 
-  function renderUserManagement(profile, notice) {
+  function renderUserManagement(profile, noticeData) {
     state.profileRequestId = '';
     state.noticeRequestId = '';
     userProfileNameEl.value = profile && profile.name ? String(profile.name) : state.activeUserName;
     clearFieldError(userProfileNameEl, userProfileNameError);
-    renderUserNotice(notice);
+    renderUserNotice(noticeData && noticeData.notice);
+    renderNoticeReceipts(noticeData);
   }
 
   function renderUserNotice(notice) {
@@ -1244,6 +1294,177 @@ export const ADMIN_SCRIPT = String.raw`
     userNoticeDuration.value = String(next);
     clearFieldError(userNoticeDuration, userNoticeError);
     state.noticeRequestId = '';
+  }
+
+  function renderNoticeReceipts(data) {
+    const acknowledgements = data && Array.isArray(data.acknowledgements) ? data.acknowledgements : [];
+    const acknowledgedCount = Number(data && data.acknowledgedCount);
+    const deviceCount = Number(data && data.deviceCount);
+    noticeReceiptSummary.textContent =
+      (Number.isFinite(acknowledgedCount) ? acknowledgedCount : acknowledgements.filter((entry) => entry.acknowledgedAt).length) +
+      '/' +
+      (Number.isFinite(deviceCount) ? deviceCount : acknowledgements.length);
+    noticeReceiptList.replaceChildren();
+    acknowledgements.forEach((entry) => {
+      const item = document.createElement('li');
+      item.appendChild(createTextElement('span', 'receipt-name', entry.deviceName || '未命名设备'));
+      item.appendChild(
+        createTextElement('span', 'receipt-state', entry.acknowledgedAt ? formatShortTime(entry.acknowledgedAt) : '未读')
+      );
+      noticeReceiptList.appendChild(item);
+    });
+  }
+
+  function formatNoticeStatus(user) {
+    const notice = user && user.notice;
+    if (!notice || notice.enabled === false) return '—';
+    const expires = dateValue(notice.expiresAt);
+    if (!Number.isFinite(expires) || expires <= Date.now()) return '—';
+    return (nonNegativeNumber(notice.acknowledgedCount) || 0) + '/' + (nonNegativeNumber(notice.deviceCount) || 0);
+  }
+
+  function pruneUserSelection() {
+    const known = new Set(state.users.map((user) => user.id).filter(Boolean));
+    Array.from(state.selectedUserIds).forEach((userId) => {
+      if (!known.has(userId)) state.selectedUserIds.delete(userId);
+    });
+  }
+
+  function getSelectedUserIds() {
+    return state.users.filter((user) => user.id && state.selectedUserIds.has(user.id)).map((user) => user.id);
+  }
+
+  function setUserSelected(userId, selected) {
+    if (!userId) return;
+    if (selected) state.selectedUserIds.add(userId);
+    else state.selectedUserIds.delete(userId);
+    renderUsers();
+  }
+
+  function toggleVisibleUserSelection(selected) {
+    getFilteredSortedUsers()
+      .slice((state.userPage - 1) * state.userPageSize, state.userPage * state.userPageSize)
+      .forEach((user) => {
+        if (!user.id) return;
+        if (selected) state.selectedUserIds.add(user.id);
+        else state.selectedUserIds.delete(user.id);
+      });
+    renderUsers();
+  }
+
+  function selectAllFilteredUsers() {
+    getFilteredSortedUsers().forEach((user) => {
+      if (user.id) state.selectedUserIds.add(user.id);
+    });
+    renderUsers();
+  }
+
+  function updateUserSelectionUi(visible) {
+    const selectedCount = getSelectedUserIds().length;
+    userSelectionCount.textContent = '已选 ' + selectedCount + ' 人';
+    broadcastNoticeButton.disabled = selectedCount === 0;
+    resetSelectedNoticesButton.disabled = selectedCount === 0;
+    const visibleIds = visible.filter((user) => user.id);
+    const selectedVisible = visibleIds.filter((user) => state.selectedUserIds.has(user.id)).length;
+    selectVisibleUsers.checked = visibleIds.length > 0 && selectedVisible === visibleIds.length;
+    selectVisibleUsers.indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
+  }
+
+  function openBroadcastDialog() {
+    const count = getSelectedUserIds().length;
+    if (!count) return;
+    broadcastTargetSummary.textContent = '发给 ' + count + ' 人';
+    broadcastNoticeTone.value = 'info';
+    broadcastNoticeDuration.value = String(USER_NOTICE_DEFAULT_DURATION_MINUTES);
+    broadcastNoticeMessage.value = '';
+    clearFieldError(broadcastNoticeMessage, broadcastNoticeError);
+    broadcastNoticeDuration.removeAttribute('aria-invalid');
+    state.broadcastRequestId = '';
+    if (typeof broadcastDialog.showModal === 'function') broadcastDialog.showModal();
+    else broadcastDialog.setAttribute('open', '');
+  }
+
+  function closeBroadcastDialog() {
+    if (typeof broadcastDialog.close === 'function' && broadcastDialog.open) broadcastDialog.close();
+    else broadcastDialog.removeAttribute('open');
+  }
+
+  function adjustBroadcastNoticeDuration(delta) {
+    const current = parseUserNoticeDuration(broadcastNoticeDuration.value);
+    const base = current === null ? USER_NOTICE_DEFAULT_DURATION_MINUTES : current;
+    const next = Math.min(USER_NOTICE_MAX_DURATION_MINUTES, Math.max(USER_NOTICE_MIN_DURATION_MINUTES, base + delta));
+    broadcastNoticeDuration.value = String(next);
+    clearFieldError(broadcastNoticeDuration, broadcastNoticeError);
+    state.broadcastRequestId = '';
+  }
+
+  async function submitBroadcastNotice() {
+    const userIds = getSelectedUserIds();
+    if (!userIds.length) return;
+    const message = broadcastNoticeMessage.value.trim();
+    const durationMinutes = parseUserNoticeDuration(broadcastNoticeDuration.value);
+    clearFieldError(broadcastNoticeMessage, broadcastNoticeError);
+    broadcastNoticeDuration.removeAttribute('aria-invalid');
+    if (!message || Array.from(message).length > 500 || hasControlCharacters(message)) {
+      setFieldError(broadcastNoticeMessage, broadcastNoticeError, '请输入 1 至 500 个有效字符');
+      return;
+    }
+    if (durationMinutes === null) {
+      setFieldError(broadcastNoticeDuration, broadcastNoticeError, '持续时间请使用 5 分钟的整数倍（5 分钟至 7 天）');
+      return;
+    }
+    const requestId = state.broadcastRequestId || createRequestId();
+    state.broadcastRequestId = requestId;
+    const data = await api('/api/admin/notices/broadcast', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        userIds: userIds,
+        message: message,
+        tone: broadcastNoticeTone.value === 'warning' ? 'warning' : 'info',
+        durationMinutes: durationMinutes,
+        requestId: requestId
+      })
+    });
+    closeBroadcastDialog();
+    state.broadcastRequestId = '';
+    await loadUsers();
+    renderUsers();
+    if (state.activeUserId && userIds.includes(state.activeUserId)) {
+      const noticeData = await api('/api/admin/users/' + encodeURIComponent(state.activeUserId) + '/notice');
+      renderUserNotice(noticeData.notice || null);
+      renderNoticeReceipts(noticeData);
+    }
+    setStatus('已发给 ' + data.sent + ' 人');
+    showToast('已发给 ' + data.sent + ' 人');
+  }
+
+  async function resetSelectedNotices() {
+    const userIds = getSelectedUserIds();
+    if (!userIds.length) return;
+    const accepted = await askConfirm('停止选中 ' + userIds.length + ' 人的通知？', '停止');
+    if (!accepted) return;
+    const data = await api('/api/admin/notices/reset', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ userIds: userIds })
+    });
+    await loadUsers();
+    renderUsers();
+    if (state.activeUserId && userIds.includes(state.activeUserId)) {
+      const noticeData = await api('/api/admin/users/' + encodeURIComponent(state.activeUserId) + '/notice');
+      renderUserNotice(noticeData.notice || null);
+      renderNoticeReceipts(noticeData);
+    }
+    setStatus('已停止 ' + data.cleared + ' 人的通知');
+    showToast('已停止 ' + data.cleared + ' 人的通知');
+  }
+
+  async function refreshActiveUserNotice() {
+    if (!state.activeUserId) return;
+    const noticeData = await api('/api/admin/users/' + encodeURIComponent(state.activeUserId) + '/notice');
+    renderUserNotice(noticeData.notice || null);
+    renderNoticeReceipts(noticeData);
   }
 
   function renderUserTraffic(name, rows) {
@@ -1557,7 +1778,10 @@ export const ADMIN_SCRIPT = String.raw`
     });
     if (!isCurrentUserContext(userId, sequence)) return;
     state.noticeRequestId = '';
-    renderUserNotice(data.notice || null);
+    await loadUsers();
+    renderUsers();
+    if (!isCurrentUserContext(userId, sequence)) return;
+    await refreshActiveUserNotice();
     setStatus('定向通知已保存并重新计时');
     showToast('定向通知已保存并重新计时');
   }
@@ -1569,7 +1793,10 @@ export const ADMIN_SCRIPT = String.raw`
     const data = await api('/api/admin/users/' + encodeURIComponent(userId) + '/notice/reset', { method: 'POST' });
     if (!isCurrentUserContext(userId, sequence)) return;
     state.noticeRequestId = '';
-    renderUserNotice(data.notice || null);
+    await loadUsers();
+    renderUsers();
+    if (!isCurrentUserContext(userId, sequence)) return;
+    await refreshActiveUserNotice();
     setStatus('定向通知已停用');
     showToast('定向通知已停用');
   }
@@ -2346,6 +2573,9 @@ export const ADMIN_SCRIPT = String.raw`
       if (error === 'invalid notice message') return '通知内容无效';
       if (error === 'invalid notice expiry') return '通知到期时间无效';
       if (error === 'invalid notice tone') return '通知级别无效';
+      if (error === 'invalid notice users') return '请选择要发送的用户';
+      if (error === 'too many notice users') return '一次最多发给 200 人';
+      if (error === 'unknown user') return '有用户已不存在，请刷新后重试';
       return '请求内容有误';
     }
     if (status === 404) return '接口不存在';

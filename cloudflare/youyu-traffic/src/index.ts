@@ -93,6 +93,18 @@ type UserNoticeInput = {
   requestId?: unknown;
 };
 
+type UserNoticeBroadcastInput = {
+  userIds?: unknown;
+  message?: unknown;
+  tone?: unknown;
+  durationMinutes?: unknown;
+  requestId?: unknown;
+};
+
+type UserNoticeResetInput = {
+  userIds?: unknown;
+};
+
 type UserNoticeAcknowledgementInput = {
   userId?: unknown;
   deviceId?: unknown;
@@ -258,6 +270,7 @@ const USER_NOTICE_DEFAULT_DURATION_MINUTES = 10;
 const USER_NOTICE_MIN_DURATION_MINUTES = 5;
 const USER_NOTICE_DURATION_STEP_MINUTES = 5;
 const USER_NOTICE_MAX_DURATION_MINUTES = 7 * 24 * 60;
+const USER_NOTICE_BROADCAST_MAX_USERS = 200;
 const TRAFFIC_TIME_ZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ANOMALY_THRESHOLD_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_TRAFFIC_LIMIT_BYTES = 648 * 1024 * 1024 * 1024;
@@ -369,6 +382,14 @@ async function dispatchRequest(request: Request, env: Env, url: URL): Promise<Re
         'x-content-type-options': 'nosniff'
       }
     });
+  }
+  if (request.method === 'POST' && url.pathname === '/api/admin/notices/broadcast') {
+    await requireAdmin(request, env);
+    return broadcastAdminUserNotices(request, env);
+  }
+  if (request.method === 'POST' && url.pathname === '/api/admin/notices/reset') {
+    await requireAdmin(request, env);
+    return resetAdminUserNotices(request, env);
   }
   const userTrafficMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/traffic$/);
   if (request.method === 'GET' && userTrafficMatch) {
@@ -989,6 +1010,44 @@ type AdminUserNoticeAuditRow = {
   updatedAt: string;
 };
 
+type AdminNoticeAcknowledgementRow = {
+  deviceId: string;
+  deviceName: string | null;
+  lastSeenAt: string;
+  acknowledgedAt: string | null;
+};
+
+type AdminNoticeAcknowledgement = {
+  deviceId: string;
+  deviceName: string;
+  lastSeenAt: string;
+  acknowledgedAt: string | null;
+};
+
+type AdminListedUserRow = {
+  id: string;
+  name: string;
+  status: string;
+  canEditManagedConfig: number | boolean | null;
+  canEditManagedConfigOverride: number | null;
+  subscriptionState: string;
+  devices: number;
+  deviceRecords: number;
+  uploadBytes: number;
+  downloadBytes: number;
+  lastSeenAt: string | null;
+  latestAppVersion: string | null;
+  appVersionReportedAt: string | null;
+  anomalies: number;
+  lastAnomalyAt: string | null;
+  noticeRevision: number | null;
+  noticeEnabled: number | null;
+  noticeTone: string | null;
+  noticeExpiresAt: string | null;
+  noticeAcknowledgedCount: number | null;
+  noticeDeviceCount: number | null;
+};
+
 async function getAdminUserProfile(env: Env, userId: string): Promise<Response> {
   return json({ user: toAdminUserProfile(await requireAdminUserProfile(env, userId)) });
 }
@@ -1160,29 +1219,105 @@ function toAdminUserProfile(row: AdminUserProfileRow): Pick<AdminUserProfileRow,
 
 async function getAdminUserNotice(env: Env, userId: string): Promise<Response> {
   await requireKnownUser(env, userId);
-  return json({ notice: await getAdminUserNoticeRow(env, userId) });
+  const notice = await getAdminUserNoticeRow(env, userId);
+  const acknowledgements = await listAdminNoticeAcknowledgements(env, userId, notice?.revision ?? null);
+  return json({
+    notice,
+    acknowledgements,
+    acknowledgedCount: acknowledgements.filter((entry) => entry.acknowledgedAt).length,
+    deviceCount: acknowledgements.length
+  });
 }
 
 async function updateAdminUserNotice(request: Request, env: Env, userId: string): Promise<Response> {
   const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserNoticeInput;
   assertOnlyFields(input, ['enabled', 'message', 'tone', 'durationMinutes', 'requestId'], 'unsupported notice field');
   if (typeof input.enabled !== 'boolean') throw new HttpError(400, 'invalid notice enabled');
+  const applied = await applyAdminUserNotice(env, userId, {
+    enabled: input.enabled,
+    message: parseNoticeMessage(input.message),
+    tone: parseNoticeTone(input.tone),
+    durationMinutes: parseNoticeDurationMinutes(input.durationMinutes),
+    requestId: parseOptionalRequestId(input.requestId)
+  });
+  return json({
+    ok: true,
+    alreadyApplied: applied.alreadyApplied,
+    requestId: applied.requestId,
+    notice: applied.notice
+  });
+}
+
+async function broadcastAdminUserNotices(request: Request, env: Env): Promise<Response> {
+  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserNoticeBroadcastInput;
+  assertOnlyFields(input, ['userIds', 'message', 'tone', 'durationMinutes', 'requestId'], 'unsupported notice field');
+  const userIds = parseNoticeUserIds(input.userIds);
   const message = parseNoticeMessage(input.message);
   const tone = parseNoticeTone(input.tone);
   const durationMinutes = parseNoticeDurationMinutes(input.durationMinutes);
   const requestId = parseOptionalRequestId(input.requestId);
-  const recovered = await recoverAdminUserNoticeUpdate(env, userId, {
-    enabled: input.enabled,
-    message,
-    tone,
-    durationMinutes,
-    requestId
+  await requireKnownUsers(env, userIds);
+
+  const notices: Array<{
+    userId: string;
+    notice: RemoteUserNotice & { enabled: boolean; durationMinutes: number };
+  }> = [];
+  let alreadyAppliedCount = 0;
+  for (const userId of userIds) {
+    const applied = await applyAdminUserNotice(env, userId, {
+      enabled: true,
+      message,
+      tone,
+      durationMinutes,
+      requestId: await deriveNoticeRequestId(requestId, userId)
+    });
+    notices.push({ userId, notice: applied.notice });
+    if (applied.alreadyApplied) alreadyAppliedCount += 1;
+  }
+
+  return json({
+    ok: true,
+    alreadyApplied: alreadyAppliedCount === userIds.length,
+    requestId,
+    sent: userIds.length,
+    failed: [],
+    notices
   });
+}
+
+async function resetAdminUserNotices(request: Request, env: Env): Promise<Response> {
+  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserNoticeResetInput;
+  assertOnlyFields(input, ['userIds'], 'unsupported notice field');
+  const userIds = parseNoticeUserIds(input.userIds);
+  await requireKnownUsers(env, userIds);
+  let cleared = 0;
+  for (const userId of userIds) {
+    if (await clearAdminUserNotice(env, userId)) cleared += 1;
+  }
+  return json({ ok: true, cleared });
+}
+
+async function applyAdminUserNotice(
+  env: Env,
+  userId: string,
+  input: {
+    enabled: boolean;
+    message: string;
+    tone: 'info' | 'warning';
+    durationMinutes: number;
+    requestId: string;
+  }
+): Promise<{
+  alreadyApplied: boolean;
+  requestId: string;
+  notice: RemoteUserNotice & { enabled: boolean; durationMinutes: number };
+}> {
+  const recovered = await recoverAdminUserNoticeUpdate(env, userId, input);
   if (recovered) return recovered;
 
   const nowDate = new Date();
   const now = nowDate.toISOString();
-  const expiresAt = new Date(nowDate.getTime() + durationMinutes * 60 * 1000).toISOString();
+  const expiresAt = new Date(nowDate.getTime() + input.durationMinutes * 60 * 1000).toISOString();
   const auditId = crypto.randomUUID();
   const auditGuard = 'EXISTS (SELECT 1 FROM user_notice_audit WHERE id = ?)';
 
@@ -1194,7 +1329,17 @@ async function updateAdminUserNotice(request: Request, env: Env, userId: string)
          SELECT ?, ?, users.id, 1, ?, ?, ?, ?, ?, ?
          FROM users
          WHERE users.id = ? AND users.status = 'active' AND users.merged_into_user_id IS NULL`
-      ).bind(auditId, requestId, input.enabled ? 1 : 0, message, tone, durationMinutes, expiresAt, now, userId),
+      ).bind(
+        auditId,
+        input.requestId,
+        input.enabled ? 1 : 0,
+        input.message,
+        input.tone,
+        input.durationMinutes,
+        expiresAt,
+        now,
+        userId
+      ),
       env.DB.prepare(
         `INSERT INTO user_notices (user_id, revision, enabled, message, tone, expires_at, updated_at)
          SELECT users.id, 1, ?, ?, ?, ?, ?
@@ -1210,7 +1355,7 @@ async function updateAdminUserNotice(request: Request, env: Env, userId: string)
            tone = excluded.tone,
            expires_at = excluded.expires_at,
            updated_at = excluded.updated_at`
-      ).bind(input.enabled ? 1 : 0, message, tone, expiresAt, now, userId, auditId),
+      ).bind(input.enabled ? 1 : 0, input.message, input.tone, expiresAt, now, userId, auditId),
       env.DB.prepare(
         `UPDATE user_notice_audit
          SET revision = (SELECT revision FROM user_notices WHERE user_id = ?)
@@ -1226,13 +1371,7 @@ async function updateAdminUserNotice(request: Request, env: Env, userId: string)
     ]);
   } catch (error) {
     if (isUniqueConstraintError(error)) {
-      const recoveredAfterConflict = await recoverAdminUserNoticeUpdate(env, userId, {
-        enabled: input.enabled,
-        message,
-        tone,
-        durationMinutes,
-        requestId
-      });
+      const recoveredAfterConflict = await recoverAdminUserNoticeUpdate(env, userId, input);
       if (recoveredAfterConflict) return recoveredAfterConflict;
     }
     throw error;
@@ -1243,12 +1382,11 @@ async function updateAdminUserNotice(request: Request, env: Env, userId: string)
     await requireKnownUser(env, userId);
     throw new HttpError(409, 'notice state changed');
   }
-  return json({
-    ok: true,
+  return {
     alreadyApplied: false,
-    requestId,
+    requestId: input.requestId,
     notice: toAdminUserNotice(committed)
-  });
+  };
 }
 
 async function recoverAdminUserNoticeUpdate(
@@ -1261,7 +1399,11 @@ async function recoverAdminUserNoticeUpdate(
     durationMinutes: number;
     requestId: string;
   }
-): Promise<Response | null> {
+): Promise<{
+  alreadyApplied: true;
+  requestId: string;
+  notice: RemoteUserNotice & { enabled: boolean; durationMinutes: number };
+} | null> {
   const audit = await env.DB.prepare(
     `SELECT
        request_id AS requestId,
@@ -1288,12 +1430,11 @@ async function recoverAdminUserNoticeUpdate(
   ) {
     throw new HttpError(409, 'notice request conflict');
   }
-  return json({
-    ok: true,
+  return {
     alreadyApplied: true,
     requestId: expected.requestId,
     notice: toAdminUserNotice(audit)
-  });
+  };
 }
 
 async function getAdminUserNoticeAuditById(
@@ -1321,6 +1462,11 @@ async function getAdminUserNoticeAuditById(
 
 async function resetAdminUserNotice(env: Env, userId: string): Promise<Response> {
   await requireKnownUser(env, userId);
+  const cleared = await clearAdminUserNotice(env, userId);
+  return json({ ok: true, cleared, notice: await getAdminUserNoticeRow(env, userId) });
+}
+
+async function clearAdminUserNotice(env: Env, userId: string): Promise<boolean> {
   const now = new Date().toISOString();
   const results = await env.DB.batch([
     env.DB.prepare(
@@ -1330,7 +1476,7 @@ async function resetAdminUserNotice(env: Env, userId: string): Promise<Response>
     ).bind(now, userId),
     env.DB.prepare('DELETE FROM user_notice_acknowledgements WHERE user_id = ?').bind(userId)
   ]);
-  return json({ ok: true, cleared: getD1Changes(results[0]) > 0, notice: await getAdminUserNoticeRow(env, userId) });
+  return getD1Changes(results[0]) > 0;
 }
 
 async function getAdminUserNoticeRow(
@@ -1373,6 +1519,35 @@ function toAdminUserNotice(
     updatedAt: row.updatedAt,
     durationMinutes: normalizeStoredNoticeDurationMinutes(row.durationMinutes)
   };
+}
+
+async function listAdminNoticeAcknowledgements(
+  env: Env,
+  userId: string,
+  revision: number | null
+): Promise<AdminNoticeAcknowledgement[]> {
+  const result = await env.DB.prepare(
+    `SELECT
+       devices.id AS deviceId,
+       devices.device_name AS deviceName,
+       devices.last_seen_at AS lastSeenAt,
+       user_notice_acknowledgements.acknowledged_at AS acknowledgedAt
+     FROM devices
+     LEFT JOIN user_notice_acknowledgements
+       ON user_notice_acknowledgements.device_id = devices.id
+      AND user_notice_acknowledgements.user_id = devices.user_id
+      AND user_notice_acknowledgements.revision = ?
+     WHERE devices.user_id = ?
+     ORDER BY devices.last_seen_at DESC, devices.id ASC`
+  )
+    .bind(revision ?? -1, userId)
+    .all<AdminNoticeAcknowledgementRow>();
+  return (result.results ?? []).map((row) => ({
+    deviceId: row.deviceId,
+    deviceName: cleanOptional(row.deviceName) ?? '未命名设备',
+    lastSeenAt: row.lastSeenAt,
+    acknowledgedAt: cleanOptional(row.acknowledgedAt)
+  }));
 }
 
 type AdminMergeUserRow = {
@@ -2477,7 +2652,22 @@ async function listUsers(env: Env, pagination: AdminPagination): Promise<Respons
         latest_version.app_version AS latestAppVersion,
         latest_version.last_seen_at AS appVersionReportedAt,
         COALESCE(anomaly_totals.anomalies, 0) AS anomalies,
-       anomaly_totals.lastAnomalyAt AS lastAnomalyAt
+       anomaly_totals.lastAnomalyAt AS lastAnomalyAt,
+       user_notices.revision AS noticeRevision,
+       user_notices.enabled AS noticeEnabled,
+       user_notices.tone AS noticeTone,
+       user_notices.expires_at AS noticeExpiresAt,
+       (
+         SELECT COUNT(*)
+         FROM user_notice_acknowledgements
+         WHERE user_notice_acknowledgements.user_id = users.id
+           AND user_notice_acknowledgements.revision = user_notices.revision
+       ) AS noticeAcknowledgedCount,
+       (
+         SELECT COUNT(*)
+         FROM devices
+         WHERE devices.user_id = users.id
+       ) AS noticeDeviceCount
      FROM users
      LEFT JOIN (
        SELECT
@@ -2529,6 +2719,7 @@ async function listUsers(env: Env, pagination: AdminPagination): Promise<Respons
       ) anomaly_totals ON anomaly_totals.user_id = users.id
       LEFT JOIN user_remote_config ON user_remote_config.user_id = users.id
       LEFT JOIN remote_config ON remote_config.id = 1
+      LEFT JOIN user_notices ON user_notices.user_id = users.id
        WHERE users.status = 'active' AND users.merged_into_user_id IS NULL
        ORDER BY downloadBytes DESC, uploadBytes DESC, lastSeenAt DESC, users.id ASC
        LIMIT ? OFFSET ?`
@@ -2536,7 +2727,38 @@ async function listUsers(env: Env, pagination: AdminPagination): Promise<Respons
     .bind(pagination.limit + 1, pagination.offset)
     .all();
   const page = createAdminPage(result.results, pagination);
-  return json({ users: page.items, page: page.metadata });
+  return json({ users: page.items.map((row) => toAdminListedUser(row as AdminListedUserRow)), page: page.metadata });
+}
+
+function toAdminListedUser(row: AdminListedUserRow) {
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    canEditManagedConfig: row.canEditManagedConfig,
+    canEditManagedConfigOverride: row.canEditManagedConfigOverride,
+    subscriptionState: row.subscriptionState,
+    devices: row.devices,
+    deviceRecords: row.deviceRecords,
+    uploadBytes: row.uploadBytes,
+    downloadBytes: row.downloadBytes,
+    lastSeenAt: row.lastSeenAt,
+    latestAppVersion: row.latestAppVersion,
+    appVersionReportedAt: row.appVersionReportedAt,
+    anomalies: row.anomalies,
+    lastAnomalyAt: row.lastAnomalyAt,
+    notice:
+      Number.isSafeInteger(row.noticeRevision) && (row.noticeRevision ?? 0) > 0
+        ? {
+            revision: row.noticeRevision,
+            enabled: row.noticeEnabled === 1,
+            tone: row.noticeTone === 'warning' ? 'warning' : 'info',
+            expiresAt: row.noticeExpiresAt,
+            acknowledgedCount: Number(row.noticeAcknowledgedCount) || 0,
+            deviceCount: Number(row.noticeDeviceCount) || 0
+          }
+        : null
+  };
 }
 
 async function getUserTraffic(env: Env, userId: string, pagination: AdminPagination): Promise<Response> {
@@ -2812,6 +3034,19 @@ async function requireKnownUser(env: Env, userId: string): Promise<void> {
   if (!user) throw new HttpError(404, 'unknown user');
 }
 
+async function requireKnownUsers(env: Env, userIds: string[]): Promise<void> {
+  if (!userIds.length) throw new HttpError(400, 'invalid notice users');
+  const result = await env.DB.prepare(
+    `SELECT id FROM users
+     WHERE id IN (${userIds.map(() => '?').join(', ')})
+       AND status = 'active'
+       AND merged_into_user_id IS NULL`
+  )
+    .bind(...userIds)
+    .all<{ id: string }>();
+  if ((result.results ?? []).length !== userIds.length) throw new HttpError(400, 'unknown user');
+}
+
 async function resolveCanonicalUserId(env: Env, requestedUserId: string): Promise<string> {
   let userId = requestedUserId;
   const visited = new Set<string>();
@@ -3043,7 +3278,9 @@ function safeRouteLabel(pathname: string): string {
     '/api/admin/traffic-trend',
     '/api/admin/config/sync-users',
     '/api/admin/maintenance',
-    '/api/admin/anomalies'
+    '/api/admin/anomalies',
+    '/api/admin/notices/broadcast',
+    '/api/admin/notices/reset'
   ]);
   return knownRoutes.has(pathname) ? pathname : '/unmatched';
 }
@@ -3440,6 +3677,31 @@ function parseNoticeDurationMinutes(value: unknown): number {
   return value;
 }
 
+function parseNoticeUserIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new HttpError(400, 'invalid notice users');
+  const seen = new Set<string>();
+  const userIds: string[] = [];
+  for (const entry of value) {
+    const userId = typeof entry === 'string' ? entry.trim().toLowerCase() : '';
+    if (!userId || !isUuid(userId)) throw new HttpError(400, 'invalid notice users');
+    if (seen.has(userId)) continue;
+    seen.add(userId);
+    userIds.push(userId);
+  }
+  if (!userIds.length) throw new HttpError(400, 'invalid notice users');
+  if (userIds.length > USER_NOTICE_BROADCAST_MAX_USERS) throw new HttpError(400, 'too many notice users');
+  return userIds;
+}
+
+async function deriveNoticeRequestId(batchRequestId: string, userId: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${batchRequestId}:${userId}`));
+  const bytes = new Uint8Array(digest).slice(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function normalizeStoredNoticeDurationMinutes(value: unknown): number {
   return typeof value === 'number' &&
     Number.isSafeInteger(value) &&
@@ -3543,6 +3805,8 @@ function errorCodeFor(status: number, message: string): string {
     'invalid notice message': 'INVALID_NOTICE_MESSAGE',
     'invalid notice revision': 'INVALID_NOTICE_REVISION',
     'invalid notice tone': 'INVALID_NOTICE_TONE',
+    'invalid notice users': 'INVALID_NOTICE_USERS',
+    'too many notice users': 'TOO_MANY_NOTICE_USERS',
     'invalid pagination': 'INVALID_PAGINATION',
     'invalid passphrase': 'INVALID_PASSPHRASE',
     'invalid platform': 'INVALID_PLATFORM',
