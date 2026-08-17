@@ -63,13 +63,10 @@ function runGh(args, options = {}) {
       ...options
     });
     let stdout = '';
-    let stderr = '';
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
     });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-    });
+    child.stderr.on('data', () => {});
     child.on('error', reject);
     child.on('close', (code) => {
       if (code === 0) {

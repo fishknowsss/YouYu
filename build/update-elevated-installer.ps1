@@ -5,9 +5,20 @@ $installer = $null
 $installerBoundaryClosed = $false
 try {
   [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-  $payloadText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:YOUYU_UPDATE_ELEVATED_INSTALL_PAYLOAD))
+  $payloadText = $null
+  if ($args.Count -ge 1 -and -not [string]::IsNullOrWhiteSpace([string] $args[0])) {
+    $payloadPath = [string] $args[0]
+    if ($payloadPath.IndexOf([char] 0) -ge 0 -or $payloadPath -notmatch '^(?:[A-Za-z]:[\\/]|\\\\)') { throw 'elevated installer payload file is invalid' }
+    $payloadPath = [IO.Path]::GetFullPath($payloadPath)
+    $payloadItem = Get-Item -LiteralPath $payloadPath -Force -ErrorAction Stop
+    if ($payloadItem.PSIsContainer -or ($payloadItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $payloadItem.Length -le 0 -or $payloadItem.Length -gt 4096) { throw 'elevated installer payload file is invalid' }
+    $payloadText = [IO.File]::ReadAllText($payloadPath, (New-Object Text.UTF8Encoding($false)))
+    Remove-Item -LiteralPath $payloadPath -Force -ErrorAction SilentlyContinue
+  } else {
+    $payloadText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:YOUYU_UPDATE_ELEVATED_INSTALL_PAYLOAD))
+    Remove-Item Env:YOUYU_UPDATE_ELEVATED_INSTALL_PAYLOAD -ErrorAction SilentlyContinue
+  }
   $payload = $payloadText | ConvertFrom-Json
-  Remove-Item Env:YOUYU_UPDATE_ELEVATED_INSTALL_PAYLOAD -ErrorAction SilentlyContinue
   if ($null -eq $payload -or @($payload.PSObject.Properties.Name).Count -ne 6 -or $payload.PSObject.Properties.Name -notcontains 'installerPath' -or $payload.PSObject.Properties.Name -notcontains 'arguments' -or $payload.PSObject.Properties.Name -notcontains 'installerTimeoutMs' -or $payload.PSObject.Properties.Name -notcontains 'cancellationPath' -or $payload.PSObject.Properties.Name -notcontains 'cancellationNonce' -or $payload.PSObject.Properties.Name -notcontains 'targetUserSid') { throw 'elevated installer payload is invalid' }
   function Test-FullyQualifiedWindowsPath([string] $value) {
     if ([string]::IsNullOrWhiteSpace($value) -or $value.IndexOf([char] 0) -ge 0) { return $false }

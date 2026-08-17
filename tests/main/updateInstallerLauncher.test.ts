@@ -629,6 +629,23 @@ describe('controlled Windows update installer launcher', () => {
     expect(script).not.toMatch(/https?:\/\//i);
   });
 
+  it('passes the elevated installer payload through a private file because RunAs drops process environment', () => {
+    const script = createUpdateInstallerLauncherScript();
+    const elevatedScript = createElevatedUpdateInstallerScript();
+
+    expect(script).toContain("youyu-update-elevated-' + $arguments[6] + '.json");
+    expect(script).toContain('Write-AuthenticatedElevatedInstallerPayload');
+    expect(script).toContain('$elevatedPayloadPath');
+    expect(script.indexOf('Write-AuthenticatedElevatedInstallerPayload')).toBeLessThan(
+      script.indexOf("Start-Process -FilePath ([IO.Path]::Combine($PSHOME, 'powershell.exe'))")
+    );
+    expect(elevatedScript).toContain('$args[0]');
+    expect(elevatedScript).toContain('elevated installer payload file is invalid');
+    expect(elevatedScript.indexOf('$args[0]')).toBeLessThan(
+      elevatedScript.indexOf(`$env:${updateElevatedInstallerPayloadEnvironment}`)
+    );
+  });
+
   it('packages the exact reviewed elevated wrapper used by the generated supervisor', async () => {
     const packagedWrapper = (await readFile('build/update-elevated-installer.ps1', 'utf8'))
       .replace(/\r\n/g, '\n')
@@ -743,6 +760,77 @@ describe('controlled Windows update installer launcher', () => {
     expect(exitCode, stderr).toBe(0);
     expect(stderr).not.toContain('YouYu elevated update wrapper:');
     expect(stdout.trim()).toBe('wrapper-validation-pass');
+  });
+
+  it('reads the elevated wrapper payload from a file without inheriting the RunAs environment', async () => {
+    if (process.platform !== 'win32') return;
+
+    const fixtureRoot = await mkdtemp(join(tmpdir(), 'youyu-update-elevated-payload-'));
+    const payloadPath = join(fixtureRoot, 'youyu-update-elevated.json');
+    try {
+      await writeFile(
+        payloadPath,
+        `${JSON.stringify({
+          installerPath: String.raw`C:\\Users\\Example\\pending\\YouYu-1.7.10-x64.exe`,
+          arguments: [
+            '--updated',
+            '/S',
+            '--force-run',
+            '--youyu-handoff-path',
+            handoff.path,
+            '--youyu-handoff-nonce',
+            handoff.nonce,
+            '--youyu-target-user-sid',
+            handoff.targetUserSid,
+            '--youyu-target-session-id',
+            String(handoff.targetSessionId)
+          ],
+          installerTimeoutMs: updateInstallerExecutionTimeoutMs,
+          cancellationPath: String.raw`C:\\Users\\Example User\\AppData\\Local\\Temp\\youyu-update-cancel-8fb748f0-540a-4f7a-9bd2-144020b83e9b.json`,
+          cancellationNonce: handoff.nonce,
+          targetUserSid: handoff.targetUserSid
+        })}\n`,
+        'utf8'
+      );
+      const child = spawn(
+        resolveWindowsPowerShellPath(process.env.SystemRoot),
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          join(process.cwd(), 'build', 'update-elevated-installer.ps1'),
+          payloadPath
+        ],
+        {
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: createWindowsPowerShellFixtureEnvironment({ ...process.env })
+        }
+      );
+      let stderr = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk: string) => (stderr += chunk));
+      const exitCode = await new Promise<number | null>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          child.kill();
+          reject(new Error('elevated payload file probe timed out'));
+        }, 10_000);
+        child.once('error', reject);
+        child.once('close', (code) => {
+          clearTimeout(timeout);
+          resolve(code);
+        });
+      });
+
+      expect(exitCode, stderr).toBe(125);
+      expect(stderr).toContain('elevated installer cancellation marker is invalid');
+      expect(stderr).not.toContain('Base64');
+      await expect(readFile(payloadPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   it('uses the packaged Windows PowerShell 5.1 wrapper to cancel a real parent-child installer tree without survivors', async () => {
