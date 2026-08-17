@@ -107,11 +107,9 @@ async function ensureDraftRelease(tag, title, notes) {
 }
 
 async function deleteStarterAssets(tag, expectedNames) {
-  const raw = await runGh(['api', `repos/${repository}/releases`, '--jq', `.[] | select(.tag_name=="${tag}") | .id`]);
-  const releaseId = raw.trim();
-  if (!releaseId) throw new Error(`release ${tag} not found`);
-  const assetsRaw = await runGh(['api', `repos/${repository}/releases/${releaseId}/assets`]);
-  const starterIds = selectStarterAssetIds(JSON.parse(assetsRaw), expectedNames);
+  const raw = await runGh(['release', 'view', tag, '--json', 'id,assets']);
+  const release = JSON.parse(raw);
+  const starterIds = selectStarterAssetIds(release.assets ?? [], expectedNames);
   for (const id of starterIds) {
     await runGh(['api', '-X', 'DELETE', `repos/${repository}/releases/assets/${id}`]);
     console.log(`deleted starter asset ${id}`);
