@@ -2189,7 +2189,8 @@ test('admin page broadcasts a notice to selected users and shows read receipts',
 
   document.getElementById('broadcastNotice').click();
   await waitFor(
-    () => document.getElementById('broadcastDialog').open || document.getElementById('broadcastDialog').hasAttribute('open')
+    () =>
+      document.getElementById('broadcastDialog').open || document.getElementById('broadcastDialog').hasAttribute('open')
   );
   assert.equal(document.getElementById('broadcastTargetSummary').textContent, '发给 2 人');
   document.getElementById('broadcastNoticeMessage').value = '今晚维护';
@@ -2201,7 +2202,9 @@ test('admin page broadcasts a notice to selected users and shows read receipts',
       database.queryAll('SELECT COUNT(*) AS count FROM user_notices WHERE enabled = 1 AND message = ?', '今晚维护')[0]
         .count === 2
   );
-  await waitFor(() => [...document.querySelectorAll('#users .notice-status')].every((cell) => cell.textContent === '0/1'));
+  await waitFor(() =>
+    [...document.querySelectorAll('#users .notice-status')].every((cell) => cell.textContent === '0/1')
+  );
 
   const aliceRow = [...document.querySelectorAll('#users tr[data-user-id]')].find(
     (row) => row.querySelector('.name-cell')?.textContent === 'Alice'
@@ -2217,7 +2220,10 @@ test('admin page broadcasts a notice to selected users and shows read receipts',
   aliceRow.querySelector('button').click();
   await waitFor(() => document.getElementById('noticeReceiptSummary').textContent === '1/1');
   assert.doesNotMatch(document.getElementById('noticeReceiptList').textContent, /未读/);
-  assert.equal(database.queryAll('SELECT message FROM user_notices WHERE user_id = ?', bob.userId)[0].message, '今晚维护');
+  assert.equal(
+    database.queryAll('SELECT message FROM user_notices WHERE user_id = ?', bob.userId)[0].message,
+    '今晚维护'
+  );
 });
 
 test('admin writes reject non-object JSON and bodies larger than 64 KiB', async (context) => {
