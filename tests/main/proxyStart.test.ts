@@ -44,6 +44,26 @@ describe('runProxyStartSequence', () => {
     expect(deps.recordStartError).not.toHaveBeenCalled();
   });
 
+  it('returns after the kernel is up without waiting for the post-start cloud sync', async () => {
+    let finishSync!: () => void;
+    const hangingSync = new Promise<void>((resolve) => {
+      finishSync = resolve;
+    });
+    const syncRequiredRemoteConfig = vi.fn(async (options: { proxyUrl?: string }) => {
+      if (options.proxyUrl) await hangingSync;
+      return false;
+    });
+    const deps = createDeps({ syncRequiredRemoteConfig });
+
+    const snapshot = await runProxyStartSequence(deps);
+    expect(snapshot.status).toBe('running');
+    expect(deps.startLifecycle).toHaveBeenCalledOnce();
+    expect(syncRequiredRemoteConfig).toHaveBeenCalledTimes(2);
+    expect(deps.stopLifecycle).not.toHaveBeenCalled();
+
+    finishSync();
+  });
+
   it('does not start preferred-node refinement for manual strategy', async () => {
     const selectPreferredAutoNode = vi.fn();
     const deps = createDeps({

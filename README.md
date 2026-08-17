@@ -8,13 +8,12 @@
 
 YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新、桌宠交互和轻量云端管理。
 
-当前源码版本为 [`1.7.12`](https://github.com/fishknowsss/YouYu/releases/tag/v1.7.12)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 [`1.7.13`](https://github.com/fishknowsss/YouYu/releases/tag/v1.7.13)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)。
 
-## 1.7.12 更新重点
+## 1.7.13 更新重点
 
-- 一键连接在内核就绪后立即进入已连接；日本节点测速和出口验证改到后台，不再用整段「启动中」卡住。
-- 日本节点都不可用并回退到其他地区时，只说明已经切换，不再当成故障去点「修复」。
-- 专业模式诊断只显示中文结论；更新失败会区分未允许安装、安装器未能启动和下载失败。
+- 代理起来后小白按钮立即进入已连接，不再在按钮下方继续转圈。
+- 软件内更新成功后，不会因为窗口确认稍晚就提示「安装未完成」。
 - 1.7.11 起应用内更新已修好提权交接。若当前还是 1.7.7 或 1.7.9，软件内更新装不上，需要手动运行安装包。
 
 ## 界面预览

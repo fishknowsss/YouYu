@@ -61,15 +61,17 @@ describe('bound remote config authority', () => {
       source.indexOf('export function schedulePreferredAutoNodeRefinement')
     );
 
-    expect(startFlow.match(/deps\.syncRequiredRemoteConfig\(/g)).toHaveLength(2);
+    expect(startFlow).toContain('deps.syncRequiredRemoteConfig({ signal })');
     expect(startFlow.indexOf('deps.syncRequiredRemoteConfig({ signal })')).toBeLessThan(
       startFlow.indexOf('deps.startLifecycle(signal, intentGeneration)')
     );
     expect(startFlow.indexOf('deps.activatePending()')).toBeLessThan(
-      startFlow.lastIndexOf('deps.syncRequiredRemoteConfig(')
+      startFlow.indexOf('schedulePostStartRemoteConfigSync')
     );
-    expect(startFlow).toContain('deps.cancelIntent()');
-    expect(startFlow).toContain('.stopLifecycle()');
+    expect(startFlow).toContain('schedulePostStartRemoteConfigSync');
+    expect(startFlow).toContain('restartIfRunning: true');
+    expect(startFlow).not.toContain('deps.cancelIntent()');
+    expect(startFlow).not.toContain('.stopLifecycle()');
   });
 
   it('treats sanitized remote transport failures as recoverable quiet-sync errors', async () => {

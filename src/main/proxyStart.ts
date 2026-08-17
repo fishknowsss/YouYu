@@ -56,32 +56,44 @@ export async function runProxyStartSequence(
   deps.throwIfIntentCanceled(intentGeneration);
   await deps.activatePending();
   deps.throwIfIntentCanceled(intentGeneration);
-  try {
-    await deps.syncRequiredRemoteConfig({
-      proxyUrl: deps.getRuntimeTrafficProxyUrl(),
-      restartIfRunning: true,
-      signal,
-      intentGeneration
-    });
-  } catch (error) {
-    deps.cancelIntent();
-    await deps
-      .stopLifecycle()
-      .catch((stopError) => deps.appendLog(`云端配置未就绪后停止代理失败: ${deps.formatError(stopError)}`));
-    throw error;
-  }
-  deps.throwIfAborted(signal);
-  deps.throwIfIntentCanceled(intentGeneration);
 
   const startedSettings = await deps.readSettings();
   deps.startTraffic();
   deps.clearLastError();
   deps.scheduleNodeHealthCheck(0);
   const snapshot = await deps.createSnapshot();
+  const refineSignal = deps.createRefineSignal();
+  schedulePostStartRemoteConfigSync(deps, { signal: refineSignal, intentGeneration });
   if (startedSettings.strategy === 'auto') {
-    schedulePreferredAutoNodeRefinement(deps, { signal: deps.createRefineSignal(), intentGeneration });
+    schedulePreferredAutoNodeRefinement(deps, { signal: refineSignal, intentGeneration });
   }
   return snapshot;
+}
+
+function schedulePostStartRemoteConfigSync(
+  deps: Pick<
+    ProxyStartDeps,
+    | 'syncRequiredRemoteConfig'
+    | 'getRuntimeTrafficProxyUrl'
+    | 'isIntentCurrent'
+    | 'isExpectedCancellation'
+    | 'appendLog'
+    | 'formatError'
+  >,
+  options: { signal?: AbortSignal; intentGeneration: number }
+): void {
+  void deps
+    .syncRequiredRemoteConfig({
+      proxyUrl: deps.getRuntimeTrafficProxyUrl(),
+      restartIfRunning: true,
+      signal: options.signal,
+      intentGeneration: options.intentGeneration
+    })
+    .catch((error) => {
+      if (deps.isExpectedCancellation(error) || isExpectedOperationCancellation(error)) return;
+      if (!deps.isIntentCurrent(options.intentGeneration)) return;
+      deps.appendLog(`启动后云端配置未刷新，继续使用当前配置: ${deps.formatError(error)}`);
+    });
 }
 
 export function schedulePreferredAutoNodeRefinement(

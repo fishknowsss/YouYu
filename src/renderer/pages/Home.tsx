@@ -38,7 +38,7 @@ export function Home(props: HomeProps) {
 function EasyHome(props: HomeProps) {
   const running = props.snapshot.status === 'running';
   const failed = props.snapshot.status === 'failed';
-  const starting = props.busyLabel === '启动中';
+  const starting = props.busyLabel === '启动中' && !running;
   const stopping = props.busyLabel === '停止中';
   const primaryLabel = props.busy ? props.busyLabel || '处理中' : running ? '停止使用' : '一键连接';
   const boardClassName = [

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildProxyRelaunchArguments,
   resumeProxyAfterRelaunchArgument,
+  shouldReportRecoveredUpdateInstallFailure,
   updateInstallFailedRelaunchArgument
 } from '../../src/main/appRelaunch';
 import {
@@ -11,6 +12,42 @@ import {
 } from '../../src/main/updateRelaunchAcknowledgement';
 
 describe('application relaunch safety', () => {
+  it('does not treat a successful new-version launch as an incomplete install', () => {
+    expect(
+      shouldReportRecoveredUpdateInstallFailure({
+        launchedAfterSuccessfulUpdate: true,
+        receivedFailedRelaunch: true
+      })
+    ).toBe(false);
+    expect(
+      shouldReportRecoveredUpdateInstallFailure({
+        launchedAfterSuccessfulUpdate: false,
+        receivedFailedRelaunch: true
+      })
+    ).toBe(true);
+    expect(
+      shouldReportRecoveredUpdateInstallFailure({
+        launchedAfterSuccessfulUpdate: false,
+        receivedFailedRelaunch: false
+      })
+    ).toBe(false);
+  });
+
+  it('writes the update relaunch acknowledgement before waiting on the main window', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const initialization = source.slice(source.indexOf('.whenReady()'));
+    const ackIndex = initialization.indexOf('writeUpdateRelaunchAcknowledgement(');
+    const windowIndex = initialization.indexOf('createWindow()');
+    const loginIndex = initialization.indexOf('reconcileLaunchAtLogin()');
+
+    expect(ackIndex).toBeGreaterThanOrEqual(0);
+    expect(ackIndex).toBeLessThan(windowIndex);
+    expect(ackIndex).toBeLessThan(loginIndex);
+    expect(initialization).not.toContain(
+      'acknowledgeUpdateRelaunchWhenWindowReady(startupUpdateRelaunchAcknowledgement)'
+    );
+  });
+
   it('preserves normal arguments and emits one proxy-resume argument', () => {
     expect(
       buildProxyRelaunchArguments([

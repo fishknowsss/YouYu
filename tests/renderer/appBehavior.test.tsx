@@ -88,6 +88,23 @@ describe('renderer action behavior', () => {
     expect(start).not.toHaveBeenCalled();
   });
 
+  it('returns as soon as the kernel is running and does not wait for delay tests', async () => {
+    const running = { status: 'running', nodes: [{ name: '🇯🇵 Japan', active: true }] } as AppSnapshot;
+    const testAllNodes = vi.fn(() => new Promise<AppSnapshot>(() => undefined));
+    const selectBestAutoNode = vi.fn();
+    const api = {
+      getSnapshot: vi.fn(async () => ({ status: 'stopped' }) as AppSnapshot),
+      start: vi.fn(async () => running),
+      testAllNodes,
+      selectBestAutoNode,
+      updateSubscription: vi.fn()
+    } as unknown as NonNullable<Window['youyu']>;
+
+    await expect(startEasyProxy(api, createOperationRequestTracker())).resolves.toEqual(running);
+    expect(testAllNodes).not.toHaveBeenCalled();
+    expect(selectBestAutoNode).not.toHaveBeenCalled();
+  });
+
   it('does not run a full repair when automatic startup work is internally replaced', async () => {
     const snapshot = { status: 'stopped' } as AppSnapshot;
     const repair = vi.fn(async () => snapshot);
@@ -644,6 +661,32 @@ describe('RegistrationGate', () => {
 });
 
 describe('easy home fallback notice', () => {
+  it('does not keep the start ring after the proxy is already running', () => {
+    const snapshot = createRegisteredRendererSnapshot();
+    snapshot.status = 'running';
+    const html = renderToStaticMarkup(
+      <Home
+        usageMode="easy"
+        snapshot={snapshot}
+        busy
+        busyLabel="启动中"
+        message=""
+        onQuickStart={vi.fn()}
+        onStart={vi.fn()}
+        onStop={vi.fn()}
+        onRepair={vi.fn()}
+        onModeChange={vi.fn()}
+        onStrategyChange={vi.fn()}
+        onOpenNodes={vi.fn()}
+        onUsageModeChange={vi.fn()}
+        onInstallUpdate={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('easy-power-button running');
+    expect(html).not.toContain('startup-ring is-starting');
+  });
+
   it('shows a region fallback as information without a repair button', () => {
     const snapshot = createRegisteredRendererSnapshot();
     const html = renderToStaticMarkup(

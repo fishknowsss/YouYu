@@ -48,53 +48,7 @@ async function startAndSelectUsableNode(
   signal?.throwIfAborted();
   const current = await api.getSnapshot();
   signal?.throwIfAborted();
-  const started = current.status === 'running' ? current : await api.start(requestTracker.next());
-  signal?.throwIfAborted();
-  return ensureUsableNode(api, started, requestTracker, signal);
-}
-
-async function ensureUsableNode(
-  api: NonNullable<Window['youyu']>,
-  snapshot: AppSnapshot,
-  requestTracker: OperationRequestTracker,
-  signal?: AbortSignal
-): Promise<AppSnapshot> {
-  let next = snapshot;
-  if (!next.nodes.length) {
-    signal?.throwIfAborted();
-    next = await api.updateSubscription(requestTracker.next()).catch((error) => {
-      if (isOperationCancelled(error)) throw error;
-      return next;
-    });
-    signal?.throwIfAborted();
-  }
-
-  signal?.throwIfAborted();
-  next = await api.testAllNodes().catch((error) => {
-    if (isOperationCancelled(error)) throw error;
-    return next;
-  });
-  signal?.throwIfAborted();
-  const activeMeasured = next.nodes.some((node) => node.active && isUsableDelay(node.delay));
-  const bestNode = next.nodes
-    .filter((node) => isUsableDelay(node.delay))
-    .sort((left, right) => (left.delay ?? Number.MAX_SAFE_INTEGER) - (right.delay ?? Number.MAX_SAFE_INTEGER))[0];
-
-  if (bestNode && !activeMeasured) {
-    const selected = await api.selectBestAutoNode(requestTracker.next());
-    signal?.throwIfAborted();
-    return selected;
-  }
-
-  if (!bestNode) {
-    throw new Error(next.nodes.length > 0 ? 'no usable proxy node' : 'no proxy nodes');
-  }
-
-  return next;
-}
-
-function isUsableDelay(delay: unknown): boolean {
-  return typeof delay === 'number' && Number.isFinite(delay) && delay > 0;
+  return current.status === 'running' ? current : await api.start(requestTracker.next());
 }
 
 function isInputError(error: unknown): boolean {

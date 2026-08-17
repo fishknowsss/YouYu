@@ -629,6 +629,20 @@ describe('controlled Windows update installer launcher', () => {
     expect(script).not.toMatch(/https?:\/\//i);
   });
 
+  it('treats an already-running new version as a successful relaunch when the window ack is late', () => {
+    const script = createUpdateInstallerLauncherScript();
+    const startIndex = script.indexOf('function Start-YouYuAfterUpdate');
+    const endIndex = script.indexOf('function Start-LegacyYouYuRecovery');
+    const relaunch = script.slice(startIndex, endIndex);
+    const processCheck = relaunch.indexOf('Test-TargetUserProcess $path $arguments[8] $arguments[10]');
+    const timeoutError = relaunch.indexOf('YouYu did not confirm that its main window was ready');
+
+    expect(relaunch).toContain('$readyDeadline = [DateTimeOffset]::UtcNow.AddSeconds(10)');
+    expect(processCheck).toBeGreaterThan(relaunch.indexOf('$readyDeadline'));
+    expect(processCheck).toBeGreaterThan(-1);
+    expect(timeoutError).toBeGreaterThan(processCheck);
+  });
+
   it('passes the elevated installer payload through a private file because RunAs drops process environment', () => {
     const script = createUpdateInstallerLauncherScript();
     const elevatedScript = createElevatedUpdateInstallerScript();

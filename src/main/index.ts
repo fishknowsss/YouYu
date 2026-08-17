@@ -98,7 +98,6 @@ import { deferUpdateInstallerLaunch } from './updateInstallHandoff';
 import { launchDownloadedUpdateInstaller, resolveDownloadedUpdateInstallerPath } from './updateInstallerLauncher';
 import {
   resolveUpdateRelaunchAcknowledgementRequest,
-  type UpdateRelaunchAcknowledgementRequest,
   writeUpdateRelaunchAcknowledgement
 } from './updateRelaunchAcknowledgement';
 import { createCodexConnectionRecoveryCoordinator } from './codexConnectionRecovery';
@@ -110,7 +109,9 @@ import { classifyUpdateInstallFailure } from '../shared/userFacingCopy';
 import {
   buildProxyRelaunchArguments,
   resumeProxyAfterRelaunchArgument,
-  updateInstallFailedRelaunchArgument
+  shouldReportRecoveredUpdateInstallFailure,
+  updateInstallFailedRelaunchArgument,
+  updatedRelaunchArgument
 } from './appRelaunch';
 import { clearMihomoRepairCache, runNetworkRepair, type NetworkRepairOptions } from './networkRepair';
 import {
@@ -154,10 +155,10 @@ const startHidden = process.argv.includes('--hidden') || process.argv.includes('
 const shutdownForInstall = process.argv.includes('--shutdown-for-install');
 const resumeProxyAfterRelaunch = process.argv.includes(resumeProxyAfterRelaunchArgument);
 const recoveredFromUpdateInstallFailure = process.argv.includes(updateInstallFailedRelaunchArgument);
+const launchedAfterSuccessfulUpdate = process.argv.includes(updatedRelaunchArgument);
 const startupUpdateRelaunchAcknowledgement = resolveUpdateRelaunchAcknowledgementRequest(process.argv);
 const windowsStartupTask = createWindowsStartupTask({ executablePath: process.execPath });
 let mainWindow: BrowserWindow | null = null;
-let mainWindowContentReady = false;
 let applicationInitializationReady = false;
 let updateRelaunchResumeRequested = resumeProxyAfterRelaunch;
 let updateRelaunchResumeStarted = false;
@@ -882,15 +883,6 @@ function reportRecoveredUpdateInstallFailure() {
   setUpdateSnapshot({ status: 'failed', message });
   refreshTrayMenu();
   void broadcastSnapshot().catch((error) => recordError('更新失败状态通知失败', error));
-}
-
-async function acknowledgeUpdateRelaunchWhenWindowReady(request: UpdateRelaunchAcknowledgementRequest): Promise<void> {
-  const deadline = Date.now() + 30_000;
-  while (!mainWindowContentReady || !mainWindow || mainWindow.isDestroyed()) {
-    if (Date.now() >= deadline) throw new Error('update relaunch window did not become ready');
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-  }
-  await writeUpdateRelaunchAcknowledgement(request, { appVersion });
 }
 
 function resumeProxyFromRelaunch() {
@@ -3425,7 +3417,6 @@ function createTray() {
 }
 
 async function createWindow() {
-  mainWindowContentReady = false;
   const display = screen.getPrimaryDisplay();
   const mainWindowMetrics = calculateMainWindowMetrics(display.size, display.workAreaSize);
   const win = new BrowserWindow({
@@ -3481,7 +3472,6 @@ async function createWindow() {
   win.on('closed', () => {
     if (mainWindow === win) {
       mainWindow = null;
-      mainWindowContentReady = false;
     }
   });
 
@@ -3489,9 +3479,6 @@ async function createWindow() {
     await win.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
     await win.loadFile(join(__dirname, '../renderer/index.html'));
-  }
-  if (mainWindow === win && !win.isDestroyed()) {
-    mainWindowContentReady = true;
   }
 }
 
@@ -3778,7 +3765,12 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
       return;
     }
     const relaunchAcknowledgement = resolveUpdateRelaunchAcknowledgementRequest(commandLine);
-    if (commandLine.includes(updateInstallFailedRelaunchArgument)) {
+    if (
+      shouldReportRecoveredUpdateInstallFailure({
+        launchedAfterSuccessfulUpdate,
+        receivedFailedRelaunch: commandLine.includes(updateInstallFailedRelaunchArgument)
+      })
+    ) {
       reportRecoveredUpdateInstallFailure();
       showMainWindow();
     } else if (!commandLine.includes('--hidden') && !commandLine.includes('--startup')) {
@@ -3788,7 +3780,7 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
       resumeProxyFromRelaunch();
     }
     if (relaunchAcknowledgement) {
-      void acknowledgeUpdateRelaunchWhenWindowReady(relaunchAcknowledgement).catch((error) =>
+      void writeUpdateRelaunchAcknowledgement(relaunchAcknowledgement, { appVersion }).catch((error) =>
         recordError('更新后重开确认失败', error)
       );
     }
@@ -3797,6 +3789,11 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
   app
     .whenReady()
     .then(async () => {
+      if (startupUpdateRelaunchAcknowledgement) {
+        void writeUpdateRelaunchAcknowledgement(startupUpdateRelaunchAcknowledgement, { appVersion }).catch((error) =>
+          recordError('更新后重开确认失败', error)
+        );
+      }
       try {
         app.configureHostResolver(createHostResolverOptions());
       } catch (error) {
@@ -3809,17 +3806,19 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
       await allocateRuntimePorts();
       registerIpc();
       setupAutoUpdates();
-      if (recoveredFromUpdateInstallFailure) reportRecoveredUpdateInstallFailure();
+      if (
+        shouldReportRecoveredUpdateInstallFailure({
+          launchedAfterSuccessfulUpdate,
+          receivedFailedRelaunch: recoveredFromUpdateInstallFailure
+        })
+      ) {
+        reportRecoveredUpdateInstallFailure();
+      }
       await reconcileLaunchAtLogin();
       createTray();
       applicationInitializationReady = true;
       const initialWindow = createWindow();
       void initialWindow.catch((error) => recordError('创建主窗口失败', error));
-      if (startupUpdateRelaunchAcknowledgement) {
-        void initialWindow
-          .then(() => acknowledgeUpdateRelaunchWhenWindowReady(startupUpdateRelaunchAcknowledgement))
-          .catch((error) => recordError('更新后重开确认失败', error));
-      }
       startRemoteConfigPolling();
       void broadcastSnapshot().catch((error) => recordError('初始化通知快照失败', error));
       void refreshTrafficTotalsFromServer();
