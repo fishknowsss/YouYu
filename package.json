@@ -40,7 +40,8 @@
     "validate:release:team": "node scripts/validate-team-installers.mjs team-builds",
     "smoke": "tsx scripts/smoke-test.ts",
     "release:network:preflight": "node scripts/verify-remote-release.mjs --preflight",
-    "release:verify:remote": "node scripts/verify-remote-release.mjs"
+    "release:verify:remote": "node scripts/verify-remote-release.mjs",
+    "release:publish": "node scripts/publish-github-release.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260801.1",

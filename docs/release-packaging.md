@@ -360,29 +360,15 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
    推送版本标签时使用精确标签名。`Build Windows` 必须对应 `$tagCommit` 且结论为 `success`，之后才能创建 GitHub Release。不要使用 `git push --follow-tags`，除非已经确认本地没有无关未推送标签。若误推了无关标签，立即确认它不是本次发布需要的标签，并删除远端误推标签。
 
-8. 创建 GitHub Release 并上传资产。
+8. 从 GitHub Actions 发布公开资产，不要从本机经代理上传约 100MB 的安装包。
+
+   标签的 `Build Windows` 成功后会在 runner 上直接上传 11 个公开资产并发布 Release。若标签构建已经结束、Release 还缺安装包，用已成功的 run 补发：
 
    ```powershell
-   $version = node -p "require('./package.json').version"
-   $manifest = Get-Content -LiteralPath 'resources/mihomo/win-x64/manifest.json' -Raw | ConvertFrom-Json
-   $sourceName = $manifest.sourceArchive.releaseAssetNameTemplate.Replace('${appVersion}', $version)
-   gh release create "v$version" `
-     "release/YouYu-$version-x64.exe" `
-     "release/YouYu-$version-x64.exe.blockmap" `
-     "release/YouYu-$version-x64-in.exe" `
-     "release/YouYu-$version-x64-in.exe.blockmap" `
-     "release/YouYu-$version-x64-no.exe" `
-     "release/YouYu-$version-x64-no.exe.blockmap" `
-     "release/latest.yml" `
-     "release/latest-in.yml" `
-     "release/latest-no.yml" `
-     "release/$sourceName" `
-     "release/SHA256SUMS.txt" `
-     --title "YouYu $version" `
-     --notes "<本次用户可读更新说明>"
+   npm run release:publish -- --tag v<version> --from-run <Build Windows run id> --dir release --publish --notes "<本次用户可读更新说明>"
    ```
 
-   如果 Release 已存在，先检查已有资产是否来自同一次构建。确需覆盖时才使用 `gh release upload "v$version" ... --clobber`。
+   该命令只接受公开资产目录，会拒绝 `team-builds/`，并先删除卡住的 `starter` 资产再 `--clobber` 上传。不要再对三个 EXE 使用本机 `curl` / 前台 `gh release upload`。
 
 9. 校验远端发布结果。
 

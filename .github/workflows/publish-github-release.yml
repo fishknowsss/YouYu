@@ -1,0 +1,49 @@
+name: Publish GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag such as v1.7.10
+        required: true
+        type: string
+      run_id:
+        description: Successful Build Windows run that already produced the 11 public assets
+        required: true
+        type: string
+      notes:
+        description: Release notes
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: publish-github-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_RUN_ID: ${{ inputs.run_id }}
+      RELEASE_NOTES: ${{ inputs.notes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Publish public assets from Build Windows
+        run: |
+          notes="${RELEASE_NOTES:-YouYu ${RELEASE_TAG}}"
+          node scripts/publish-github-release.mjs \
+            --tag "${RELEASE_TAG}" \
+            --from-run "${RELEASE_RUN_ID}" \
+            --dir release \
+            --publish \
+            --notes "${notes}"
