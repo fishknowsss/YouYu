@@ -513,15 +513,10 @@ select.compact { width: auto; min-width: 132px; }
 .users-table col.col-actions { width: 6%; }
 .users-table .select-cell { width: 36px; text-align: center; }
 .users-table .select-cell input { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: var(--purple); }
-.users-selection {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 0 4px 10px;
-}
-.users-selection span { color: var(--ink-soft); font-size: 13px; font-weight: 650; }
-.users-selection .button { min-width: 72px; }
+.users-toolbar .users-selection { flex: 0 1 auto; min-height: 0; padding: 0; }
+.users-selection { display: flex; align-items: center; gap: 8px; }
+.users-selection span { color: var(--ink-soft); font-size: 13px; font-weight: 650; white-space: nowrap; }
+.users-selection .button { min-width: 64px; }
 .notice-receipts { margin-top: 16px; }
 .receipt-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .receipt-list li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

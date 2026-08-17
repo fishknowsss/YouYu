@@ -1927,6 +1927,9 @@ test('admin page exposes the fixed-viewport management workspace without removed
   assert.match(page, /id="selectVisibleUsers"/);
   assert.match(page, /id="noticeReceiptList"/);
   assert.match(page, /<th>通知<\/th>/);
+  assert.match(page, /class="users-toolbar"[\s\S]*id="broadcastNotice"[\s\S]*<\/div>\s*<div class="table-wrap">/);
+  assert.doesNotMatch(page, /<\/div>\s*<div class="users-selection">/);
+  assert.match(styles, /\.user-list-panel \{\s*display: grid;\s*grid-template-rows: 50px 48px minmax\(0, 1fr\) 46px;/);
   assert.doesNotMatch(page, /userNoticeExpiresAt/);
   assert.doesNotMatch(page, /id="activeUserId"/);
   assert.doesNotMatch(page, /id="userNoticeEnabled"/);

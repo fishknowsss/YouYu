@@ -211,16 +211,16 @@ export function adminPage(): string {
                   <select class="compact" id="userSubscriptionFilter" aria-label="订阅状态"><option value="">全部订阅</option><option value="跟随全局">跟随全局</option><option value="单独订阅">单独订阅</option><option value="单独配置">单独配置</option><option value="已停用">已停用</option><option value="未配置">未配置</option></select>
                   <select class="compact" id="userAnomalyFilter" aria-label="异常筛选"><option value="">全部用户</option><option value="has">存在异常</option><option value="none">无异常</option></select>
                 </div>
+                <div class="toolbar-group users-selection">
+                  <span id="userSelectionCount">已选 0 人</span>
+                  <button class="button secondary" id="selectFilteredUsers" type="button">全选筛选</button>
+                  <button class="button" id="broadcastNotice" type="button" disabled>发通知</button>
+                  <button class="button secondary" id="resetSelectedNotices" type="button" disabled>停止</button>
+                </div>
                 <div class="toolbar-group">
                   <select class="compact" id="userSortKey" aria-label="排序字段"><option value="totalBytes">总量</option><option value="lastSeenAt">最近上报</option><option value="name">姓名</option><option value="subscriptionState">订阅</option><option value="devices">设备</option><option value="uploadBytes">上传</option><option value="downloadBytes">下载</option><option value="anomalies">异常</option></select>
                   <select class="compact" id="userSortDirection" aria-label="排序方向"><option value="desc">降序</option><option value="asc">升序</option></select>
                 </div>
-              </div>
-              <div class="users-selection">
-                <span id="userSelectionCount">已选 0 人</span>
-                <button class="button secondary" id="selectFilteredUsers" type="button">全选筛选</button>
-                <button class="button" id="broadcastNotice" type="button" disabled>发通知</button>
-                <button class="button secondary" id="resetSelectedNotices" type="button" disabled>停止</button>
               </div>
               <div class="table-wrap">
                 <table class="users-table">
