@@ -6,7 +6,8 @@ import { BrandMark } from '../components/BrandMark';
 import { DashboardPanel } from '../components/DashboardPanel';
 import { PowerButton } from '../components/PowerButton';
 import { WorkspaceHeader } from '../components/WorkspaceHeader';
-import { isActionErrorMessage } from '../actionMessages';
+import { isActionErrorMessage, isActionNoticeMessage } from '../actionMessages';
+import { formatUpdateUserMessage, toUserFacingDiagnostic, toVisibleDiagnosticText } from '../../shared/userFacingCopy';
 
 type HomeProps = {
   usageMode: UsageMode;
@@ -85,6 +86,11 @@ function EasyHome(props: HomeProps) {
           </button>
         </div>
         <div className="easy-notice-stack">
+          {isActionNoticeMessage(props.message) && (
+            <aside className="easy-info-notice" role="status" aria-live="polite" aria-atomic="true">
+              <strong>{props.message}</strong>
+            </aside>
+          )}
           {isActionErrorMessage(props.message) && (
             <aside className="easy-error-notice" role="alert" aria-atomic="true">
               <strong>{props.message}</strong>
@@ -149,7 +155,7 @@ function EasyUpdateNotice({
           ? update.failureKind === 'refresh-check-failed'
             ? '未能确认最新版，请重试'
             : update.message
-              ? '安装未开始，请重试'
+              ? formatUpdateUserMessage(update) || '安装未开始，请重试'
               : `已下载 ${version ?? '新版本'}`
           : downloading
             ? update.message
@@ -162,7 +168,7 @@ function EasyUpdateNotice({
                     ? '下载完整包'
                     : '下载更新'
             : failed
-              ? '安装未完成，请重新检查'
+              ? formatUpdateUserMessage(update) || '安装未完成，请重新检查'
               : version
                 ? `发现 ${version}`
                 : '发现更新';
@@ -241,8 +247,14 @@ function AdvancedHome(props: HomeProps) {
   const logLines = diagnosticsLogs.slice(-7).map(toVisibleDiagnosticText);
   const diagnosticsLogRef = useRef<HTMLDivElement>(null);
   const rawDiagnosticMessage =
-    (isActionErrorMessage(props.message) ? props.message : undefined) || props.snapshot.diagnostics.lastError;
-  const diagnosticMessage = rawDiagnosticMessage ? toVisibleDiagnosticText(rawDiagnosticMessage) : undefined;
+    isActionErrorMessage(props.message) || isActionNoticeMessage(props.message)
+      ? props.message
+      : props.snapshot.diagnostics.lastError;
+  const diagnosticMessage = rawDiagnosticMessage
+    ? isActionNoticeMessage(rawDiagnosticMessage)
+      ? rawDiagnosticMessage
+      : toUserFacingDiagnostic(rawDiagnosticMessage)
+    : undefined;
 
   useEffect(() => {
     const diagnosticsLog = diagnosticsLogRef.current;
@@ -482,21 +494,6 @@ function formatAvailability(availability: AppSnapshot['nodeHealth']['availabilit
 function getDisplayUpdateProgress(update: AppSnapshot['update']): number {
   if (typeof update.percent !== 'number') return 0;
   return Math.max(0, Math.min(100, Math.round(update.percent)));
-}
-
-function toVisibleDiagnosticText(value: string): string {
-  const registryCommandIndex = value.search(/Command failed:\s*(?:"[^"]*[\\/])?reg\.exe\b/i);
-  if (registryCommandIndex >= 0) {
-    return `${value.slice(0, registryCommandIndex)}系统代理设置读取失败`.trim();
-  }
-
-  const undecodableIndex = value.search(/�{2,}/);
-  if (undecodableIndex < 0) return value;
-  const context = value
-    .slice(0, undecodableIndex)
-    .replace(/[\s↩:：;；-]+$/u, '')
-    .trim();
-  return context ? `${context}: 系统返回的错误信息无法识别` : '系统返回的错误信息无法识别';
 }
 
 function formatUpdateTransfer(update: AppSnapshot['update']): string {

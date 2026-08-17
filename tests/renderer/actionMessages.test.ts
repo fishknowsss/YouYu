@@ -9,7 +9,10 @@ describe('renderer action messages', () => {
     }
   );
 
-  it.each(['已同步', '已保存', '已修复', '已取消', '已停止'])('keeps %s as a non-error status', (message) => {
-    expect(isActionErrorMessage(message)).toBe(false);
-  });
+  it.each(['已同步', '已保存', '已修复', '已取消', '已停止', '日本节点均不可用，已自动切换至美国节点'])(
+    'keeps %s as a non-error status',
+    (message) => {
+      expect(isActionErrorMessage(message)).toBe(false);
+    }
+  );
 });

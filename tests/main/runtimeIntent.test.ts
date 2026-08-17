@@ -25,14 +25,14 @@ describe('createRuntimeIntentController', () => {
   });
 
   it('does not create a user start intent until the registration guard passes', async () => {
-    const source = await readFile('src/main/index.ts', 'utf8');
+    const source = await readFile('src/main/proxyStart.ts', 'utf8');
     const startProxy = source.slice(
-      source.indexOf('async function performStartProxy'),
-      source.indexOf('async function selectBestAutoNode')
+      source.indexOf('export async function runProxyStartSequence'),
+      source.indexOf('export function schedulePreferredAutoNodeRefinement')
     );
 
-    expect(startProxy.indexOf('await requireTrafficIdentity()')).toBeLessThan(
-      startProxy.indexOf('requestedIntentGeneration ?? runtimeIntent.requestStart()')
+    expect(startProxy.indexOf('await deps.requireTrafficIdentity()')).toBeLessThan(
+      startProxy.indexOf('deps.requestStartIntent(requestedIntentGeneration)')
     );
   });
 });

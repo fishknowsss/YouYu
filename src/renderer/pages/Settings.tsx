@@ -4,6 +4,7 @@ import { updateInstallingMessage } from '../../shared/updateProgress';
 import { SettingsSelect } from '../components/SettingsSelect';
 import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { isActionErrorMessage } from '../actionMessages';
+import { formatLegacyUpdateFailure, formatUpdateUserMessage } from '../../shared/userFacingCopy';
 
 type SettingsProps = {
   snapshot: AppSnapshot;
@@ -433,11 +434,11 @@ function formatUpdateStatus(update: AppSnapshot['update']): string {
   }
   if (update.status === 'downloaded') {
     if (update.failureKind === 'refresh-check-failed') return '未能确认最新版，请重试';
-    if (update.message) return '安装未开始，请重试';
+    if (update.message) return formatUpdateUserMessage(update) || '安装未开始，请重试';
     return update.downloadedVersion ? `已下载 ${update.downloadedVersion}` : '已下载';
   }
   if (update.status === 'not-available') return update.message || '已是最新';
-  if (update.status === 'failed') return formatUpdateFailure(update.message);
+  if (update.status === 'failed') return formatUpdateUserMessage(update) || formatLegacyUpdateFailure(update.message);
   if (update.status === 'installing') return update.message || updateInstallingMessage;
   return '待检查';
 }
@@ -458,23 +459,6 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-function formatUpdateFailure(message: string | undefined): string {
-  if (!message) return '失败：原因未知';
-  const channelFile = message.match(/(latest(?:-in|-no)?\.yml)/)?.[1];
-  if (message.includes('Cannot find') && channelFile) return `失败：GitHub Release 缺少 ${channelFile}`;
-  if (message.includes('404')) return '失败：GitHub Release 未发布或资源不存在';
-  if (
-    message.includes('ENOTFOUND') ||
-    message.includes('EAI_AGAIN') ||
-    message.includes('ERR_NAME_NOT_RESOLVED') ||
-    message.includes('fetch failed')
-  ) {
-    return '失败：无法连接 GitHub';
-  }
-  if (message.includes('net::ERR_INTERNET_DISCONNECTED')) return '失败：网络未连接';
-  return '失败：请稍后重试';
 }
 
 function getDisplayUpdateProgress(update: AppSnapshot['update']): number {

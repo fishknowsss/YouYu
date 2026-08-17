@@ -643,6 +643,35 @@ describe('RegistrationGate', () => {
   });
 });
 
+describe('easy home fallback notice', () => {
+  it('shows a region fallback as information without a repair button', () => {
+    const snapshot = createRegisteredRendererSnapshot();
+    const html = renderToStaticMarkup(
+      <Home
+        usageMode="easy"
+        snapshot={snapshot}
+        busy={false}
+        busyLabel=""
+        message="日本节点均不可用，已自动切换至美国节点"
+        onQuickStart={vi.fn()}
+        onStart={vi.fn()}
+        onStop={vi.fn()}
+        onRepair={vi.fn()}
+        onModeChange={vi.fn()}
+        onStrategyChange={vi.fn()}
+        onOpenNodes={vi.fn()}
+        onUsageModeChange={vi.fn()}
+        onInstallUpdate={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('easy-info-notice');
+    expect(html).toContain('日本节点均不可用，已自动切换至美国节点');
+    expect(html).not.toContain('easy-error-notice');
+    expect(html).not.toContain('修复');
+  });
+});
+
 describe('advanced home diagnostics', () => {
   it('keeps raw registry commands and undecodable Windows output out of the visible diagnostics', () => {
     const snapshot = createRegisteredRendererSnapshot();

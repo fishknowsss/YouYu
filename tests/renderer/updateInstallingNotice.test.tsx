@@ -238,7 +238,7 @@ describe('silent update installation notice', () => {
 
     await act(async () => root?.render(<Home {...createHomeProps(snapshot)} busy={false} busyLabel="" />));
 
-    expect(container.textContent).toContain('安装未开始，请重试');
+    expect(container.textContent).toContain('安装器未能启动，请重试');
     expect(findButton(container, '安装')?.disabled).toBe(false);
   });
 

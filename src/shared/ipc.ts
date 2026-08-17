@@ -240,7 +240,8 @@ export type AppUpdateStatus =
 
 export type AppUpdateDownloadPhase = 'downloading' | 'full-download' | 'verifying';
 
-export type AppUpdateFailureKind = 'refresh-check-failed' | 'installer-launch-failed';
+export type AppUpdateFailureKind =
+  'refresh-check-failed' | 'installer-launch-failed' | 'permission-denied' | 'download-failed';
 
 export type AppUpdateSnapshot = {
   currentVersion: string;

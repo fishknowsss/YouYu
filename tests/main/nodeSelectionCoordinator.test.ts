@@ -180,13 +180,14 @@ describe('NodeSelectionCoordinator', () => {
       source.indexOf('async function performPreferredAutoNode')
     );
     expect(preferredSelection).toContain('nodeSelectionCoordinator.coalesceAutomatic');
-    const startupSelection = source.slice(
-      source.indexOf("if (startedSettings.strategy === 'auto')"),
-      source.indexOf('trafficTracker.start()', source.indexOf("if (startedSettings.strategy === 'auto')"))
+    const startupSelection = await readFile('src/main/proxyStart.ts', 'utf8');
+    const startFlow = startupSelection.slice(
+      startupSelection.indexOf('export async function runProxyStartSequence'),
+      startupSelection.indexOf('export function schedulePreferredAutoNodeRefinement')
     );
-    expect(startupSelection.indexOf('isExpectedOperationCancellation(error)')).toBeLessThan(
-      startupSelection.indexOf('lifecycle.stop()')
-    );
+    expect(startFlow).toContain('schedulePreferredAutoNodeRefinement');
+    expect(startFlow).not.toContain('await deps.selectPreferredAutoNode');
+    expect(startupSelection).toContain('继续使用当前节点');
     expect(manualSelection.indexOf('nodeHealthCoordinator.invalidate()')).toBeLessThan(
       manualSelection.indexOf('nodeSelectionCoordinator.runUserAction')
     );

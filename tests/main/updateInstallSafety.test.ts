@@ -47,9 +47,7 @@ describe('update and exit lifecycle safety', () => {
 
     expect(recovery).toContain('lifecycle.resumeStarts()');
     expect(recovery).toContain('updateInstallerLaunchFailed = beforeQuitWasObserved');
-    expect(recovery).toContain(
-      "setUpdateSnapshot({ status: 'downloaded', message, failureKind: 'installer-launch-failed' })"
-    );
+    expect(recovery).toContain('failureKind: classifyUpdateInstallFailure(error)');
   });
 
   it('does not launch a deferred installer after recovery cancels that install attempt', async () => {

@@ -105,6 +105,8 @@ import { createCodexConnectionRecoveryCoordinator } from './codexConnectionRecov
 import { createPetVisibilityController } from './petVisibilityController';
 import { applyPetWindowTaskbarPolicy } from './petWindowPolicy';
 import { createRuntimeIntentController } from './runtimeIntent';
+import { runProxyStartSequence } from './proxyStart';
+import { classifyUpdateInstallFailure } from '../shared/userFacingCopy';
 import {
   buildProxyRelaunchArguments,
   resumeProxyAfterRelaunchArgument,
@@ -257,6 +259,7 @@ let subscriptionRevision = 0;
 const ipcOperations = new IpcOperationRegistry((error) => appendLog(`取消操作清理失败: ${formatError(error)}`));
 const runtimeIntent = createRuntimeIntentController();
 let lastError: string | undefined;
+let preferredAutoNodeRefineController: AbortController | undefined;
 let nodeSelectionNotice: AppSnapshot['nodeSelectionNotice'];
 const appLogs = new DiagnosticLogBuffer();
 const petFeatureEnabled = !__YOUYU_DISABLE_PET__;
@@ -920,7 +923,11 @@ function recoverFromUpdateInstallFailure(prefix: string, error: unknown) {
   lifecycle.resumeStarts();
   restartPetFullscreenProbe();
   appendLog(message);
-  setUpdateSnapshot({ status: 'downloaded', message, failureKind: 'installer-launch-failed' });
+  setUpdateSnapshot({
+    status: 'downloaded',
+    message,
+    failureKind: classifyUpdateInstallFailure(error)
+  });
   refreshTrayMenu();
   startRemoteConfigPolling();
   if (shouldRestartRuntime && restartIntentGeneration !== undefined) {
@@ -1785,52 +1792,51 @@ async function withTrayRefresh<T>(task: () => Promise<T>): Promise<T> {
 }
 
 async function performStartProxy(signal?: AbortSignal, requestedIntentGeneration?: number): Promise<AppSnapshot> {
-  throwIfAborted(signal);
-  throwIfNetworkRepairInProgress();
-  if (requestedIntentGeneration !== undefined) throwIfRuntimeIntentCanceled(requestedIntentGeneration);
-  await requireTrafficIdentity();
-  const intentGeneration = requestedIntentGeneration ?? runtimeIntent.requestStart();
-  throwIfRuntimeIntentCanceled(intentGeneration);
-  await syncRequiredRemoteConfig({ signal });
-  throwIfAborted(signal);
-  throwIfRuntimeIntentCanceled(intentGeneration);
-  await startLifecycleWithSafeRetry(signal, intentGeneration);
-  throwIfAborted(signal);
-  throwIfRuntimeIntentCanceled(intentGeneration);
-  await trafficRegistration.activatePending();
-  throwIfRuntimeIntentCanceled(intentGeneration);
-  try {
-    await syncRequiredRemoteConfig({
-      proxyUrl: getRuntimeTrafficProxyUrl(),
-      restartIfRunning: true,
-      signal,
-      intentGeneration
-    });
-  } catch (error) {
-    runtimeIntent.cancel();
-    await lifecycle.stop().catch((stopError) => appendLog(`云端配置未就绪后停止代理失败: ${formatError(stopError)}`));
-    throw error;
-  }
-  throwIfAborted(signal);
-  throwIfRuntimeIntentCanceled(intentGeneration);
-  const startedSettings = await settingsStore.read();
-  if (startedSettings.strategy === 'auto') {
-    try {
-      const selectedNode = await selectPreferredAutoNode({ signal });
-      appendLog(`已自动选择可用节点: ${selectedNode}`);
-    } catch (error) {
-      if (isExpectedOperationCancellation(error)) throw error;
-      await lifecycle.stop().catch((stopError) => appendLog(`地区策略失败后停止代理失败: ${formatError(stopError)}`));
-      throw error;
-    }
-  }
-  throwIfAborted(signal);
-  throwIfRuntimeIntentCanceled(intentGeneration);
-  trafficTracker.start();
-  trafficReporter.start();
-  clearLastError();
-  scheduleNodeHealthCheck(0);
-  return createSnapshot();
+  return runProxyStartSequence(
+    {
+      throwIfAborted,
+      throwIfNetworkRepairInProgress,
+      requireTrafficIdentity,
+      requestStartIntent: (requested) => requested ?? runtimeIntent.requestStart(),
+      throwIfIntentCanceled: throwIfRuntimeIntentCanceled,
+      isIntentCurrent: (generation) => runtimeIntent.isCurrent(generation),
+      syncRequiredRemoteConfig,
+      startLifecycle: startLifecycleWithSafeRetry,
+      activatePending: () => trafficRegistration.activatePending(),
+      getRuntimeTrafficProxyUrl,
+      stopLifecycle: () => lifecycle.stop(),
+      cancelIntent: () => runtimeIntent.cancel(),
+      createRefineSignal: beginPreferredAutoNodeRefine,
+      readSettings: () => settingsStore.read(),
+      selectPreferredAutoNode,
+      isExpectedCancellation: isExpectedOperationCancellation,
+      startTraffic: () => {
+        trafficTracker.start();
+        trafficReporter.start();
+      },
+      clearLastError,
+      scheduleNodeHealthCheck,
+      createSnapshot,
+      sendSnapshot: sendSnapshotToWindows,
+      appendLog,
+      formatError,
+      recordStartError: (error) => recordError('启动失败', error)
+    },
+    signal,
+    requestedIntentGeneration
+  );
+}
+
+function beginPreferredAutoNodeRefine(): AbortSignal {
+  abortPreferredAutoNodeRefine();
+  const controller = new AbortController();
+  preferredAutoNodeRefineController = controller;
+  return controller.signal;
+}
+
+function abortPreferredAutoNodeRefine(): void {
+  preferredAutoNodeRefineController?.abort(new Error('operation canceled'));
+  preferredAutoNodeRefineController = undefined;
 }
 
 function startProxy(signal?: AbortSignal): Promise<AppSnapshot> {
@@ -1992,6 +1998,7 @@ async function handleTrafficIdentityInvalidated(): Promise<void> {
 
 async function performStopProxy(signal?: AbortSignal): Promise<AppSnapshot> {
   signal?.throwIfAborted();
+  abortPreferredAutoNodeRefine();
   runtimeIntent.cancel();
   await trafficTracker.flush().catch((error) => appendLog(`流量统计失败: ${formatError(error)}`));
   signal?.throwIfAborted();
@@ -2237,6 +2244,7 @@ async function performTrafficIdentityRegistration(
 }
 
 async function cancelProxyStart(): Promise<void> {
+  abortPreferredAutoNodeRefine();
   runtimeIntent.cancel();
   await appRuntimeCoordinator.stop();
 }

@@ -233,7 +233,8 @@ describe('AppRuntimeCoordinator index integration', () => {
     );
 
     expect(start).toContain('return appRuntimeCoordinator.start(signal)');
-    expect(start).toContain('startLifecycleWithSafeRetry(signal, intentGeneration)');
+    expect(start).toContain('startLifecycle: startLifecycleWithSafeRetry');
+    expect(start).toContain('runProxyStartSequence');
     expect(stop).toContain('return appRuntimeCoordinator.stop()');
     expect(restart).toContain('return appRuntimeCoordinator.restart(signal)');
     expect(restart).toContain('restartLifecycleForIntent(intentGeneration, signal)');

@@ -183,7 +183,7 @@ describe('settings diagnostic export', () => {
         message
       };
 
-      expect(renderSettings('', snapshot)).toContain('失败：无法连接 GitHub');
+      expect(renderSettings('', snapshot)).toContain('下载失败，请检查网络后重试');
     }
   );
 

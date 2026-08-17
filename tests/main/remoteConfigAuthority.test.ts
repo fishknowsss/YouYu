@@ -55,21 +55,21 @@ describe('bound remote config authority', () => {
   });
 
   it('checks the required cloud binding both before startup and after pending activation', async () => {
-    const source = await readFile('src/main/index.ts', 'utf8');
+    const source = await readFile('src/main/proxyStart.ts', 'utf8');
     const startFlow = source.slice(
-      source.indexOf('async function performStartProxy'),
-      source.indexOf('function startProxy')
+      source.indexOf('export async function runProxyStartSequence'),
+      source.indexOf('export function schedulePreferredAutoNodeRefinement')
     );
 
-    expect(startFlow.match(/syncRequiredRemoteConfig\(/g)).toHaveLength(2);
-    expect(startFlow.indexOf('syncRequiredRemoteConfig({ signal })')).toBeLessThan(
-      startFlow.indexOf('startLifecycleWithSafeRetry')
+    expect(startFlow.match(/deps\.syncRequiredRemoteConfig\(/g)).toHaveLength(2);
+    expect(startFlow.indexOf('deps.syncRequiredRemoteConfig({ signal })')).toBeLessThan(
+      startFlow.indexOf('deps.startLifecycle(signal, intentGeneration)')
     );
-    expect(startFlow.indexOf('trafficRegistration.activatePending()')).toBeLessThan(
-      startFlow.lastIndexOf('syncRequiredRemoteConfig(')
+    expect(startFlow.indexOf('deps.activatePending()')).toBeLessThan(
+      startFlow.lastIndexOf('deps.syncRequiredRemoteConfig(')
     );
-    expect(startFlow).toContain('runtimeIntent.cancel();');
-    expect(startFlow).toContain('await lifecycle');
+    expect(startFlow).toContain('deps.cancelIntent()');
+    expect(startFlow).toContain('.stopLifecycle()');
   });
 
   it('treats sanitized remote transport failures as recoverable quiet-sync errors', async () => {

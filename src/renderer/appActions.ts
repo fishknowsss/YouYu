@@ -1,5 +1,6 @@
 import type { AppSnapshot, OperationRequest } from '../shared/ipc';
 import { isExpectedOperationCancellation } from '../shared/operationCancellation';
+import { getActionErrorMessage as formatSharedActionErrorMessage } from '../shared/userFacingCopy';
 import { createOperationRequest } from './operationRequest';
 
 export type OperationRequestTracker = {
@@ -152,44 +153,7 @@ function toAbortError(reason: unknown): Error {
 }
 
 export function getActionErrorMessage(error: unknown): string {
-  if (error instanceof ActionTimeoutError) return `${error.operation}超时`;
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes('operation timed out')) return '操作超时';
-  if (isExpectedOperationCancellation(error)) return '已取消';
-  if (message.includes('missing subscription url')) return '先填写订阅地址';
-  if (message.includes('no usable proxy node')) return '没有可用节点';
-  if (message.includes('no proxy nodes')) return '没有可用节点';
-  if (message.includes('核心接口未加载')) return '核心接口未加载';
-  if (message.includes('traffic endpoint not configured')) return '先配置后台地址';
-  if (message.includes('traffic identity required')) return '先完成登记';
-  if (message.includes('remote config sync required') || message.includes('请先同步云端配置')) {
-    return '请先同步云端配置';
-  }
-  if (
-    message.includes('managed config editing forbidden') ||
-    message.includes('remote config update failed: 403') ||
-    message.includes('未获配置修改权限')
-  ) {
-    return '此账号未获配置修改权限';
-  }
-  if (message.includes('missing traffic user name')) return '先填写姓名';
-  if (message.includes('missing traffic passphrase')) return '先填写口令';
-  if (message.includes('traffic activation failed: 403')) return '口令不对';
-  if (message.includes('traffic activation failed: 429')) return '请求太频繁';
-  if (message.includes('traffic activation failed: 5')) return '后台暂时不可用';
-  if (message.includes('remote config failed: 401') || message.includes('traffic report failed: 401'))
-    return '请重新登记';
-  if (
-    message.includes('signature required') ||
-    message.includes('invalid signature') ||
-    message.includes('stale signature')
-  )
-    return '请重新登记';
-  if (message.includes('traffic request timed out')) return '连接后台超时';
-  if (message.includes('fetch failed') || message.includes('Failed to fetch')) return '连接后台失败';
-  if (message.includes('mihomo api failed')) return '更新失败';
-  if (message.includes('mihomo controller')) return '启动失败';
-  return '操作失败';
+  return formatSharedActionErrorMessage(error);
 }
 
 export class ActionTimeoutError extends Error {
