@@ -318,6 +318,14 @@ export type AppSnapshot = {
   diagnostics: AppDiagnostics;
 };
 
+export type DesktopNoticeSnapshot = {
+  userNotice?: UserNotice;
+};
+
+export function toDesktopNoticeSnapshot(snapshot: Pick<AppSnapshot, 'userNotice'>): DesktopNoticeSnapshot {
+  return { userNotice: snapshot.userNotice };
+}
+
 export type YouYuApi = {
   getSnapshot: () => Promise<AppSnapshot>;
   onSnapshotUpdated: (listener: (snapshot: AppSnapshot) => void) => () => void;
@@ -356,9 +364,25 @@ export type YouYuApi = {
   installUpdate: () => Promise<AppSnapshot>;
 };
 
+export type DesktopNoticeApi = {
+  getSnapshot: () => Promise<DesktopNoticeSnapshot>;
+  onSnapshotUpdated: (listener: (snapshot: DesktopNoticeSnapshot) => void) => () => void;
+  acknowledgeUserNotice: (revision: number) => Promise<DesktopNoticeSnapshot>;
+};
+
+export type DesktopPetApi = Pick<
+  YouYuApi,
+  'onPetStateUpdated' | 'wavePet' | 'startPetDrag' | 'stopPetDrag' | 'setPetMousePassthrough' | 'showMainWindow'
+>;
+
+export type RendererWindowApi = YouYuApi | DesktopNoticeApi | DesktopPetApi;
+
 export const ipcChannels = {
   getSnapshot: 'youyu:get-snapshot',
   snapshotUpdated: 'youyu:snapshot-updated',
+  getDesktopNoticeSnapshot: 'youyu:get-desktop-notice-snapshot',
+  desktopNoticeUpdated: 'youyu:desktop-notice-updated',
+  acknowledgeDesktopNotice: 'youyu:acknowledge-desktop-notice',
   petStateUpdated: 'youyu:pet-state-updated',
   wavePet: 'youyu:wave-pet',
   startPetDrag: 'youyu:start-pet-drag',
@@ -389,3 +413,54 @@ export const ipcChannels = {
   checkForUpdates: 'youyu:check-for-updates',
   installUpdate: 'youyu:install-update'
 } as const;
+
+export type RendererWindowRole = 'main' | 'notice' | 'pet';
+
+const mainWindowInvokeChannels = new Set<string>([
+  ipcChannels.getSnapshot,
+  ipcChannels.wavePet,
+  ipcChannels.startPetDrag,
+  ipcChannels.stopPetDrag,
+  ipcChannels.setPetMousePassthrough,
+  ipcChannels.showMainWindow,
+  ipcChannels.start,
+  ipcChannels.stop,
+  ipcChannels.repair,
+  ipcChannels.selectNode,
+  ipcChannels.selectBestAutoNode,
+  ipcChannels.selectStrategy,
+  ipcChannels.setMode,
+  ipcChannels.testNode,
+  ipcChannels.testAllNodes,
+  ipcChannels.cancelNodeTests,
+  ipcChannels.testConnectivity,
+  ipcChannels.testAllConnectivity,
+  ipcChannels.closeConnections,
+  ipcChannels.updateSubscription,
+  ipcChannels.saveSettings,
+  ipcChannels.registerTrafficIdentity,
+  ipcChannels.acknowledgeUserNotice,
+  ipcChannels.wakeRemoteConfig,
+  ipcChannels.syncRemoteConfig,
+  ipcChannels.exportDiagnostics,
+  ipcChannels.cancelOperation,
+  ipcChannels.checkForUpdates,
+  ipcChannels.installUpdate
+]);
+const noticeWindowInvokeChannels = new Set<string>([
+  ipcChannels.getDesktopNoticeSnapshot,
+  ipcChannels.acknowledgeDesktopNotice
+]);
+const petWindowInvokeChannels = new Set<string>([
+  ipcChannels.wavePet,
+  ipcChannels.startPetDrag,
+  ipcChannels.stopPetDrag,
+  ipcChannels.setPetMousePassthrough,
+  ipcChannels.showMainWindow
+]);
+
+export function canWindowRoleInvokeIpc(role: RendererWindowRole, channel: string): boolean {
+  if (role === 'main') return mainWindowInvokeChannels.has(channel);
+  if (role === 'notice') return noticeWindowInvokeChannels.has(channel);
+  return petWindowInvokeChannels.has(channel);
+}

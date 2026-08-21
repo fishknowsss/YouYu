@@ -70,4 +70,11 @@ describe('IPC argument schemas', () => {
   it('rejects unknown channels so newly added routes fail closed until a schema exists', () => {
     expect(() => parseIpcArguments('youyu:unknown', [])).toThrow(/channel/);
   });
+
+  it('validates dedicated desktop-notice channels', () => {
+    expect(parseIpcArguments(ipcChannels.getDesktopNoticeSnapshot, [])).toEqual([]);
+    expect(parseIpcArguments(ipcChannels.acknowledgeDesktopNotice, [7])).toEqual([7]);
+    expect(() => parseIpcArguments(ipcChannels.getDesktopNoticeSnapshot, ['unexpected'])).toThrow(IpcArgumentError);
+    expect(() => parseIpcArguments(ipcChannels.acknowledgeDesktopNotice, [0])).toThrow(/revision/);
+  });
 });

@@ -1,8 +1,19 @@
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { describe, expect, it } from 'vitest';
-import { readFetchTextBounded, readIncomingMessageTextBounded } from '../../src/main/http/boundedBody';
+import {
+  assertTextByteLengthBounded,
+  readFetchTextBounded,
+  readIncomingMessageTextBounded
+} from '../../src/main/http/boundedBody';
 
 describe('bounded response bodies', () => {
+  it('bounds already-buffered text by encoded byte length', () => {
+    expect(() => assertTextByteLengthBounded('测速', { maxBytes: 6, scope: 'test' })).not.toThrow();
+    expect(() => assertTextByteLengthBounded('测速', { maxBytes: 5, scope: 'test' })).toThrowError(
+      expect.objectContaining({ code: 'RESPONSE_BODY_TOO_LARGE' })
+    );
+  });
+
   it('reads a fetch response whose byte length exactly matches the limit', async () => {
     const response = new Response('test', { headers: { 'content-length': '4' } });
 

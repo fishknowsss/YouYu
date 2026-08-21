@@ -10,7 +10,7 @@ export const EXTERNAL_RESPONSE_BODY_LIMITS = {
   trafficJson: 64 * 1024,
   remoteConfigJson: 256 * 1024,
   subscription: 8 * 1024 * 1024,
-  ipLookupJson: 32 * 1024
+  connectivityTrace: 32 * 1024
 } as const;
 
 export class ResponseBodyTooLargeError extends Error {
@@ -22,6 +22,13 @@ export class ResponseBodyTooLargeError extends Error {
   ) {
     super(`${scope} response exceeds the ${maxBytes}-byte limit`);
     this.name = 'ResponseBodyTooLargeError';
+  }
+}
+
+export function assertTextByteLengthBounded(text: string, options: BoundedBodyOptions): void {
+  const maxBytes = normalizeMaxBytes(options.maxBytes);
+  if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+    throw new ResponseBodyTooLargeError(options.scope, maxBytes);
   }
 }
 

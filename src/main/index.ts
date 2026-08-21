@@ -80,7 +80,9 @@ import {
   updateSubscriptionNodes
 } from './appActions';
 import {
+  canWindowRoleInvokeIpc,
   ipcChannels,
+  toDesktopNoticeSnapshot,
   type AppUpdateSnapshot,
   type AppSnapshot,
   type CurrentNodeHealth,
@@ -89,6 +91,7 @@ import {
   type OperationRequest,
   type ProxyNode,
   type RemoteControlConfig,
+  type RendererWindowRole,
   type StrategyGroup,
   type StrategyKey
 } from '../shared/ipc';
@@ -165,30 +168,22 @@ let updateRelaunchResumeStarted = false;
 let recoveredUpdateInstallFailureReported = false;
 let petWindow: BrowserWindow | null = null;
 let noticeWindow: BrowserWindow | null = null;
-const petIpcChannels = new Set<string>([
-  ipcChannels.getSnapshot,
-  ipcChannels.wavePet,
-  ipcChannels.startPetDrag,
-  ipcChannels.stopPetDrag,
-  ipcChannels.setPetMousePassthrough,
-  ipcChannels.showMainWindow
-]);
-const noticeIpcChannels = new Set<string>([ipcChannels.getSnapshot, ipcChannels.acknowledgeUserNotice]);
 const ipcMain: Pick<typeof electronIpcMain, 'handle'> = {
   handle(channel, listener) {
     return electronIpcMain.handle(channel, (event, ...args) => {
-      const trusted =
-        event.sender === mainWindow?.webContents ||
-        event.sender === petWindow?.webContents ||
-        event.sender === noticeWindow?.webContents;
-      if (!trusted || event.senderFrame !== event.sender.mainFrame || !isTrustedRendererUrl(event.senderFrame.url)) {
+      const role: RendererWindowRole | undefined =
+        event.sender === mainWindow?.webContents
+          ? 'main'
+          : event.sender === noticeWindow?.webContents
+            ? 'notice'
+            : event.sender === petWindow?.webContents
+              ? 'pet'
+              : undefined;
+      if (!role || event.senderFrame !== event.sender.mainFrame || !isTrustedRendererUrl(event.senderFrame.url)) {
         throw new Error('untrusted IPC sender');
       }
-      if (event.sender === petWindow?.webContents && !petIpcChannels.has(channel)) {
-        throw new Error('IPC channel is not available to the pet window');
-      }
-      if (event.sender === noticeWindow?.webContents && !noticeIpcChannels.has(channel)) {
-        throw new Error('IPC channel is not available to the notice window');
+      if (!canWindowRoleInvokeIpc(role, channel)) {
+        throw new Error(`IPC channel is not available to the ${role} window`);
       }
       return listener(event, ...parseIpcArguments(channel, args));
     });
@@ -1442,11 +1437,12 @@ async function createSnapshot(): Promise<AppSnapshot> {
 }
 
 function sendSnapshotToWindows(snapshot: AppSnapshot) {
-  BrowserWindow.getAllWindows().forEach((window) => {
-    if (!window.isDestroyed()) {
-      window.webContents.send(ipcChannels.snapshotUpdated, snapshot);
-    }
-  });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(ipcChannels.snapshotUpdated, snapshot);
+  }
+  if (noticeWindow && !noticeWindow.isDestroyed()) {
+    noticeWindow.webContents.send(ipcChannels.desktopNoticeUpdated, toDesktopNoticeSnapshot(snapshot));
+  }
   scheduleNoticeLayout(snapshot);
 }
 
@@ -2229,6 +2225,7 @@ async function repairNetworkAndRestartApp(): Promise<AppSnapshot> {
 
 function registerIpc() {
   ipcMain.handle(ipcChannels.getSnapshot, createSnapshot);
+  ipcMain.handle(ipcChannels.getDesktopNoticeSnapshot, async () => toDesktopNoticeSnapshot(await createSnapshot()));
   ipcMain.handle(ipcChannels.wavePet, async () => {
     return undefined;
   });
@@ -2505,6 +2502,12 @@ function registerIpc() {
     const snapshot = await createSnapshot();
     sendSnapshotToWindows(snapshot);
     return snapshot;
+  });
+  ipcMain.handle(ipcChannels.acknowledgeDesktopNotice, async (_event, revision) => {
+    await remoteConfigClient.acknowledgeNotice(revision, { proxyUrl: getRuntimeTrafficProxyUrl() });
+    const snapshot = await createSnapshot();
+    sendSnapshotToWindows(snapshot);
+    return toDesktopNoticeSnapshot(snapshot);
   });
   ipcMain.handle(ipcChannels.wakeRemoteConfig, async () => {
     wakeRemoteConfig();
@@ -3382,6 +3385,7 @@ async function createWindow() {
     backgroundColor: '#f5f0fb',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
+      additionalArguments: ['--youyu-window-role=main'],
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true,
@@ -3450,6 +3454,7 @@ async function createNoticeWindow(): Promise<BrowserWindow | undefined> {
     backgroundColor: '#00000000',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
+      additionalArguments: ['--youyu-window-role=notice'],
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true,
@@ -3517,6 +3522,7 @@ async function createPetWindow() {
     backgroundColor: '#00000000',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
+      additionalArguments: ['--youyu-window-role=pet'],
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true,

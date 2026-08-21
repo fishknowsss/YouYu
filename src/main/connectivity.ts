@@ -8,9 +8,26 @@ import type {
   ConnectivityStatus,
   ConnectivityTimings
 } from '../shared/ipc';
-import { EXTERNAL_RESPONSE_BODY_LIMITS, readFetchTextBounded } from './http/boundedBody';
-
+import { assertTextByteLengthBounded, EXTERNAL_RESPONSE_BODY_LIMITS } from './http/boundedBody';
 const execFileAsync = promisify(execFile);
+const regionNames = new Intl.DisplayNames(['zh-CN'], { type: 'region' });
+const curlMetricsBufferBytes = 8 * 1024;
+
+export type CurlProbeExecutor = (
+  command: string,
+  args: string[],
+  options: {
+    windowsHide: boolean;
+    maxBuffer: number;
+    signal?: AbortSignal;
+    encoding: 'utf8';
+  }
+) => Promise<{ stdout: string }>;
+
+const executeCurlProbe: CurlProbeExecutor = async (command, args, options) => {
+  const { stdout } = await execFileAsync(command, args, options);
+  return { stdout };
+};
 
 type ConnectivityService = {
   key: ConnectivityServiceKey;
@@ -245,12 +262,7 @@ export async function testConnectivity(
     const status = getServiceStatus(service.key, probe);
     const reachability = getReachability(service.key, probe);
     const trace = service.kind === 'trace' ? parseTraceData(probe.body) : {};
-    const region = trace.ip
-      ? await lookupIpCountry(trace.ip, options.signal).catch(() => {
-          throwIfConnectivityTestAborted(options.signal);
-          return formatTraceRegion(trace);
-        })
-      : undefined;
+    const region = formatTraceRegion(trace);
     throwIfConnectivityTestAborted(options.signal);
 
     return {
@@ -380,11 +392,20 @@ function findService(key: ConnectivityServiceKey): ConnectivityService {
   return service;
 }
 
-async function runCurlProbe(
+export async function runCurlProbe(
   url: string,
   mixedPort: number,
-  options: { captureBody: boolean; signal?: AbortSignal }
+  options: { captureBody: boolean; signal?: AbortSignal },
+  executeCurl: CurlProbeExecutor = executeCurlProbe
 ): Promise<CurlProbe> {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    throw new Error('connectivity probe requires a valid HTTPS URL');
+  }
+  if (target.protocol !== 'https:') throw new Error('connectivity probe requires HTTPS');
+
   const outputTarget = process.platform === 'win32' ? 'NUL' : '/dev/null';
   const args = [
     '--proxy',
@@ -398,18 +419,27 @@ async function runCurlProbe(
     '8',
     '--user-agent',
     'Mozilla/5.0 YouYu Connectivity Check',
+    ...(options.captureBody ? ['--max-filesize', String(EXTERNAL_RESPONSE_BODY_LIMITS.connectivityTrace)] : []),
     ...(options.captureBody ? [] : ['--output', outputTarget]),
     '--write-out',
     '\n__YOUYU_CURL_METRICS__\nhttp_code=%{http_code}\nurl_effective=%{url_effective}\nremote_ip=%{remote_ip}\ntime_connect=%{time_connect}\ntime_appconnect=%{time_appconnect}\ntime_starttransfer=%{time_starttransfer}\ntime_total=%{time_total}\n',
     url
   ];
   const curlCommand = process.platform === 'win32' ? 'curl.exe' : 'curl';
-  const { stdout } = await execFileAsync(curlCommand, args, {
+  const { stdout } = await executeCurl(curlCommand, args, {
     windowsHide: true,
-    maxBuffer: 1024 * 1024,
-    signal: options.signal
+    maxBuffer: (options.captureBody ? EXTERNAL_RESPONSE_BODY_LIMITS.connectivityTrace : 0) + curlMetricsBufferBytes,
+    signal: options.signal,
+    encoding: 'utf8'
   });
-  return parseCurlMetrics(stdout);
+  const probe = parseCurlMetrics(stdout);
+  if (options.captureBody) {
+    assertTextByteLengthBounded(probe.body ?? '', {
+      maxBytes: EXTERNAL_RESPONSE_BODY_LIMITS.connectivityTrace,
+      scope: 'connectivity trace'
+    });
+  }
+  return probe;
 }
 
 function throwIfConnectivityTestAborted(signal?: AbortSignal): void {
@@ -433,26 +463,10 @@ export function parseTraceData(body?: string): TraceData {
   return data;
 }
 
-async function lookupIpCountry(ip: string, signal?: AbortSignal): Promise<string | undefined> {
-  const response = await fetch(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country,query`, {
-    signal
-  });
-  const body = await readFetchTextBounded(response, {
-    maxBytes: EXTERNAL_RESPONSE_BODY_LIMITS.ipLookupJson,
-    scope: 'IP lookup',
-    signal
-  });
-  if (!response.ok) return undefined;
-  const data = JSON.parse(body) as {
-    status?: string;
-    country?: string;
-  };
-  if (data.status !== 'success') return undefined;
-  return data.country;
-}
-
 function formatTraceRegion(trace: TraceData): string | undefined {
-  return trace.loc;
+  const region = trace.loc?.trim().toUpperCase();
+  if (!region || !/^[A-Z]{2}$/.test(region)) return undefined;
+  return regionNames.of(region) ?? region;
 }
 
 async function findRecentConnection(

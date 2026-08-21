@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AppSnapshot } from '../shared/ipc';
+import type { DesktopNoticeApi, DesktopNoticeSnapshot } from '../shared/ipc';
 import { UserNoticeBanner } from './components/UserNoticeBanner';
 
 export function DesktopNoticeApp() {
-  const [snapshot, setSnapshot] = useState<AppSnapshot | undefined>();
+  const [snapshot, setSnapshot] = useState<DesktopNoticeSnapshot | undefined>();
   const initialSnapshotRequested = useRef(false);
   const mounted = useRef(false);
 
   useEffect(() => {
     mounted.current = true;
-    const api = window.youyu;
+    const api = window.youyu as DesktopNoticeApi | undefined;
     if (!api)
       return () => {
         mounted.current = false;
@@ -33,7 +33,7 @@ export function DesktopNoticeApp() {
   }, []);
 
   async function acknowledge(revision: number): Promise<boolean> {
-    const api = window.youyu;
+    const api = window.youyu as DesktopNoticeApi | undefined;
     if (!api) return false;
     const next = await api.acknowledgeUserNotice(revision);
     if (!next) return false;

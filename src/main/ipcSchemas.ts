@@ -12,6 +12,7 @@ import {
 
 const noArgumentChannels = new Set<string>([
   ipcChannels.getSnapshot,
+  ipcChannels.getDesktopNoticeSnapshot,
   ipcChannels.wavePet,
   ipcChannels.startPetDrag,
   ipcChannels.showMainWindow,
@@ -126,6 +127,7 @@ export function parseIpcArguments(channel: string, args: unknown[]): unknown[] {
       requireArgumentCount(channel, args, 1);
       return [parseTrafficRegistration(channel, args[0])];
     case ipcChannels.acknowledgeUserNotice:
+    case ipcChannels.acknowledgeDesktopNotice:
       requireArgumentCount(channel, args, 1);
       return [parsePositiveSafeInteger(channel, 'revision', args[0])];
     case ipcChannels.cancelOperation:

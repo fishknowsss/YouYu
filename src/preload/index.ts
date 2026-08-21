@@ -1,50 +1,92 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { ipcChannels, type DesktopPetState, type YouYuApi } from '../shared/ipc';
+import {
+  ipcChannels,
+  type DesktopNoticeApi,
+  type DesktopPetApi,
+  type RendererWindowApi,
+  type RendererWindowRole,
+  type YouYuApi
+} from '../shared/ipc';
 
-const api: YouYuApi = {
-  getSnapshot: () => ipcRenderer.invoke(ipcChannels.getSnapshot),
-  onSnapshotUpdated: (listener) => {
-    const handler = (_event: Electron.IpcRendererEvent, snapshot: Parameters<typeof listener>[0]) => {
-      listener(snapshot);
-    };
-    ipcRenderer.on(ipcChannels.snapshotUpdated, handler);
-    return () => ipcRenderer.off(ipcChannels.snapshotUpdated, handler);
-  },
-  onPetStateUpdated: (listener) => {
-    const handler = (_event: Electron.IpcRendererEvent, state: DesktopPetState) => {
-      listener(state);
-    };
-    ipcRenderer.on(ipcChannels.petStateUpdated, handler);
-    return () => ipcRenderer.off(ipcChannels.petStateUpdated, handler);
-  },
-  wavePet: () => ipcRenderer.invoke(ipcChannels.wavePet),
-  startPetDrag: () => ipcRenderer.invoke(ipcChannels.startPetDrag),
-  stopPetDrag: (moved) => ipcRenderer.invoke(ipcChannels.stopPetDrag, moved),
-  setPetMousePassthrough: (passthrough) => ipcRenderer.invoke(ipcChannels.setPetMousePassthrough, passthrough),
-  showMainWindow: () => ipcRenderer.invoke(ipcChannels.showMainWindow),
-  start: (request) => ipcRenderer.invoke(ipcChannels.start, request),
-  stop: (request) => ipcRenderer.invoke(ipcChannels.stop, request),
-  repair: (request) => ipcRenderer.invoke(ipcChannels.repair, request),
-  selectNode: (name) => ipcRenderer.invoke(ipcChannels.selectNode, name),
-  selectBestAutoNode: (request) => ipcRenderer.invoke(ipcChannels.selectBestAutoNode, request),
-  selectStrategy: (strategy) => ipcRenderer.invoke(ipcChannels.selectStrategy, strategy),
-  setMode: (mode) => ipcRenderer.invoke(ipcChannels.setMode, mode),
-  testNode: (name) => ipcRenderer.invoke(ipcChannels.testNode, name),
-  testAllNodes: () => ipcRenderer.invoke(ipcChannels.testAllNodes),
-  cancelNodeTests: () => ipcRenderer.invoke(ipcChannels.cancelNodeTests),
-  testConnectivity: (key, request) => ipcRenderer.invoke(ipcChannels.testConnectivity, key, request),
-  testAllConnectivity: () => ipcRenderer.invoke(ipcChannels.testAllConnectivity),
-  closeConnections: () => ipcRenderer.invoke(ipcChannels.closeConnections),
-  updateSubscription: (request) => ipcRenderer.invoke(ipcChannels.updateSubscription, request),
-  saveSettings: (settings, intent, request) => ipcRenderer.invoke(ipcChannels.saveSettings, settings, intent, request),
-  registerTrafficIdentity: (input) => ipcRenderer.invoke(ipcChannels.registerTrafficIdentity, input),
-  acknowledgeUserNotice: (revision) => ipcRenderer.invoke(ipcChannels.acknowledgeUserNotice, revision),
-  wakeRemoteConfig: () => ipcRenderer.invoke(ipcChannels.wakeRemoteConfig),
-  syncRemoteConfig: (request) => ipcRenderer.invoke(ipcChannels.syncRemoteConfig, request),
-  exportDiagnostics: () => ipcRenderer.invoke(ipcChannels.exportDiagnostics),
-  cancelOperation: (requestId) => ipcRenderer.invoke(ipcChannels.cancelOperation, requestId),
-  checkForUpdates: () => ipcRenderer.invoke(ipcChannels.checkForUpdates),
-  installUpdate: () => ipcRenderer.invoke(ipcChannels.installUpdate)
-};
+type IpcRendererBridge = Pick<typeof ipcRenderer, 'invoke' | 'on' | 'off'>;
 
-contextBridge.exposeInMainWorld('youyu', api);
+function subscribe<T>(renderer: IpcRendererBridge, channel: string, listener: (value: T) => void): () => void {
+  const handler = (_event: Electron.IpcRendererEvent, value: T) => listener(value);
+  renderer.on(channel, handler);
+  return () => renderer.off(channel, handler);
+}
+
+function createMainWindowApi(renderer: IpcRendererBridge): YouYuApi {
+  return {
+    getSnapshot: () => renderer.invoke(ipcChannels.getSnapshot),
+    onSnapshotUpdated: (listener) => subscribe(renderer, ipcChannels.snapshotUpdated, listener),
+    onPetStateUpdated: (listener) => subscribe(renderer, ipcChannels.petStateUpdated, listener),
+    wavePet: () => renderer.invoke(ipcChannels.wavePet),
+    startPetDrag: () => renderer.invoke(ipcChannels.startPetDrag),
+    stopPetDrag: (moved) => renderer.invoke(ipcChannels.stopPetDrag, moved),
+    setPetMousePassthrough: (passthrough) => renderer.invoke(ipcChannels.setPetMousePassthrough, passthrough),
+    showMainWindow: () => renderer.invoke(ipcChannels.showMainWindow),
+    start: (request) => renderer.invoke(ipcChannels.start, request),
+    stop: (request) => renderer.invoke(ipcChannels.stop, request),
+    repair: (request) => renderer.invoke(ipcChannels.repair, request),
+    selectNode: (name) => renderer.invoke(ipcChannels.selectNode, name),
+    selectBestAutoNode: (request) => renderer.invoke(ipcChannels.selectBestAutoNode, request),
+    selectStrategy: (strategy) => renderer.invoke(ipcChannels.selectStrategy, strategy),
+    setMode: (mode) => renderer.invoke(ipcChannels.setMode, mode),
+    testNode: (name) => renderer.invoke(ipcChannels.testNode, name),
+    testAllNodes: () => renderer.invoke(ipcChannels.testAllNodes),
+    cancelNodeTests: () => renderer.invoke(ipcChannels.cancelNodeTests),
+    testConnectivity: (key, request) => renderer.invoke(ipcChannels.testConnectivity, key, request),
+    testAllConnectivity: () => renderer.invoke(ipcChannels.testAllConnectivity),
+    closeConnections: () => renderer.invoke(ipcChannels.closeConnections),
+    updateSubscription: (request) => renderer.invoke(ipcChannels.updateSubscription, request),
+    saveSettings: (settings, intent, request) => renderer.invoke(ipcChannels.saveSettings, settings, intent, request),
+    registerTrafficIdentity: (input) => renderer.invoke(ipcChannels.registerTrafficIdentity, input),
+    acknowledgeUserNotice: (revision) => renderer.invoke(ipcChannels.acknowledgeUserNotice, revision),
+    wakeRemoteConfig: () => renderer.invoke(ipcChannels.wakeRemoteConfig),
+    syncRemoteConfig: (request) => renderer.invoke(ipcChannels.syncRemoteConfig, request),
+    exportDiagnostics: () => renderer.invoke(ipcChannels.exportDiagnostics),
+    cancelOperation: (requestId) => renderer.invoke(ipcChannels.cancelOperation, requestId),
+    checkForUpdates: () => renderer.invoke(ipcChannels.checkForUpdates),
+    installUpdate: () => renderer.invoke(ipcChannels.installUpdate)
+  };
+}
+
+function createDesktopNoticeApi(renderer: IpcRendererBridge): DesktopNoticeApi {
+  return {
+    getSnapshot: () => renderer.invoke(ipcChannels.getDesktopNoticeSnapshot),
+    onSnapshotUpdated: (listener) => subscribe(renderer, ipcChannels.desktopNoticeUpdated, listener),
+    acknowledgeUserNotice: (revision) => renderer.invoke(ipcChannels.acknowledgeDesktopNotice, revision)
+  };
+}
+
+function createDesktopPetApi(renderer: IpcRendererBridge): DesktopPetApi {
+  return {
+    onPetStateUpdated: (listener) => subscribe(renderer, ipcChannels.petStateUpdated, listener),
+    wavePet: () => renderer.invoke(ipcChannels.wavePet),
+    startPetDrag: () => renderer.invoke(ipcChannels.startPetDrag),
+    stopPetDrag: (moved) => renderer.invoke(ipcChannels.stopPetDrag, moved),
+    setPetMousePassthrough: (passthrough) => renderer.invoke(ipcChannels.setPetMousePassthrough, passthrough),
+    showMainWindow: () => renderer.invoke(ipcChannels.showMainWindow)
+  };
+}
+
+export function createWindowApi(
+  role: RendererWindowRole,
+  renderer: IpcRendererBridge = ipcRenderer
+): RendererWindowApi {
+  if (role === 'notice') return createDesktopNoticeApi(renderer);
+  if (role === 'pet') return createDesktopPetApi(renderer);
+  return createMainWindowApi(renderer);
+}
+
+export function resolveWindowRole(args: readonly string[]): RendererWindowRole {
+  const prefix = '--youyu-window-role=';
+  const roles = args.filter((arg) => arg.startsWith(prefix)).map((arg) => arg.slice(prefix.length));
+  if (roles.length !== 1 || !['main', 'notice', 'pet'].includes(roles[0] ?? '')) {
+    throw new Error('invalid YouYu renderer window role');
+  }
+  return roles[0] as RendererWindowRole;
+}
+
+contextBridge.exposeInMainWorld('youyu', createWindowApi(resolveWindowRole(process.argv)));

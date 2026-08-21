@@ -4,8 +4,10 @@ import {
   parseCurlMetrics,
   parseTraceData,
   probeProxyExitRegionCode,
+  runCurlProbe,
   testAllConnectivity,
-  testConnectivity
+  testConnectivity,
+  type CurlProbeExecutor
 } from '../../src/main/connectivity';
 
 afterEach(() => {
@@ -67,6 +69,52 @@ describe('probeProxyExitRegionCode', () => {
       7890,
       expect.objectContaining({ captureBody: true })
     );
+  });
+});
+
+describe('curl probe network boundary', () => {
+  it('rejects a non-HTTPS target before starting curl', async () => {
+    const executeCurl = vi.fn<CurlProbeExecutor>();
+
+    await expect(runCurlProbe('http://example.com/trace', 7890, { captureBody: true }, executeCurl)).rejects.toThrow(
+      'connectivity probe requires HTTPS'
+    );
+    expect(executeCurl).not.toHaveBeenCalled();
+  });
+
+  it('rejects a captured response body above the trace limit', async () => {
+    const executeCurl = vi.fn<CurlProbeExecutor>(async () => ({
+      stdout: `${'a'.repeat(32 * 1024 + 1)}\n__YOUYU_CURL_METRICS__\nhttp_code=200\nurl_effective=https://example.com/trace\n`
+    }));
+
+    await expect(
+      runCurlProbe('https://example.com/trace', 7890, { captureBody: true }, executeCurl)
+    ).rejects.toMatchObject({ code: 'RESPONSE_BODY_TOO_LARGE' });
+  });
+
+  it('routes HTTPS through the active Mihomo proxy with bounded timeouts and cancellation', async () => {
+    const controller = new AbortController();
+    const executeCurl = vi.fn<CurlProbeExecutor>(async () => ({
+      stdout:
+        'ip=203.0.113.10\nloc=JP\n\n__YOUYU_CURL_METRICS__\nhttp_code=200\nurl_effective=https://example.com/trace\n'
+    }));
+
+    await runCurlProbe(
+      'https://example.com/trace',
+      7891,
+      { captureBody: true, signal: controller.signal },
+      executeCurl
+    );
+
+    const [command, args, options] = executeCurl.mock.calls[0] ?? [];
+    const valueAfter = (flag: string) => args?.[args.indexOf(flag) + 1];
+    expect(command).toMatch(/^curl(?:\.exe)?$/);
+    expect(valueAfter('--proxy')).toBe('http://127.0.0.1:7891');
+    expect(valueAfter('--max-time')).toBe('20');
+    expect(valueAfter('--connect-timeout')).toBe('8');
+    expect(valueAfter('--max-filesize')).toBe(String(32 * 1024));
+    expect(args?.at(-1)).toBe('https://example.com/trace');
+    expect(options).toMatchObject({ signal: controller.signal, maxBuffer: 40 * 1024, encoding: 'utf8' });
   });
 });
 
@@ -165,75 +213,11 @@ describe('testConnectivity cancellation', () => {
     expect(runProbe.mock.calls.every((call) => call[2].signal === controller.signal)).toBe(true);
   });
 
-  it('does not turn cancellation during the Cloudflare IP lookup into a successful result', async () => {
-    const controller = new AbortController();
-    let lookupStartedResolve: (() => void) | undefined;
-    const lookupStarted = new Promise<void>((resolve) => {
-      lookupStartedResolve = resolve;
-    });
-    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith('http://127.0.0.1:')) return Response.json({ connections: [] });
-      lookupStartedResolve?.();
-      return new Promise<Response>((_resolve, reject) => {
-        const abort = () => reject(init?.signal?.reason ?? new DOMException('Aborted', 'AbortError'));
-        if (init?.signal?.aborted) abort();
-        else init?.signal?.addEventListener('abort', abort, { once: true });
-      });
-    });
+  it('maps the Cloudflare trace location locally without an extra geography request', async () => {
+    const fetcher = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>(async () =>
+      Response.json({ connections: [] })
+    );
     vi.stubGlobal('fetch', fetcher);
-    const pending = testConnectivity(
-      {
-        getMixedPort: () => 7890,
-        getControllerPort: () => 9090,
-        getControllerSecret: async () => 'secret',
-        isRunning: () => true
-      },
-      'cloudflare',
-      {
-        signal: controller.signal,
-        runProbe: async () => ({
-          httpCode: 200,
-          finalUrl: 'https://www.cloudflare.com/cdn-cgi/trace',
-          body: 'ip=126.63.231.113\nloc=JP\ncolo=NRT\n',
-          timings: { totalMs: 120 }
-        })
-      }
-    );
-    await lookupStarted;
-
-    controller.abort(new Error('IP lookup canceled'));
-
-    await expect(pending).rejects.toThrow('IP lookup canceled');
-    expect(fetcher).toHaveBeenLastCalledWith(
-      'http://ip-api.com/json/126.63.231.113?fields=status,country,query',
-      expect.objectContaining({ signal: controller.signal })
-    );
-  });
-});
-
-describe('connectivity response limits', () => {
-  it('cancels an oversized external IP lookup and falls back to the trace region', async () => {
-    let canceledWith: unknown;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: string | URL | Request) => {
-        if (String(input).startsWith('http://127.0.0.1:')) return Response.json({ connections: [] });
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode('{"status":"success","country":"Oversized"}'));
-              controller.close();
-            },
-            cancel(reason) {
-              canceledWith = reason;
-            }
-          }),
-          { status: 200, headers: { 'content-length': String(32 * 1024 + 1) } }
-        );
-      })
-    );
-
     const result = await testConnectivity(
       {
         getMixedPort: () => 7890,
@@ -252,8 +236,9 @@ describe('connectivity response limits', () => {
       }
     );
 
-    expect(result.region).toBe('JP');
-    expect(canceledWith).toMatchObject({ code: 'RESPONSE_BODY_TOO_LARGE' });
+    expect(result.region).toBe('日本');
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe('http://127.0.0.1:9090/connections');
   });
 });
 
