@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +29,14 @@ export function getExpectedPublicAssetNames(version, sourceName) {
   ].sort();
 }
 
+export function resolveReleaseSourceArchiveName(names, version) {
+  assertVersion(version);
+  const pattern = new RegExp(`^YouYu-${escapeRegExp(version)}-Mihomo-v[0-9A-Za-z.-]+-source\\.tar\\.gz$`);
+  const matches = names.filter((name) => typeof name === 'string' && pattern.test(name));
+  if (matches.length !== 1) throw new Error(`Expected exactly one Mihomo source archive, found ${matches.length}`);
+  return matches[0];
+}
+
 export function describeEffectiveProxy(environment = process.env) {
   const entry = [
     ['HTTPS_PROXY', environment.HTTPS_PROXY ?? environment.https_proxy],
@@ -47,12 +56,15 @@ export function describeEffectiveProxy(environment = process.env) {
   }
 }
 
-export function validateReleaseAssetNames(release, expectedNames) {
+export function validateReleaseAssetNames(release, expectedNames, expectedTag) {
   if (!release || typeof release !== 'object' || !Array.isArray(release.assets)) {
     throw new Error('GitHub Release API response does not contain an asset list');
   }
   if (release.draft) throw new Error('GitHub Release is still a draft');
   if (release.prerelease) throw new Error('GitHub Release is marked as a prerelease');
+  if (expectedTag && release.tag_name !== expectedTag) {
+    throw new Error(`Remote release tag is ${String(release.tag_name)}`);
+  }
   const actualNames = release.assets
     .map((asset) => asset?.name)
     .filter((name) => typeof name === 'string')
@@ -62,23 +74,64 @@ export function validateReleaseAssetNames(release, expectedNames) {
       `Remote release asset list mismatch\nexpected: ${expectedNames.join(', ')}\nactual: ${actualNames.join(', ')}`
     );
   }
+  if (expectedTag) {
+    for (const asset of release.assets) {
+      if (!Number.isSafeInteger(asset.size) || asset.size < 1) {
+        throw new Error(`${asset.name} has invalid remote size metadata`);
+      }
+      let downloadUrl;
+      try {
+        downloadUrl = new URL(asset.browser_download_url);
+      } catch {
+        throw new Error(`${asset.name} has invalid download URL`);
+      }
+      const expectedPath = `/${repository}/releases/download/${expectedTag}/${asset.name}`;
+      if (
+        downloadUrl.protocol !== 'https:' ||
+        downloadUrl.hostname !== 'github.com' ||
+        downloadUrl.username ||
+        downloadUrl.password ||
+        downloadUrl.pathname !== expectedPath ||
+        downloadUrl.search ||
+        downloadUrl.hash
+      ) {
+        throw new Error(`${asset.name} has invalid download URL`);
+      }
+    }
+  }
   return release.assets;
 }
 
-export function validateChannelMetadata(name, source, version) {
+export function validateChannelMetadata(name, source, version, expectedInstaller) {
   const metadata = parseYaml(source);
   if (!metadata || typeof metadata !== 'object') throw new Error(`${name} is not valid update metadata`);
   if (String(metadata.version) !== version) throw new Error(`${name} points to version ${String(metadata.version)}`);
-  const expectedInstaller =
-    name === 'latest-in.yml'
-      ? `YouYu-${version}-x64-in.exe`
-      : name === 'latest-no.yml'
-        ? `YouYu-${version}-x64-no.exe`
-        : `YouYu-${version}-x64.exe`;
-  const paths = [metadata.path, ...(Array.isArray(metadata.files) ? metadata.files.map((file) => file?.url) : [])];
-  if (!paths.some((value) => value === expectedInstaller)) {
-    throw new Error(`${name} does not point to ${expectedInstaller}`);
+  const installerName = resolveChannelInstallerName(name, version);
+  const files = Array.isArray(metadata.files) ? metadata.files : [];
+  const fileUrls = files.map((file) => file?.url);
+  if (metadata.path !== installerName) {
+    throw new Error(`${name} does not point to ${installerName}`);
   }
+  if (JSON.stringify(fileUrls) !== JSON.stringify([installerName])) {
+    throw new Error(`${name} files do not contain only ${installerName}`);
+  }
+  if (
+    !expectedInstaller ||
+    typeof expectedInstaller.sha512 !== 'string' ||
+    !Number.isSafeInteger(expectedInstaller.size)
+  ) {
+    throw new Error(`${name} expected installer metadata is invalid`);
+  }
+  if (metadata.sha512 !== expectedInstaller.sha512)
+    throw new Error(`${name} top-level SHA512 does not match installer`);
+  if (files[0]?.sha512 !== expectedInstaller.sha512) throw new Error(`${name} file SHA512 does not match installer`);
+  if (files[0]?.size !== expectedInstaller.size) throw new Error(`${name} file size does not match installer`);
+}
+
+export function resolveCurlRuntime(platform = process.platform) {
+  return platform === 'win32'
+    ? { command: 'curl.exe', platformArgs: ['--ssl-no-revoke'] }
+    : { command: 'curl', platformArgs: [] };
 }
 
 export function parseCurlMetrics(output) {
@@ -113,7 +166,6 @@ export async function preflightReleaseCdn({ temporaryDirectory, environment = pr
       [
         '--silent',
         '--show-error',
-        '--ssl-no-revoke',
         '--fail',
         '--location',
         '--retry',
@@ -161,11 +213,19 @@ export async function preflightReleaseCdn({ temporaryDirectory, environment = pr
   }
 }
 
-export async function verifyRemoteRelease({ version = packageJson.version, root = process.cwd() } = {}) {
+export async function verifyRemoteRelease({
+  version = packageJson.version,
+  root = process.cwd(),
+  dependencies = {}
+} = {}) {
   assertVersion(version);
+  const {
+    preflightReleaseCdn: runPreflight = preflightReleaseCdn,
+    downloadGitHubApiFile: downloadApiFile = downloadGitHubApiFile,
+    downloadLargeFile: downloadAsset = downloadLargeFile
+  } = dependencies;
   const releaseDir = join(root, 'release');
-  const manifest = JSON.parse(await readFile(join(root, 'resources/mihomo/win-x64/manifest.json'), 'utf8'));
-  const sourceName = manifest.sourceArchive.releaseAssetNameTemplate.replace('${appVersion}', version);
+  const sourceName = resolveReleaseSourceArchiveName(await readdir(releaseDir), version);
   const expectedNames = getExpectedPublicAssetNames(version, sourceName);
   await verifyReleaseSha256Manifest({ releaseDir, version });
 
@@ -173,14 +233,14 @@ export async function verifyRemoteRelease({ version = packageJson.version, root 
   try {
     const route = describeEffectiveProxy();
     console.log(`CDN route: ${route.label}`);
-    const preflight = await preflightReleaseCdn({ temporaryDirectory });
+    const preflight = await runPreflight({ temporaryDirectory });
     console.log(`CDN preflight: ${formatRate(preflight.bytesPerSecond)} via ${preflight.route}`);
 
     const releaseJsonPath = join(temporaryDirectory, 'release.json');
-    await downloadGitHubApiFile(`${apiBaseUrl}/tags/v${version}`, releaseJsonPath);
+    await downloadApiFile(`${apiBaseUrl}/tags/v${version}`, releaseJsonPath);
     const release = JSON.parse(await readFile(releaseJsonPath, 'utf8'));
     if (release.tag_name !== `v${version}`) throw new Error(`Remote release tag is ${String(release.tag_name)}`);
-    const assets = validateReleaseAssetNames(release, expectedNames);
+    const assets = validateReleaseAssetNames(release, expectedNames, `v${version}`);
 
     const remoteDirectory = join(temporaryDirectory, 'assets');
     await mkdir(remoteDirectory);
@@ -188,7 +248,7 @@ export async function verifyRemoteRelease({ version = packageJson.version, root 
       const asset = assets.find((candidate) => candidate.name === name);
       const destination = join(remoteDirectory, name);
       console.log(`Downloading ${name}`);
-      await downloadLargeFile(asset.browser_download_url, destination);
+      await downloadAsset(asset.browser_download_url, destination);
       const downloaded = await stat(destination);
       if (downloaded.size !== asset.size) {
         throw new Error(`${name} size mismatch: expected ${asset.size}, received ${downloaded.size}`);
@@ -201,7 +261,12 @@ export async function verifyRemoteRelease({ version = packageJson.version, root 
     const remoteManifest = await readFile(join(remoteDirectory, 'SHA256SUMS.txt'));
     if (!localManifest.equals(remoteManifest)) throw new Error('Remote SHA256SUMS.txt differs from the local manifest');
     for (const name of expectedChannelAssets) {
-      validateChannelMetadata(name, await readFile(join(remoteDirectory, name), 'utf8'), version);
+      const installerName = resolveChannelInstallerName(name, version);
+      const installerBytes = await readFile(join(remoteDirectory, installerName));
+      validateChannelMetadata(name, await readFile(join(remoteDirectory, name), 'utf8'), version, {
+        sha512: createHash('sha512').update(installerBytes).digest('base64'),
+        size: installerBytes.length
+      });
     }
     console.log(`Remote release v${version} verified: 11 assets, 10 SHA256 entries, 3 update channels`);
     return { version, assetCount: expectedNames.length, manifestAssetCount: result.assetCount };
@@ -215,7 +280,6 @@ async function downloadSmallFile(url, destination, environment = process.env) {
     [
       '--silent',
       '--show-error',
-      '--ssl-no-revoke',
       '--fail',
       '--location',
       '--retry',
@@ -278,7 +342,6 @@ async function downloadLargeFile(url, destination) {
   await runCurl([
     '--silent',
     '--show-error',
-    '--ssl-no-revoke',
     '--fail',
     '--location',
     '--retry',
@@ -300,7 +363,8 @@ async function downloadLargeFile(url, destination) {
 
 async function runCurl(args, environment = process.env, captureOutput = false) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn('curl.exe', args, {
+    const runtime = resolveCurlRuntime();
+    const child = spawn(runtime.command, [...runtime.platformArgs, ...args], {
       cwd: process.cwd(),
       env: environment,
       windowsHide: true,
@@ -323,6 +387,14 @@ async function runCurl(args, environment = process.env, captureOutput = false) {
       resolvePromise({ stdout, stderr });
     });
   });
+}
+
+function resolveChannelInstallerName(name, version) {
+  return name === 'latest-in.yml'
+    ? `YouYu-${version}-x64-in.exe`
+    : name === 'latest-no.yml'
+      ? `YouYu-${version}-x64-no.exe`
+      : `YouYu-${version}-x64.exe`;
 }
 
 function orderAssetDownloads(names) {
@@ -359,6 +431,10 @@ function formatRate(bytesPerSecond) {
 
 function formatError(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function assertVersion(value) {

@@ -274,7 +274,7 @@ docs/screenshots/            900×600 演示截图
 
 ## CI 与发布
 
-`.github/workflows/validate.yml` 在 `main` 推送及 Pull Request 中执行仓库卫生检查、类型检查、测试、Worker 校验、lint、格式检查和生产构建。
+`.github/workflows/validate.yml` 在 `main` 推送及 Pull Request 中执行仓库卫生检查、类型检查、测试、关键域 coverage 门槛及产物、Worker 校验、lint、格式检查和生产构建。
 
 `.github/workflows/build-windows.yml` 只在 `v*` 标签或手动触发时生成 Windows 安装包；标签构建会先校验标签名与 `package.json` 版本一致：
 
@@ -282,9 +282,13 @@ docs/screenshots/            900×600 演示截图
 2. 运行桌面端与 Worker 测试、类型检查、lint、格式、Worker dry-run 构建和 Mihomo 运行时校验。
 3. 校验签名配置后生成三通道公开 Windows 更新资产，失败时最多重试三次。
 4. 对打包输出执行冒烟检查，并核对包含 `SHA256SUMS.txt` 在内的 11 个资产完整性。
-5. 上传这 11 个安装、更新、源码与摘要资产，Actions artifact 保留 3 天。
+5. 上传 11 个公开安装、更新、源码与摘要资产，以及只供发布器核验的 `RELEASE-PROVENANCE.json`；Actions artifact 保留 3 天，provenance 不进入公开 Release。
 
-正式发布还需要显式推送准确版本标签、创建 GitHub Release、上传 11 个资产，并远程核对 `latest.yml`、`latest-in.yml`、`latest-no.yml` 与 `SHA256SUMS.txt`。不要依赖未经审计的 `git push --follow-tags`。
+成功的标签 Build Windows run 完成后，`.github/workflows/publish-github-release.yml` 会在独立 workflow 中校验 tag、commit、run、artifact provenance、SHA256 manifest 和三个更新通道，再创建或补齐 GitHub Release；发布后重新下载并核对远端 11 个资产、三份 `latest*.yml` 与 manifest。该 workflow 也保留输入准确 tag 与 successful run ID 的手动补发入口，走同一门禁。
+
+`.github/workflows/deploy-worker.yml` 仅允许手动固定 commit SHA，并在无 secret 的准备门槛通过后进入受保护 Environment 审批。远端 schema check、migration dry-run/apply、post-check、deploy 和 HTTPS smoke 不会由仓库推送或桌面发布自动触发。
+
+正式发布仍需显式推送准确版本标签；不要依赖未经审计的 `git push --follow-tags`。
 
 ## 常见问题
 

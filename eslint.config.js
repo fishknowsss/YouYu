@@ -14,6 +14,7 @@ export default tseslint.config(
       '**/release-archive/**',
       '**/.wrangler/**',
       '.cache/**',
+      'coverage/**',
       '.playwright-cli/**',
       'output/**',
       'resources/generated/**',

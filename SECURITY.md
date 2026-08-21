@@ -2,7 +2,7 @@
 
 ## 支持范围
 
-安全修复只面向最新公开的 `1.6.x` 版本。旧版本用户应先升级到 [最新 Release](https://github.com/fishknowsss/YouYu/releases/latest)，再确认问题是否仍然存在。
+安全修复面向仓库 [最新公开稳定版](https://github.com/fishknowsss/YouYu/releases/latest)，不再按固定 minor 系列声明支持范围。旧版本用户应先升级到该 Release；如果问题仍然存在，报告时请注明实际版本和复现条件。尚未公开发布的修复只有进入新的稳定 Release 后才视为对用户可用。
 
 ## 私下报告漏洞
 
@@ -24,6 +24,13 @@
 - 公共三通道资产必须由 `npm run dist:win:release` 生成，并通过空内置订阅校验。
 - 推送前应运行 `npm run validate:repo`；正式发布还需完成 [发布检查清单](docs/release-packaging.md)。
 - 发现历史敏感内容时，按 [历史净化流程](docs/security-history-cleanup.md) 完成凭据处置、离线备份、历史改写、远端校验和缓存清理申请。
+
+## Worker 生产部署边界
+
+- 常规 Worker 生产变更只通过 `.github/workflows/deploy-worker.yml` 的手动固定 SHA 流程准备：必须从 `main` 触发，输入 SHA 必须等于定义该次 workflow run 的精确 `main` commit，并由仅允许 `main` 的受保护 `production-worker` Environment 审批；仓库推送、Pull Request 和本地质量门槛不会自动部署。
+- Cloudflare 凭据只作为受保护 Environment 中的最小权限 secret 注入远端 schema、migration 和 deploy 步骤。`REGISTRATION_PASSPHRASE`、`ADMIN_TOKEN` 等 Worker 运行时 secret 不复制到 GitHub workflow，也不通过该流程写入。
+- D1 migration apply 由多个远端命令组成，不应假定具备跨文件原子性。批准生产 apply 前必须核对 dry-run、固定目标和恢复方案；失败时停止后续部署，不用自动重试掩盖部分完成状态。
+- Actions 日志、artifact 和审计摘要不得包含 token、环境变量转储、D1 数据行或未脱敏的 Wrangler 响应。
 
 ## 登记口令边界
 

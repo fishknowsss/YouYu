@@ -2,46 +2,62 @@
 
 Cloudflare Workers + D1 backend for YouYu client traffic reports.
 
-## Deploy
+## Production deployment
+
+Routine production changes use `.github/workflows/deploy-worker.yml`. The workflow has no automatic trigger: it accepts
+only `workflow_dispatch`, requires an exact lowercase 40-character `commit_sha`, and requires the dispatcher to set
+`confirm_production`. It must be dispatched from `main`, and the requested SHA must equal the exact `main` commit that
+defines that workflow run. Both jobs check out and verify that commit instead of deploying a moving branch tip.
+
+The `prepare` job has read-only repository permissions and no deployment environment or secret access. It runs repository
+hygiene, Worker tests, Worker typecheck, and the existing Wrangler dry-run build. The `deploy` job cannot start until the
+`production-worker` GitHub Environment approves it. Configure that environment outside the repository with required
+reviewers and least-privilege `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` values; store only those secret names in
+workflow source, never their values. After required reviewers and environment protections are active, define the
+non-secret environment variable `YOUYU_WORKER_DEPLOY_ENABLED=enabled`; the deploy job fails closed before any remote
+operation when that marker is absent or different. Cloudflare credentials are injected only into the individual remote
+schema/migration/deploy steps, not into the preparation job, smoke request, audit step, or the deploy job as a whole.
+Restrict the Environment deployment branch policy to `main` so a branch cannot replace the workflow-side checks.
+
+After approval, the protected job performs this fixed sequence against the same commit:
+
+1. read-only remote schema check (recorded even when pending migrations make it non-green);
+2. remote migration dry-run;
+3. explicit remote migration apply;
+4. post-apply schema check;
+5. Worker deploy;
+6. bounded HTTPS smoke request to `https://youyu-api.fishknowsss.com/`;
+7. a secret-free `$GITHUB_STEP_SUMMARY` audit with commit, actor, run/attempt, environment, and precheck outcome.
+
+The workflow does not upload Wrangler output, environment dumps, D1 rows, or raw failure logs as artifacts. D1 migration
+files are designed to be repeatable, but the runner uses multiple remote commands rather than one database-wide
+transaction; an authorized operator must have a reviewed recovery plan before approving production apply.
+
+A failed dry-run, apply, post-check, deploy, or smoke stops the workflow. Dispatching the workflow, configuring its
+protected environment, and approving production are operational actions; local development and CI validation do not do
+any of them automatically.
+
+For local or pre-review inspection, use the migration runner explicitly:
 
 ```powershell
-cd cloudflare/youyu-traffic
-npx wrangler d1 create youyu_traffic
-```
-
-Copy the returned `database_id` into `wrangler.toml`, then run:
-
-```powershell
-npx wrangler d1 execute youyu_traffic --remote --file=./schema.sql
-npx wrangler secret put REGISTRATION_PASSPHRASE
-npx wrangler secret put ADMIN_TOKEN
-npx wrangler deploy
-```
-
-For an existing D1 database, inspect the schema and migration plan first:
-
-```powershell
-node migrations/apply.mjs --remote --check
-node migrations/apply.mjs --remote --dry-run
+node cloudflare/youyu-traffic/migrations/apply.mjs --remote --check
+node cloudflare/youyu-traffic/migrations/apply.mjs --remote --dry-run
 ```
 
 `--check` is read-only and exits with an error when any required Worker table, column, index, primary key, or unique
-constraint is missing.
-`--dry-run` prints the planned work without changing D1 schema or data. After reviewing the plan, apply it explicitly:
-
-```powershell
-node migrations/apply.mjs --remote --apply
-```
+constraint is missing. `--dry-run` prints the planned work without changing D1 schema or data. `--apply` is deliberately
+reserved for the approved production job (or a separately authorized recovery) and does not deploy the Worker.
 
 Use `--local` instead of `--remote` for the local Wrangler database. The runner uses Wrangler's D1 commands, adds
 repairable columns only when an existing table is missing them, applies the idempotent table/index/data migrations,
 and validates the complete Worker schema. It refuses to write when the base `users`, `devices`, or `traffic_daily`
-schema is incomplete or when a critical primary-key/unique constraint has drifted; initialize that database with
-`schema.sql` first. Re-running it preserves existing subscription values.
-It also preserves administrator-edited traffic limits, subscription-period starts, and expiry times.
-It does not deploy the Worker.
+schema is incomplete or when a critical primary-key/unique constraint has drifted; initialize a new local database with
+`schema.sql` first. Re-running it preserves existing subscription values, administrator-edited traffic limits,
+subscription-period starts, and expiry times.
 
-Use your own private value for `REGISTRATION_PASSPHRASE`.
+A first-time Cloudflare account/database bootstrap remains a separate, explicitly authorized operation. Do not place
+`REGISTRATION_PASSPHRASE`, `ADMIN_TOKEN`, Cloudflare tokens, or their values in this repository, workflow inputs, logs,
+or job summaries.
 
 `REGISTRATION_PASSPHRASE` is the authorization boundary for team profile selection. A client with the valid shared
 passphrase may register a new name, attach another installation to an existing name, or move the current installation
@@ -167,9 +183,10 @@ Authorization: Bearer <ADMIN_TOKEN>
 
 `POST /api/admin/traffic-limit` accepts `trafficLimitBytes`, `trafficPeriodStartedAt`, `trafficExpiresAt`, or any
 combination of those fields. The limit must be a positive safe integer. Both timestamps must be complete ISO 8601
-values with `Z` or an explicit offset, are stored in UTC, and the start must be earlier than the expiry. The current
-period is 648 GiB (`695784701952` bytes), from `2026-08-12T00:25:00.000Z` through
-`2026-09-11T00:25:00.000Z` (`2026-08-12 08:25` through `2026-09-11 08:25` in `Asia/Shanghai`).
+values with `Z` or an explicit offset, are stored in UTC, and the start must be earlier than the expiry.
+Traffic-period limits and timestamps are administrator-owned live state. Values recorded in repository history are
+examples only and must not be treated as the current production period; inspect the authenticated endpoint immediately
+before an authorized operational change.
 
 The response sums trusted `traffic_reports` whose server receipt time is at or after the configured start and before
 the configured expiry, across active, unmerged users. Changing the start opens a new reporting period without deleting
@@ -325,7 +342,7 @@ Configuration remains server-ordered last-writer-wins in this phase. A future op
 contract can let capable clients receive a conflict with the current revision, while legacy requests continue through
 the existing behavior. Revision enforcement must not become mandatory until old clients have aged out.
 
-Run the Worker maintenance tests with Node.js 24 or newer:
+Run the complete Worker test suite with Node.js 24 or newer:
 
 ```powershell
 node --import tsx --test test/*.test.mjs

@@ -1,6 +1,9 @@
 name: Publish GitHub Release
 
 on:
+  workflow_run:
+    workflows: ['Build Windows']
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -27,16 +30,30 @@ concurrency:
 
 jobs:
   publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RELEASE_TAG: ${{ inputs.tag }}
-      RELEASE_RUN_ID: ${{ inputs.run_id }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || inputs.tag }}
+      RELEASE_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.run_id }}
       RELEASE_NOTES: ${{ inputs.notes }}
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
 
       - name: Publish public assets from Build Windows
         run: |
@@ -47,3 +64,6 @@ jobs:
             --dir release \
             --publish \
             --notes "${notes}"
+
+      - name: Verify published GitHub Release
+        run: npm run release:verify:remote -- --version "${RELEASE_TAG#v}"

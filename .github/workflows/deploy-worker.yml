@@ -1,0 +1,193 @@
+name: Deploy Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact 40-character commit SHA to audit and deploy
+        required: true
+        type: string
+      confirm_production:
+        description: Confirm the protected production deployment
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-worker-production
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout requested commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Verify exact commit
+        shell: bash
+        env:
+          REQUESTED_COMMIT_SHA: ${{ inputs.commit_sha }}
+          WORKFLOW_COMMIT_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          requested="$REQUESTED_COMMIT_SHA"
+          if [[ "$WORKFLOW_REF" != 'refs/heads/main' ]]; then
+            echo 'Deploy Worker must be dispatched from main' >&2
+            exit 1
+          fi
+          if [[ ! "$requested" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'commit_sha must be an exact lowercase 40-character commit SHA' >&2
+            exit 1
+          fi
+          if [[ "$requested" != "$WORKFLOW_COMMIT_SHA" ]]; then
+            echo 'commit_sha must match the exact main commit that defines this workflow run' >&2
+            exit 1
+          fi
+          actual="$(git rev-parse HEAD)"
+          if [[ "$actual" != "$requested" ]]; then
+            echo "checked out $actual instead of requested commit" >&2
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Validate repository hygiene
+        run: npm run validate:repo
+
+      - name: Test Worker
+        run: npm run test:worker
+
+      - name: Typecheck Worker
+        run: npm run typecheck:worker
+
+      - name: Build Worker dry run
+        run: npm run build:worker
+
+  deploy:
+    needs: prepare
+    if: ${{ inputs.confirm_production }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production-worker
+      url: https://youyu-api.fishknowsss.com/
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      YOUYU_WORKER_DEPLOY_ENABLED: ${{ vars.YOUYU_WORKER_DEPLOY_ENABLED }}
+    steps:
+      - name: Checkout requested commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Verify exact commit
+        shell: bash
+        env:
+          REQUESTED_COMMIT_SHA: ${{ inputs.commit_sha }}
+          WORKFLOW_COMMIT_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          requested="$REQUESTED_COMMIT_SHA"
+          actual="$(git rev-parse HEAD)"
+          [[ "$WORKFLOW_REF" == 'refs/heads/main' ]]
+          [[ "$requested" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$requested" == "$WORKFLOW_COMMIT_SHA" ]]
+          [[ "$actual" == "$requested" ]]
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify protected environment readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$YOUYU_WORKER_DEPLOY_ENABLED" != 'enabled' ]]; then
+            echo 'production-worker must define YOUYU_WORKER_DEPLOY_ENABLED=enabled after protection is configured' >&2
+            exit 1
+          fi
+
+      - name: Check remote schema
+        id: schema_precheck
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node cloudflare/youyu-traffic/migrations/apply.mjs --remote --check
+
+      - name: Review remote migration plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node cloudflare/youyu-traffic/migrations/apply.mjs --remote --dry-run
+
+      - name: Apply remote migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node cloudflare/youyu-traffic/migrations/apply.mjs --remote --apply
+
+      - name: Verify remote schema after apply
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node cloudflare/youyu-traffic/migrations/apply.mjs --remote --check
+
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --no-install wrangler deploy --config cloudflare/youyu-traffic/wrangler.toml
+
+      - name: Smoke production route
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 30 --output /dev/null \
+            https://youyu-api.fishknowsss.com/
+
+      - name: Write deployment audit summary
+        if: always()
+        shell: bash
+        env:
+          AUDIT_COMMIT_SHA: ${{ inputs.commit_sha }}
+          AUDIT_ACTOR: ${{ github.actor }}
+          AUDIT_RUN_ID: ${{ github.run_id }}
+          AUDIT_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AUDIT_PRECHECK_OUTCOME: ${{ steps.schema_precheck.outcome }}
+        run: |
+          {
+            echo '## YouYu Worker deployment audit'
+            echo
+            echo "- Commit: \`$AUDIT_COMMIT_SHA\`"
+            echo "- Requested by: \`$AUDIT_ACTOR\`"
+            echo "- Run: \`$AUDIT_RUN_ID\` attempt \`$AUDIT_RUN_ATTEMPT\`"
+            echo "- Environment: \`production-worker\`"
+            echo "- Pre-deploy schema check: \`$AUDIT_PRECHECK_OUTCOME\`"
+            echo '- Sequence: check → dry-run → apply → post-check → deploy → HTTPS smoke'
+          } >> "$GITHUB_STEP_SUMMARY"
