@@ -130,8 +130,12 @@
   background: var(--accent-tint);
 }
 
+.route-test-row.active {
+  box-shadow: inset 4px 0 0 var(--accent-strong);
+}
+
 .route-test-row:focus-visible {
-  outline: 3px solid rgb(143 88 215 / 24%);
+  outline: 3px solid var(--accent-strong);
   outline-offset: -3px;
 }
 
@@ -233,8 +237,8 @@
 }
 
 .test-status.untested {
-  color: var(--muted);
-  background: #eee6f7;
+  color: var(--ink-soft);
+  background: var(--surface-raised);
 }
 
 .test-retry {

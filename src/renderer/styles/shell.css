@@ -97,8 +97,27 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 3px solid rgb(143 88 215 / 24%);
+  outline: 3px solid var(--accent-strong);
   outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  .route-test-row:focus-visible,
+  .pet-hit-target:focus-visible {
+    outline: 3px solid Highlight;
+    forced-color-adjust: none;
+  }
+
+  .node.active,
+  .pet-preview-card.active,
+  .route-test-row.active,
+  .user-notice-banner {
+    border: 2px solid Highlight;
+  }
 }
 
 .app-shell {

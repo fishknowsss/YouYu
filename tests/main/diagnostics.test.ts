@@ -1,7 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DiagnosticLogBuffer,
+  LocalDiagnosticSession,
   buildDiagnosticReport,
   classifyDiagnosticIssue,
   createDiagnosticExportDefaultPath,
@@ -224,6 +227,53 @@ describe('diagnostic log buffer', () => {
   });
 });
 
+describe('cross-session local diagnostics', () => {
+  it('recovers a redacted tail after an unclean exit and ignores a clean previous session', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'youyu-diagnostics-'));
+    try {
+      const first = new LocalDiagnosticSession(directory, { maxBytes: 4096, archiveCount: 2, recoveryLimit: 3 });
+      first.append('启动完成');
+      first.append('请求失败 token=private-secret C:\\Users\\Alice\\private');
+
+      const second = new LocalDiagnosticSession(directory, { maxBytes: 4096, archiveCount: 2, recoveryLimit: 3 });
+      expect(second.recovery.unexpectedExit).toBe(true);
+      expect(second.recovery.logs.map((entry) => entry.message)).toEqual([
+        '启动完成',
+        '请求失败 token=[已隐藏] C:\\Users\\[已隐藏]\\private'
+      ]);
+
+      const persisted = readdirSync(directory)
+        .map((name) => readFileSync(join(directory, name), 'utf8'))
+        .join('\n');
+      expect(persisted).not.toContain('private-secret');
+      expect(persisted).not.toContain('Alice');
+
+      second.close();
+      const third = new LocalDiagnosticSession(directory, { maxBytes: 4096, archiveCount: 2, recoveryLimit: 3 });
+      expect(third.recovery.unexpectedExit).toBe(false);
+      expect(third.recovery.logs).toEqual([]);
+      third.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds the local journal and keeps only the configured archives', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'youyu-diagnostics-'));
+    try {
+      const session = new LocalDiagnosticSession(directory, { maxBytes: 2048, archiveCount: 2 });
+      for (let index = 0; index < 80; index += 1) session.append(`事件 ${index} ${'x'.repeat(120)}`);
+
+      const files = readdirSync(directory);
+      expect(files.length).toBeLessThanOrEqual(3);
+      expect(Math.max(...files.map((name) => statSync(join(directory, name)).size))).toBeLessThanOrEqual(2300);
+      session.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('diagnostic export', () => {
   it('wires detailed logs only to file export while snapshots keep the concise renderer view', () => {
     const mainSource = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
@@ -232,6 +282,16 @@ describe('diagnostic export', () => {
     expect(mainSource).toContain('logs: appLogs.getLogs(diagnosticSnapshotLogLimit),');
     expect(mainSource).not.toContain('logs: appLogs.getExportLogs(');
     expect(mainSource.match(/getExportLogs\(/g)).toHaveLength(1);
+  });
+
+  it('wires the local journal into startup, append, recovery, and clean shutdown', () => {
+    const mainSource = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
+
+    expect(mainSource).toContain("new LocalDiagnosticSession(join(app.getPath('userData'), 'diagnostics'))");
+    expect(mainSource).toContain('localDiagnosticSession?.append(message)');
+    expect(mainSource).toContain('session.recovery.unexpectedExit');
+    expect(mainSource).toContain('已恢复上次异常结束前的诊断记录');
+    expect(mainSource).toContain('localDiagnosticSession?.close()');
   });
 
   it.each([

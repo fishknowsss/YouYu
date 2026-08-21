@@ -118,7 +118,7 @@ export function useAppController() {
   const [settingsMessage, setSettingsMessage] = useState('');
   const [testingAllNodes, setTestingAllNodes] = useState(false);
   const [switchingNode, setSwitchingNode] = useState('');
-  const [snapshotLoaded, setSnapshotLoaded] = useState(false);
+  const [snapshotState, setSnapshotState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [registrationSwitchOpen, setRegistrationSwitchOpen] = useState(false);
   const restoreRegistrationEntryFocusRef = useRef(false);
   const initialSnapshotPromiseRef = useRef<Promise<AppSnapshot> | undefined>(undefined);
@@ -147,7 +147,7 @@ export function useAppController() {
     snapshotGenerationRef.current += 1;
     snapshotRef.current = next;
     setSnapshot(next);
-    setSnapshotLoaded(true);
+    setSnapshotState('ready');
     return true;
   }, []);
 
@@ -224,8 +224,6 @@ export function useAppController() {
           const next = await api.getSnapshot().catch(() => snapshotRef.current);
           if (!mountedRef.current) return false;
           commitSnapshot(next, snapshotGeneration);
-        } else {
-          setSnapshotLoaded(true);
         }
         const errorMessage = getActionErrorMessage(error);
         if (messageSink) messageSink(errorMessage);
@@ -247,11 +245,31 @@ export function useAppController() {
     [cancelOperationOnce, commitSnapshot]
   );
 
+  const loadInitialSnapshot = useCallback(
+    async (retry = false) => {
+      const api = window.youyu;
+      if (!api) {
+        if (mountedRef.current) setSnapshotState('error');
+        return;
+      }
+      if (retry) initialSnapshotPromiseRef.current = undefined;
+      if (mountedRef.current) setSnapshotState('loading');
+      try {
+        const next = await (initialSnapshotPromiseRef.current ??= api.getSnapshot());
+        commitSnapshot(next);
+      } catch {
+        initialSnapshotPromiseRef.current = undefined;
+        if (mountedRef.current) setSnapshotState('error');
+      }
+    },
+    [commitSnapshot]
+  );
+
   useEffect(() => {
-    void runAction((api) => (initialSnapshotPromiseRef.current ??= api.getSnapshot()), '', {
-      recoverSnapshotOnError: false
-    });
-  }, [runAction]);
+    void loadInitialSnapshot();
+  }, [loadInitialSnapshot]);
+
+  const retrySnapshot = useCallback(() => void loadInitialSnapshot(true), [loadInitialSnapshot]);
 
   useEffect(() => {
     const dispose = window.youyu?.onSnapshotUpdated((next) => commitSnapshot(next));
@@ -645,7 +663,9 @@ export function useAppController() {
     settingsMessage,
     testingAllNodes,
     switchingNode,
-    snapshotLoaded,
+    snapshotLoaded: snapshotState === 'ready',
+    snapshotState,
+    retrySnapshot,
     registered,
     registrationSwitchOpen,
     changeUsageMode,

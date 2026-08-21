@@ -4,7 +4,9 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDevYouYuApi } from '../../src/renderer/devApi';
+import { PetApp } from '../../src/renderer/PetApp';
 import { NodeSelect } from '../../src/renderer/pages/NodeSelect';
+import { PetPreviewPage } from '../../src/renderer/pages/PetPreviewPage';
 import { resetConnectivityCacheForTests, TestPage } from '../../src/renderer/pages/TestPage';
 import type { AppSnapshot, ConnectivityResult, ConnectivityServiceKey, OperationRequest } from '../../src/shared/ipc';
 
@@ -69,6 +71,9 @@ describe('testing interactions', () => {
 
     const nodeButton = container.querySelector<HTMLButtonElement>('.node-main');
     expect(nodeButton?.disabled).toBe(false);
+    expect(nodeButton?.getAttribute('aria-pressed')).toBe('true');
+    expect(nodeButton?.textContent).toContain('当前');
+    expect(container.querySelectorAll('.node-main[aria-pressed="true"]')).toHaveLength(1);
     await act(async () => nodeButton?.click());
     expect(onSelect).toHaveBeenCalledWith('日本 01');
     expect(container.querySelector<HTMLButtonElement>('.node-test')?.disabled).toBe(true);
@@ -92,6 +97,77 @@ describe('testing interactions', () => {
     expect([...container.querySelectorAll<HTMLButtonElement>('.node-main')].every((button) => button.disabled)).toBe(
       true
     );
+  });
+
+  it('exposes the selected connectivity row to assistive technology', async () => {
+    const snapshot = await createRunningSnapshot();
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<TestPage snapshot={snapshot} />));
+
+    const rows = [...container.querySelectorAll<HTMLElement>('.route-test-row')];
+    expect(rows[0]?.getAttribute('aria-selected')).toBe('true');
+    expect(rows.slice(1).every((row) => row.getAttribute('aria-selected') === 'false')).toBe(true);
+
+    await act(async () => rows[1]?.click());
+    expect(rows[0]?.getAttribute('aria-selected')).toBe('false');
+    expect(rows[1]?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('marks the selected pet state and offers the pet interaction from the main window', async () => {
+    const wavePet = vi.fn(async () => undefined);
+    Object.defineProperty(window, 'youyu', {
+      configurable: true,
+      value: { wavePet } as unknown as NonNullable<Window['youyu']>
+    });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<PetPreviewPage />));
+
+    const cards = [...container.querySelectorAll<HTMLButtonElement>('.pet-preview-card')];
+    expect(cards[0]?.getAttribute('aria-pressed')).toBe('true');
+    expect(cards.slice(1).every((card) => card.getAttribute('aria-pressed') === 'false')).toBe(true);
+
+    await act(async () => cards[1]?.click());
+    expect(cards[0]?.getAttribute('aria-pressed')).toBe('false');
+    expect(cards[1]?.getAttribute('aria-pressed')).toBe('true');
+
+    const waveButton = findButton(container, '挥手');
+    waveButton?.focus();
+    expect(document.activeElement).toBe(waveButton);
+    await act(async () => waveButton?.click());
+    expect(wavePet).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the desktop pet focusable and activates its primary action from the keyboard', async () => {
+    const wavePet = vi.fn(async () => undefined);
+    Object.defineProperty(window, 'youyu', {
+      configurable: true,
+      value: {
+        onPetStateUpdated: vi.fn(() => vi.fn()),
+        setPetMousePassthrough: vi.fn(async () => undefined),
+        wavePet,
+        startPetDrag: vi.fn(async () => undefined),
+        stopPetDrag: vi.fn(async () => undefined),
+        showMainWindow: vi.fn(async () => undefined)
+      } as unknown as NonNullable<Window['youyu']>
+    });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => root?.render(<PetApp />));
+
+    const pet = container.querySelector<HTMLButtonElement>('.pet-hit-target')!;
+    pet.focus();
+    expect(document.activeElement).toBe(pet);
+    expect(pet.getAttribute('aria-keyshortcuts')).toBe('Enter Space');
+    await act(async () => pet.click());
+    expect(wavePet).toHaveBeenCalledOnce();
   });
 
   it('stops an all-site test, cancels in-flight probes, and does not start more work', async () => {

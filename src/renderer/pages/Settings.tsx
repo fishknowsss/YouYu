@@ -384,7 +384,9 @@ function UpdatePanel({
             ? '检查中'
             : update.status === 'available'
               ? '准备中'
-              : '检查';
+              : update.status === 'failed'
+                ? '重新检查'
+                : '检查';
   const progress = getDisplayUpdateProgress(update);
 
   const statusText = installing ? updateInstallingMessage : confirming ? '正在确认最新版' : formatUpdateStatus(update);

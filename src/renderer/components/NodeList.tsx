@@ -34,9 +34,13 @@ export function NodeList({
             <button
               className="node-main"
               disabled={selectionBusy || Boolean(switchingNode)}
+              aria-pressed={node.active}
               onClick={() => onSelect(node.name)}
             >
-              <span className="node-name">{node.name}</span>
+              <span className="node-name">
+                {node.name}
+                {node.active && <span className="node-current-mark">当前</span>}
+              </span>
               <span className={getDelayClass(node)}>{formatDelay(node, switching)}</span>
             </button>
             <button

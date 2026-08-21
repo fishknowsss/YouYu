@@ -465,6 +465,54 @@ describe('renderer action behavior', () => {
     expect(status?.textContent).toContain('口令不对');
     expect(container.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe('测试用户');
   });
+
+  it('follows new diagnostics only while the reader remains at the bottom', async () => {
+    window.history.replaceState({}, '', '/?mode=advanced');
+    const snapshot = createRegisteredRendererSnapshot();
+    snapshot.diagnostics = { logs: ['日志 1', '日志 2'], logCount: 2 };
+    let listener: ((next: AppSnapshot) => void) | undefined;
+    const api = {
+      getSnapshot: vi.fn(async () => snapshot),
+      onSnapshotUpdated: vi.fn((nextListener) => {
+        listener = nextListener;
+        return () => undefined;
+      })
+    } as unknown as NonNullable<Window['youyu']>;
+    Object.defineProperty(window, 'youyu', { configurable: true, value: api });
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => root?.render(<App />));
+
+    const log = container.querySelector<HTMLElement>('.diagnostics-log')!;
+    Object.defineProperties(log, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 400 }
+    });
+    log.scrollTop = 300;
+    await act(async () => log.dispatchEvent(new Event('scroll', { bubbles: true })));
+
+    Object.defineProperty(log, 'scrollHeight', { configurable: true, value: 500 });
+    await act(async () =>
+      listener?.({ ...snapshot, diagnostics: { logs: ['日志 1', '日志 2', '日志 3'], logCount: 3 } })
+    );
+    expect(log.scrollTop).toBe(500);
+
+    log.scrollTop = 100;
+    await act(async () => log.dispatchEvent(new Event('scroll', { bubbles: true })));
+    Object.defineProperty(log, 'scrollHeight', { configurable: true, value: 600 });
+    await act(async () =>
+      listener?.({ ...snapshot, diagnostics: { logs: ['日志 1', '日志 2', '日志 3', '日志 4'], logCount: 4 } })
+    );
+
+    expect(log.scrollTop).toBe(100);
+    const jump = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent === '回到底部'
+    );
+    expect(jump).toBeTruthy();
+    await act(async () => jump?.click());
+    expect(log.scrollTop).toBe(600);
+  });
 });
 
 function createRegisteredRendererSnapshot(): AppSnapshot {

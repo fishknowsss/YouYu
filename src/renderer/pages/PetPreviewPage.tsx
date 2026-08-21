@@ -62,9 +62,21 @@ export function PetPreviewPage() {
   const [selectedState, setSelectedState] = useState<DesktopPetState>('idle');
   const selectedDescription = useMemo(() => stateDescriptions[selectedState], [selectedState]);
 
+  function wavePet() {
+    void window.youyu?.wavePet();
+  }
+
   return (
     <div className="workspace pet-preview-page">
-      <WorkspaceHeader title="桌宠预览" description={`共 ${petStates.length} 个状态`} />
+      <WorkspaceHeader
+        title="桌宠预览"
+        description={`共 ${petStates.length} 个状态`}
+        actions={
+          <button type="button" className="secondary-button" onClick={wavePet}>
+            挥手
+          </button>
+        }
+      />
 
       <section className="pet-preview-layout">
         <div className="pet-preview-grid" aria-label="桌宠状态">
@@ -75,6 +87,7 @@ export function PetPreviewPage() {
                 type="button"
                 className={`pet-preview-card ${selectedState === state ? 'active' : ''}`}
                 aria-label={stateLabels[state]}
+                aria-pressed={selectedState === state}
                 onClick={() => setSelectedState(state)}
               >
                 <span className="pet-preview-stage">

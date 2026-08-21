@@ -274,6 +274,32 @@ describe('silent update installation notice', () => {
     expect(checkButton?.disabled).toBe(false);
     await act(async () => checkButton?.click());
     expect(checks).toBe(1);
+
+    await act(async () =>
+      root?.render(
+        <Settings
+          snapshot={snapshot}
+          busy={false}
+          busyLabel=""
+          message=""
+          onRepair={() => undefined}
+          onSave={() => undefined}
+          onSyncRemoteConfig={() => undefined}
+          onExportDiagnostics={() => undefined}
+          onCheckUpdate={() => {
+            checks += 1;
+          }}
+          onInstallUpdate={() => undefined}
+        />
+      )
+    );
+
+    expect(container.textContent).toContain('安装未完成，请重新检查');
+    expect(container.textContent).not.toContain('已重新打开当前版本');
+    const settingsCheckButton = findButton(container, '重新检查');
+    expect(settingsCheckButton?.disabled).toBe(false);
+    await act(async () => settingsCheckButton?.click());
+    expect(checks).toBe(2);
   });
 
   it('shows the automatic download route switch on both update surfaces', async () => {

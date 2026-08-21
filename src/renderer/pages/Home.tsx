@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AppSnapshot, MihomoMode, StrategyKey } from '../../shared/ipc';
 import { updateInstallingMessage } from '../../shared/updateProgress';
 import type { UsageMode } from '../components/AppShell';
@@ -246,6 +246,8 @@ function AdvancedHome(props: HomeProps) {
   const diagnosticLogCount = props.snapshot.diagnostics.logCount ?? diagnosticsLogs.length;
   const logLines = diagnosticsLogs.slice(-7).map(toVisibleDiagnosticText);
   const diagnosticsLogRef = useRef<HTMLDivElement>(null);
+  const followingDiagnosticsTailRef = useRef(true);
+  const [followingDiagnosticsTail, setFollowingDiagnosticsTail] = useState(true);
   const rawDiagnosticMessage =
     isActionErrorMessage(props.message) || isActionNoticeMessage(props.message)
       ? props.message
@@ -258,9 +260,25 @@ function AdvancedHome(props: HomeProps) {
 
   useEffect(() => {
     const diagnosticsLog = diagnosticsLogRef.current;
-    if (!diagnosticsLog) return;
+    if (!diagnosticsLog || !followingDiagnosticsTailRef.current) return;
     diagnosticsLog.scrollTop = diagnosticsLog.scrollHeight;
   }, [diagnosticsLogs]);
+
+  function updateDiagnosticsTailState() {
+    const diagnosticsLog = diagnosticsLogRef.current;
+    if (!diagnosticsLog) return;
+    const atBottom = diagnosticsLog.scrollHeight - diagnosticsLog.scrollTop - diagnosticsLog.clientHeight <= 16;
+    followingDiagnosticsTailRef.current = atBottom;
+    setFollowingDiagnosticsTail(atBottom);
+  }
+
+  function jumpToDiagnosticsTail() {
+    const diagnosticsLog = diagnosticsLogRef.current;
+    if (!diagnosticsLog) return;
+    diagnosticsLog.scrollTop = diagnosticsLog.scrollHeight;
+    followingDiagnosticsTailRef.current = true;
+    setFollowingDiagnosticsTail(true);
+  }
 
   return (
     <div className="workspace advanced-workspace">
@@ -372,13 +390,18 @@ function AdvancedHome(props: HomeProps) {
                 )}
               </div>
             )}
-            <div className="diagnostics-log" ref={diagnosticsLogRef}>
+            <div className="diagnostics-log" ref={diagnosticsLogRef} onScroll={updateDiagnosticsTailState}>
               {logLines.length ? (
                 logLines.map((line, index) => <span key={`${index}-${line}`}>{line}</span>)
               ) : (
                 <span>暂无日志</span>
               )}
             </div>
+            {!followingDiagnosticsTail && (
+              <button type="button" className="diagnostics-tail-button" onClick={jumpToDiagnosticsTail}>
+                回到底部
+              </button>
+            )}
           </div>
         </DashboardPanel>
       </section>

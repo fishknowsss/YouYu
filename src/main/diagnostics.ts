@@ -1,4 +1,14 @@
 import { createHash } from 'node:crypto';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync
+} from 'node:fs';
 import { join } from 'node:path';
 import type { DiagnosticIssueKind } from '../shared/ipc';
 import { isExpectedOperationCancellation } from '../shared/operationCancellation';
@@ -123,6 +133,113 @@ export class DiagnosticLogBuffer {
     if (count === 0) return [];
     return this.entries.slice(-count).map((entry) => formatDiagnosticLogEntry(entry, entry[messageKey]));
   }
+}
+
+export type RecoveredDiagnosticLog = {
+  message: string;
+  at: Date;
+};
+
+export type LocalDiagnosticRecovery = {
+  unexpectedExit: boolean;
+  logs: RecoveredDiagnosticLog[];
+};
+
+type LocalDiagnosticSessionOptions = {
+  maxBytes?: number;
+  archiveCount?: number;
+  recoveryLimit?: number;
+};
+
+type LocalDiagnosticRecord =
+  { type: 'start'; at: string } | { type: 'log'; at: string; message: string } | { type: 'end'; at: string };
+
+const localDiagnosticFileName = 'session.jsonl';
+const localDiagnosticMaxBytes = 512 * 1024;
+const localDiagnosticArchiveCount = 2;
+
+export class LocalDiagnosticSession {
+  readonly recovery: LocalDiagnosticRecovery;
+  private readonly currentPath: string;
+  private readonly maxBytes: number;
+  private readonly archiveCount: number;
+  private closed = false;
+
+  constructor(directory: string, options: LocalDiagnosticSessionOptions = {}) {
+    this.maxBytes = Math.max(1024, Math.floor(options.maxBytes ?? localDiagnosticMaxBytes));
+    this.archiveCount = Math.max(0, Math.floor(options.archiveCount ?? localDiagnosticArchiveCount));
+    const recoveryLimit = Math.max(0, Math.floor(options.recoveryLimit ?? diagnosticSnapshotLogLimit));
+    mkdirSync(directory, { recursive: true });
+    this.currentPath = join(directory, localDiagnosticFileName);
+    this.recovery = readLocalDiagnosticRecovery(this.currentPath, recoveryLimit);
+    this.rotateCurrent();
+    this.writeRecord({ type: 'start', at: new Date().toISOString() }, false);
+  }
+
+  append(message: string, at = new Date()): void {
+    if (this.closed) return;
+    const safeMessage = boundDiagnosticMessage(toSafeDiagnosticLine(message), diagnosticLogMessageLimit);
+    if (!safeMessage) return;
+    this.writeRecord({ type: 'log', at: at.toISOString(), message: safeMessage }, true);
+  }
+
+  close(at = new Date()): void {
+    if (this.closed) return;
+    this.writeRecord({ type: 'end', at: at.toISOString() }, false);
+    this.closed = true;
+  }
+
+  private writeRecord(record: LocalDiagnosticRecord, rotateWhenFull: boolean): void {
+    const line = `${JSON.stringify(record)}\n`;
+    if (
+      rotateWhenFull &&
+      existsSync(this.currentPath) &&
+      statSync(this.currentPath).size + Buffer.byteLength(line, 'utf8') > this.maxBytes
+    ) {
+      this.rotateCurrent();
+      writeFileSync(this.currentPath, `${JSON.stringify({ type: 'start', at: new Date().toISOString() })}\n`, 'utf8');
+    }
+    appendFileSync(this.currentPath, line, 'utf8');
+  }
+
+  private rotateCurrent(): void {
+    for (let index = this.archiveCount; index >= 1; index -= 1) {
+      const source = index === 1 ? this.currentPath : joinPathSibling(this.currentPath, `session.${index - 1}.jsonl`);
+      const destination = joinPathSibling(this.currentPath, `session.${index}.jsonl`);
+      if (existsSync(destination)) unlinkSync(destination);
+      if (existsSync(source)) renameSync(source, destination);
+    }
+    if (this.archiveCount === 0 && existsSync(this.currentPath)) unlinkSync(this.currentPath);
+  }
+}
+
+function readLocalDiagnosticRecovery(filePath: string, limit: number): LocalDiagnosticRecovery {
+  if (!existsSync(filePath)) return { unexpectedExit: false, logs: [] };
+  const records = readFileSync(filePath, 'utf8')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .flatMap((line): LocalDiagnosticRecord[] => {
+      try {
+        const record = JSON.parse(line) as LocalDiagnosticRecord;
+        return record?.type === 'start' || record?.type === 'log' || record?.type === 'end' ? [record] : [];
+      } catch {
+        return [];
+      }
+    });
+  const unexpectedExit = records.length > 0 && records.at(-1)?.type !== 'end';
+  if (!unexpectedExit || limit === 0) return { unexpectedExit, logs: [] };
+  const logs = records
+    .filter((record): record is Extract<LocalDiagnosticRecord, { type: 'log' }> => record.type === 'log')
+    .slice(-limit)
+    .flatMap((record) => {
+      const at = new Date(record.at);
+      return Number.isFinite(at.getTime()) ? [{ message: toSafeDiagnosticLine(record.message), at }] : [];
+    });
+  return { unexpectedExit, logs };
+}
+
+function joinPathSibling(filePath: string, fileName: string): string {
+  return join(filePath, '..', fileName);
 }
 
 const quotedDiagnosticValue = String.raw`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`;

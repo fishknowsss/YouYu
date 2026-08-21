@@ -37,11 +37,27 @@ describe('targeted user notice', () => {
     const acknowledge = vi.fn(async () => false);
     const container = await renderNotice(createNotice('info', '测试通知'), acknowledge);
     const confirm = findButton(container, '知道了');
+    confirm?.focus();
+    expect(document.activeElement).toBe(confirm);
 
     await act(async () => confirm?.click());
     expect(acknowledge).toHaveBeenLastCalledWith(3);
     expect(acknowledge).toHaveBeenCalledTimes(1);
     expect(container.querySelector('[aria-label="关闭通知"]')).toBeNull();
+  });
+
+  it.each([
+    ['返回失败', async () => false],
+    ['请求失败', async () => Promise.reject(new Error('network failed'))]
+  ])('keeps the notice available for retry when acknowledgement %s', async (_label, fail) => {
+    const acknowledge = vi.fn(fail);
+    const container = await renderNotice(createNotice('info', '测试通知'), acknowledge);
+
+    await act(async () => findButton(container, '知道了')?.click());
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe('确认失败，请重试');
+    expect(findButton(container, '知道了')?.disabled).toBe(false);
+    expect(container.querySelector('.user-notice-banner')).not.toBeNull();
   });
 
   it('hides expired or invalid notices', async () => {

@@ -66,7 +66,40 @@ describe('DesktopNoticeApp', () => {
     root = undefined;
     expect(dispose).toHaveBeenCalled();
   });
+
+  it('shows a Chinese failure and removes the notice after a successful retry', async () => {
+    const initial = createSnapshot('info', '需要确认');
+    const acknowledgeUserNotice = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('private request details'))
+      .mockResolvedValueOnce({ userNotice: undefined });
+    Object.defineProperty(window, 'youyu', {
+      configurable: true,
+      value: {
+        getSnapshot: vi.fn(async () => initial),
+        acknowledgeUserNotice,
+        onSnapshotUpdated: vi.fn(() => vi.fn())
+      } as unknown as NonNullable<Window['youyu']>
+    });
+
+    const container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => root?.render(<DesktopNoticeApp />));
+
+    await act(async () => findButton(container, '知道了')?.click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe('确认失败，请重试');
+    expect(container.textContent).not.toContain('private request details');
+
+    await act(async () => findButton(container, '知道了')?.click());
+    expect(acknowledgeUserNotice).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('.user-notice-banner')).toBeNull();
+  });
 });
+
+function findButton(container: HTMLElement, text: string): HTMLButtonElement | undefined {
+  return [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === text);
+}
 
 function createSnapshot(tone: 'info' | 'warning', message: string): DesktopNoticeSnapshot {
   return {

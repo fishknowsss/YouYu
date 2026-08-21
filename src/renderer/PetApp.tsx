@@ -355,6 +355,10 @@ export function PetApp() {
         className={`pet-hit-target pet-hit-target-${state}`}
         type="button"
         aria-label="桌宠"
+        aria-keyshortcuts="Enter Space"
+        onClick={(event) => {
+          if (event.detail === 0) void handleClick();
+        }}
         onPointerEnter={() => setMousePassthrough(false)}
         onPointerLeave={() => {
           if (!drag.current) setMousePassthrough(true);

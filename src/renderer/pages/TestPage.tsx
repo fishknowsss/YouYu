@@ -270,6 +270,7 @@ function TestPageContent({ snapshot, cacheKey }: TestPageProps & { cacheKey: str
                 className={`route-test-row ${activeKey === row.key ? 'active' : ''}`}
                 role="row"
                 tabIndex={0}
+                aria-selected={activeKey === row.key}
                 onClick={() => selectActiveKey(row.key)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {

@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { TrafficRegistrationInput } from '../shared/ipc';
 import { isActionErrorMessage } from './actionMessages';
 import { AppShell } from './components/AppShell';
+import { UserNoticeBanner } from './components/UserNoticeBanner';
 import { useAppController } from './hooks/useAppController';
 import { Home } from './pages/Home';
 import { NodeSelect } from './pages/NodeSelect';
@@ -27,6 +28,28 @@ export function App() {
     window.addEventListener('online', wakeRemoteConfig);
     return () => window.removeEventListener('online', wakeRemoteConfig);
   }, []);
+
+  if (controller.snapshotState === 'loading') {
+    return <RendererSnapshotState title="正在读取状态" />;
+  }
+
+  if (controller.snapshotState === 'error') {
+    return (
+      <RendererSnapshotState
+        title="状态读取失败"
+        actions={
+          <>
+            <button type="button" className="wide-button" onClick={controller.retrySnapshot}>
+              重试
+            </button>
+            <button type="button" className="secondary-button" onClick={() => void controller.exportDiagnostics()}>
+              导出诊断
+            </button>
+          </>
+        }
+      />
+    );
+  }
 
   if (controller.snapshotLoaded && (!controller.registered || controller.registrationSwitchOpen)) {
     const switchingUser = controller.registered && controller.registrationSwitchOpen;
@@ -111,6 +134,11 @@ export function App() {
           />
         )}
       </AppShell>
+      <UserNoticeBanner
+        notice={controller.snapshot.userNotice}
+        onAcknowledge={controller.acknowledgeUserNotice}
+        variant="main"
+      />
       {controller.busyLabel === '修复中' && (
         <div className="busy-overlay" aria-live="polite" aria-label="修复中">
           <div className="busy-spinner" />
@@ -118,6 +146,15 @@ export function App() {
         </div>
       )}
     </>
+  );
+}
+
+function RendererSnapshotState({ title, actions }: { title: string; actions?: React.ReactNode }) {
+  return (
+    <main className="renderer-snapshot-state" aria-live="polite">
+      <h1>{title}</h1>
+      {actions && <div className="renderer-snapshot-actions">{actions}</div>}
+    </main>
   );
 }
 

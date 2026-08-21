@@ -14,7 +14,7 @@
   --ink: #20192a;
   --ink-soft: #4a4255;
   --muted: #70677a;
-  --accent: #8558c9;
+  --accent: #7d4fc0;
   --accent-strong: #6f45ad;
   --accent-soft: #efe9fa;
   --accent-tint: #faf7ff;
@@ -25,9 +25,9 @@
   --surface-raised: #fbf9fe;
   --line: #ddd4e8;
   --line-strong: #c8bad9;
-  --success: #3b8d75;
-  --warning: #98722d;
-  --danger: #b64e74;
+  --success: #28745f;
+  --warning: #7b581f;
+  --danger: #9b3d60;
   --danger-soft: #fbe8ef;
   --danger-soft-hover: #f6d5e1;
   --accent-secondary: #e5d4f3;

@@ -119,6 +119,7 @@ import {
 import { clearMihomoRepairCache, runNetworkRepair, type NetworkRepairOptions } from './networkRepair';
 import {
   DiagnosticLogBuffer,
+  LocalDiagnosticSession,
   classifyDiagnosticIssue,
   createDiagnosticExportDefaultPath,
   diagnosticSnapshotLogLimit,
@@ -258,6 +259,7 @@ let lastError: string | undefined;
 let preferredAutoNodeRefineController: AbortController | undefined;
 let nodeSelectionNotice: AppSnapshot['nodeSelectionNotice'];
 const appLogs = new DiagnosticLogBuffer();
+let localDiagnosticSession: LocalDiagnosticSession | undefined;
 const petFeatureEnabled = !__YOUYU_DISABLE_PET__;
 const petVisibilityController = createPetVisibilityController({
   initialUserRequestedVisible: true,
@@ -492,6 +494,23 @@ function readOptionalText(path: string): string {
 
 function appendLog(message: string) {
   appLogs.append(message);
+  try {
+    localDiagnosticSession?.append(message);
+  } catch {
+    localDiagnosticSession = undefined;
+  }
+}
+
+function initializeLocalDiagnostics(): void {
+  try {
+    const session = new LocalDiagnosticSession(join(app.getPath('userData'), 'diagnostics'));
+    localDiagnosticSession = session;
+    if (!session.recovery.unexpectedExit) return;
+    for (const entry of session.recovery.logs) appLogs.append(entry.message, entry.at);
+    appLogs.append('已恢复上次异常结束前的诊断记录');
+  } catch (error) {
+    appLogs.append(`本地诊断初始化失败: ${formatError(error)}`);
+  }
 }
 
 function formatError(error: unknown): string {
@@ -3446,7 +3465,7 @@ async function createNoticeWindow(): Promise<BrowserWindow | undefined> {
     maximizable: false,
     fullscreenable: false,
     alwaysOnTop: true,
-    focusable: false,
+    focusable: true,
     skipTaskbar: true,
     hasShadow: false,
     show: false,
@@ -3465,7 +3484,7 @@ async function createNoticeWindow(): Promise<BrowserWindow | undefined> {
   noticeWindow = win;
   secureRendererNavigation(win);
   win.setAlwaysOnTop(true, 'floating');
-  win.setFocusable(false);
+  win.setFocusable(true);
   win.setSkipTaskbar(true);
   win.setIgnoreMouseEvents(false);
 
@@ -3514,7 +3533,7 @@ async function createPetWindow() {
     maximizable: false,
     fullscreenable: false,
     alwaysOnTop: true,
-    focusable: false,
+    focusable: true,
     skipTaskbar: true,
     hasShadow: false,
     show: false,
@@ -3698,6 +3717,11 @@ async function cleanupBeforeExit(options: ExitCleanupOptions = {}): Promise<bool
   subscriptionCoordinator.dispose();
   nodeHealthCoordinator.dispose();
   appRuntimeCoordinator.dispose();
+  try {
+    localDiagnosticSession?.close();
+  } catch (error) {
+    appLogs.append(`本地诊断结束记录失败: ${formatError(error)}`);
+  }
   app.exit(0);
   return true;
 }
@@ -3738,6 +3762,7 @@ if (!gotSingleInstanceLock || shutdownForInstall) {
   app
     .whenReady()
     .then(async () => {
+      initializeLocalDiagnostics();
       if (startupUpdateRelaunchAcknowledgement) {
         void writeUpdateRelaunchAcknowledgement(startupUpdateRelaunchAcknowledgement, { appVersion }).catch((error) =>
           recordError('更新后重开确认失败', error)

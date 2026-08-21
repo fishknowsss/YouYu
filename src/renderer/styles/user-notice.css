@@ -26,6 +26,21 @@
   pointer-events: none;
 }
 
+.user-notice-layer.main {
+  position: fixed;
+  z-index: 30;
+  top: 46px;
+  right: 18px;
+  width: min(360px, calc(100vw - 36px));
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.user-notice-layer.main .user-notice-banner {
+  height: auto;
+  min-height: 126px;
+}
+
 .user-notice-banner {
   display: grid;
   box-sizing: border-box;
@@ -96,8 +111,17 @@
 .user-notice-actions {
   grid-area: actions;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 10px;
   min-width: 0;
+}
+
+.user-notice-error {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: var(--font-weight-bold);
+  line-height: 16px;
 }
 
 .user-notice-confirm {

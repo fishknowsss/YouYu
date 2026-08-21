@@ -10,12 +10,16 @@ export function UserNoticeBanner({
 }: {
   notice?: UserNotice;
   onAcknowledge: (revision: number) => boolean | Promise<boolean>;
-  variant?: 'desktop';
+  variant?: 'desktop' | 'main';
 }) {
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
   const [currentTime, setCurrentTime] = useState(Date.now);
 
-  useEffect(() => setSubmitting(false), [notice?.revision]);
+  useEffect(() => {
+    setSubmitting(false);
+    setError('');
+  }, [notice?.revision]);
   useEffect(() => {
     if (!notice) return;
     const expiresAt = Date.parse(notice.expiresAt);
@@ -41,11 +45,16 @@ export function UserNoticeBanner({
 
   async function acknowledge() {
     if (submitting) return;
+    setError('');
     setSubmitting(true);
     try {
       const accepted = await onAcknowledge(revision);
-      if (!accepted) setSubmitting(false);
+      if (!accepted) {
+        setError('确认失败，请重试');
+        setSubmitting(false);
+      }
     } catch {
+      setError('确认失败，请重试');
       setSubmitting(false);
     }
   }
@@ -68,6 +77,11 @@ export function UserNoticeBanner({
           <p id="user-notice-message">{notice.message}</p>
         </div>
         <div className="user-notice-actions">
+          {error && (
+            <span className="user-notice-error" role="alert">
+              {error}
+            </span>
+          )}
           <button
             type="button"
             className="user-notice-confirm"

@@ -471,6 +471,18 @@
   word-break: break-all;
 }
 
+.diagnostics-tail-button {
+  align-self: flex-end;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  color: var(--accent-strong);
+  background: #fff;
+  font-size: 12px;
+  font-weight: var(--font-weight-bold);
+}
+
 .mode-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -691,6 +703,16 @@
   overflow-wrap: anywhere;
   font-weight: var(--font-weight-bold);
   line-height: 1.25;
+}
+
+.node-current-mark {
+  display: inline-flex;
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
 }
 
 .node-test {
