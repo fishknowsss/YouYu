@@ -30,7 +30,9 @@ test('legacy database can apply every migration in order', () => {
     '2026-08-10-add-node-region-policy.sql',
     '2026-08-11-add-managed-config-permission.sql',
     '2026-08-12-add-traffic-period-start.sql',
-    '2026-08-12-add-managed-config-default.sql'
+    '2026-08-12-add-managed-config-default.sql',
+    '2026-08-21-add-admin-notice-batches.sql',
+    '2026-08-21-add-device-request-nonces.sql'
   ]) {
     if (name === '2026-08-12-add-traffic-period-start.sql') {
       database.exec(
@@ -64,7 +66,10 @@ test('legacy database can apply every migration in order', () => {
     'user_profile_audit',
     'user_notices',
     'user_notice_acknowledgements',
-    'user_notice_audit'
+    'user_notice_audit',
+    'admin_notice_batches',
+    'admin_notice_batch_targets',
+    'device_request_nonces'
   ]) {
     assert.ok(tables.includes(table), `${table} should exist`);
   }

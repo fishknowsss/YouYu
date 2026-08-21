@@ -1,4 +1,5 @@
 import { getEventListeners } from 'node:events';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { connect as connectSocket, type Server as NetServer, type Socket } from 'node:net';
@@ -129,53 +130,6 @@ async function startConnectProxy(originPort?: number, onConnect?: (authority: st
   };
 }
 
-async function startTruncatedHttpProxy() {
-  const sockets = new Set<Socket>();
-  const server = createHttpServer((request, response) => {
-    request.resume();
-    request.once('end', () => {
-      response.writeHead(200, {
-        'content-type': 'application/json; charset=utf-8',
-        'content-length': '200'
-      });
-      response.write('{"config":{"version":3');
-      setImmediate(() => response.destroy());
-    });
-  });
-  server.on('connection', (socket) => {
-    sockets.add(socket);
-    socket.once('close', () => sockets.delete(socket));
-  });
-  const port = await listen(server);
-  return {
-    url: `http://127.0.0.1:${port}`,
-    close: () => closeServer(server, sockets)
-  };
-}
-
-async function startOversizedHttpProxy(declaredLength: number) {
-  const sockets = new Set<Socket>();
-  const server = createHttpServer((request, response) => {
-    request.resume();
-    request.once('end', () => {
-      response.writeHead(200, {
-        'content-type': 'application/json; charset=utf-8',
-        'content-length': String(declaredLength)
-      });
-      response.end('{}');
-    });
-  });
-  server.on('connection', (socket) => {
-    sockets.add(socket);
-    socket.once('close', () => sockets.delete(socket));
-  });
-  const port = await listen(server);
-  return {
-    url: `http://127.0.0.1:${port}`,
-    close: () => closeServer(server, sockets)
-  };
-}
-
 function writeChunkedJson(socket: TLSSocket, body: unknown): void {
   const json = JSON.stringify(body);
   const chunks = [json.slice(0, 17), json.slice(17, 49), json.slice(49)];
@@ -219,7 +173,25 @@ async function withTestCertificate<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-describe('RemoteConfigClient cache', () => {
+describe('RemoteConfigClient', () => {
+  it.each([
+    ['non-HTTPS', 'http://config.example.com'],
+    ['credentials', 'https://user:pass@config.example.com'],
+    ['malformed', 'not a url']
+  ])('rejects a %s runtime endpoint before any network request', async (_label, endpoint) => {
+    const fetch = vi.fn();
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint,
+      appVersion: '1.7.7',
+      store: createRegisteredStore(),
+      fetch
+    });
+
+    await expect(client.sync()).rejects.toThrow('remote config endpoint invalid');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   let dir: string;
 
   beforeEach(async () => {
@@ -652,15 +624,25 @@ describe('RemoteConfigClient cache', () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe('https://config.example.com/api/config');
     expect(requests[0]?.init?.method).toBe('POST');
-    expect(requests[0]?.init?.body).toBe(
-      JSON.stringify({
-        userId: 'user-1',
-        deviceId: 'device-1',
-        subscriptionUrl: 'https://example.com/alice',
-        ruleProfile: 'subscription'
-      })
+    const requestBody = String(requests[0]?.init?.body);
+    const parsedRequestBody = JSON.parse(requestBody) as Record<string, unknown>;
+    expect(parsedRequestBody).toMatchObject({
+      userId: 'user-1',
+      deviceId: 'device-1',
+      subscriptionUrl: 'https://example.com/alice',
+      ruleProfile: 'subscription'
+    });
+    expect(parsedRequestBody.requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
     );
-    expect(new Headers(requests[0]?.init?.headers).get('x-youyu-signature')).toMatch(/^[0-9a-f]{64}$/);
+    const headers = new Headers(requests[0]?.init?.headers);
+    expect(headers.get('x-youyu-request-id')).toBe(parsedRequestBody.requestId);
+    const timestamp = headers.get('x-youyu-timestamp') ?? '';
+    const bodyHash = createHash('sha256').update(requestBody).digest('hex');
+    const canonical = ['POST', '/api/config', timestamp, parsedRequestBody.requestId, bodyHash].join('\n');
+    expect(headers.get('x-youyu-signature')).toBe(
+      createHmac('sha256', 'device-secret').update(canonical).digest('hex')
+    );
     await expect(client.getActiveConfig()).resolves.toMatchObject({ configSource: 'user' });
   });
 
@@ -1047,42 +1029,6 @@ describe('RemoteConfigClient cache', () => {
     } finally {
       await proxy.close();
       await origin.close();
-    }
-  });
-
-  it('rejects a truncated response from an HTTP proxy without hanging', async () => {
-    const proxy = await startTruncatedHttpProxy();
-    const client = new RemoteConfigClient({
-      baseDir: dir,
-      endpoint: 'http://config.invalid',
-      appVersion: '1.5.8',
-      requestTimeoutMs: 200,
-      store: createRegisteredStore(),
-      fetch: rejectDirectFetch
-    });
-
-    try {
-      await expect(within(client.sync({ proxyUrl: proxy.url }))).rejects.toThrow('remote config response aborted');
-    } finally {
-      await proxy.close();
-    }
-  });
-
-  it('rejects an oversized remote-config response received through an HTTP proxy', async () => {
-    const proxy = await startOversizedHttpProxy(256 * 1024 + 1);
-    const client = new RemoteConfigClient({
-      baseDir: dir,
-      endpoint: 'http://config.invalid',
-      appVersion: '1.6.8',
-      requestTimeoutMs: 1000,
-      store: createRegisteredStore(),
-      fetch: rejectDirectFetch
-    });
-
-    try {
-      await expect(client.sync({ proxyUrl: proxy.url })).rejects.toThrow('code=RESPONSE_BODY_TOO_LARGE');
-    } finally {
-      await proxy.close();
     }
   });
 

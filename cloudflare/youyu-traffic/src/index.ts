@@ -72,6 +72,7 @@ type AdminRemoteConfigInput = RemoteConfigInput & {
 type ClientConfigUpdateInput = {
   userId?: unknown;
   deviceId?: unknown;
+  requestId?: unknown;
   subscriptionUrl?: unknown;
   ruleProfile?: unknown;
 };
@@ -103,6 +104,7 @@ type UserNoticeBroadcastInput = {
 
 type UserNoticeResetInput = {
   userIds?: unknown;
+  requestId?: unknown;
 };
 
 type UserNoticeAcknowledgementInput = {
@@ -254,6 +256,10 @@ type AdminPagination = {
 const TRAFFIC_REPORT_RETENTION_DAYS = 90;
 const RETENTION_DELETE_BATCH_SIZE = 500;
 const RETENTION_MAX_REPORT_BATCHES = 20;
+const TRAFFIC_REPORT_DEDUP_ROW_BUDGET = 5_000_000;
+const TRAFFIC_REPORT_DEDUP_BYTE_BUDGET = 1024 * 1024 * 1024;
+const DEVICE_AUTH_FAILURE_LIMIT = 12;
+const DEVICE_AUTH_FAILURE_WINDOW_MS = 5 * 60 * 1000;
 const ADMIN_COLLECTION_MAX_PAGE_SIZE = 200;
 const ADMIN_COLLECTION_MAX_OFFSET = 1_000_000;
 const ADMIN_USERS_DEFAULT_PAGE_SIZE = 200;
@@ -271,6 +277,7 @@ const USER_NOTICE_MIN_DURATION_MINUTES = 5;
 const USER_NOTICE_DURATION_STEP_MINUTES = 5;
 const USER_NOTICE_MAX_DURATION_MINUTES = 7 * 24 * 60;
 const USER_NOTICE_BROADCAST_MAX_USERS = 200;
+const DEVICE_REQUEST_NONCE_TTL_MS = 10 * 60 * 1000;
 const TRAFFIC_TIME_ZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ANOMALY_THRESHOLD_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_TRAFFIC_LIMIT_BYTES = 648 * 1024 * 1024 * 1024;
@@ -283,8 +290,21 @@ export type RetentionCleanupResult = {
   cutoff: string;
   deletedReportRows: number;
   deletedRateLimitRows: number;
+  deletedNonceRows: number;
   reportBatchLimitReached: boolean;
   rateLimitBatchLimitReached: boolean;
+  nonceBatchLimitReached: boolean;
+  dedupCapacity: TrafficReportDedupCapacity;
+};
+
+type TrafficReportDedupCapacity = {
+  rowCount: number;
+  estimatedBytes: number;
+  oldestTrafficDate: string | null;
+  newestTrafficDate: string | null;
+  rowBudget: number;
+  byteBudget: number;
+  overBudget: boolean;
 };
 
 export default {
@@ -309,14 +329,26 @@ export default {
   },
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
     ctx.waitUntil(
-      cleanupExpiredData(env, controller.scheduledTime).catch((error) => {
-        console.error({
-          event: 'retention_cleanup_error',
-          scheduledTime: controller.scheduledTime,
-          errorCode: 'D1_MAINTENANCE_FAILED'
-        });
-        throw error;
-      })
+      cleanupExpiredData(env, controller.scheduledTime)
+        .then((result) => {
+          if (!result.dedupCapacity.overBudget) return;
+          console.warn({
+            event: 'traffic_report_dedup_capacity_warning',
+            scheduledTime: controller.scheduledTime,
+            rowCount: result.dedupCapacity.rowCount,
+            estimatedBytes: result.dedupCapacity.estimatedBytes,
+            rowBudget: result.dedupCapacity.rowBudget,
+            byteBudget: result.dedupCapacity.byteBudget
+          });
+        })
+        .catch((error) => {
+          console.error({
+            event: 'retention_cleanup_error',
+            scheduledTime: controller.scheduledTime,
+            errorCode: 'D1_MAINTENANCE_FAILED'
+          });
+          throw error;
+        })
     );
   }
 };
@@ -601,15 +633,20 @@ async function updateClientConfig(request: Request, env: Env): Promise<Response>
   const parsed = safeParseJson(bodyText);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new HttpError(400, 'invalid json');
   const input = parsed as ClientConfigUpdateInput;
-  assertOnlyFields(input, ['userId', 'deviceId', 'subscriptionUrl', 'ruleProfile'], 'unsupported client config field');
+  assertOnlyFields(
+    input,
+    ['userId', 'deviceId', 'requestId', 'subscriptionUrl', 'ruleProfile'],
+    'unsupported client config field'
+  );
   const userId = cleanOptional(input.userId);
   const deviceId = cleanOptional(input.deviceId);
   if (!userId || !deviceId) throw new HttpError(400, 'missing identity');
+  const requestId = parseClientConfigRequestId(request, input.requestId);
   if (!hasOwnField(input, 'subscriptionUrl') && !hasOwnField(input, 'ruleProfile')) {
     throw new HttpError(400, 'missing client config');
   }
 
-  const canonicalUserId = await verifyDeviceRequest(request, env, userId, deviceId, bodyText);
+  const canonicalUserId = await verifyDeviceRequest(request, env, userId, deviceId, bodyText, requestId);
   await getGlobalRemoteConfig(env);
   const columns: string[] = [];
   const selectExpressions: string[] = [];
@@ -638,8 +675,30 @@ async function updateClientConfig(request: Request, env: Env): Promise<Response>
     bindings.push(desired, desired);
   }
 
-  const now = new Date().toISOString();
-  const result = await env.DB.prepare(
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  const requestHash = requestId ? await sha256Hex(bodyText) : null;
+  if (requestId && requestHash) {
+    const existing = await getDeviceRequestNonce(env, deviceId, requestId);
+    if (existing) {
+      assertMatchingConfigRequest(existing, requestHash);
+      if (existing.completedAt) {
+        return json({
+          ...(await getConfigRequestReplayPayload(env, existing, deviceId, userId)),
+          requestId,
+          alreadyApplied: true
+        });
+      }
+    }
+  }
+
+  const nonceGuard = requestId
+    ? `AND EXISTS (
+         SELECT 1 FROM device_request_nonces
+         WHERE device_id = ? AND request_id = ? AND claim_token = ?
+       )`
+    : '';
+  const configStatement = env.DB.prepare(
     `INSERT INTO user_remote_config (user_id, ${columns.join(', ')}, updated_at)
      SELECT users.id, ${selectExpressions.join(', ')}, ?
      FROM users
@@ -652,13 +711,52 @@ async function updateClientConfig(request: Request, env: Env): Promise<Response>
          remote_config.can_edit_managed_config,
          1
        ) = 1
+       ${nonceGuard}
      ON CONFLICT(user_id) DO UPDATE SET
        ${columns.map((column) => `${column} = excluded.${column}`).join(', ')},
        updated_at = excluded.updated_at`
-  )
-    .bind(...bindings, now, canonicalUserId)
-    .run();
+  );
+  let result: unknown;
+  let claimToken: string | null = null;
+  if (requestId && requestHash) {
+    claimToken = crypto.randomUUID();
+    const expiresAt = new Date(nowDate.getTime() + DEVICE_REQUEST_NONCE_TTL_MS).toISOString();
+    const results = await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO device_request_nonces
+           (device_id, request_id, operation, request_hash, claim_token, created_at, expires_at, completed_at, response_json)
+         VALUES (?, ?, 'config-update', ?, ?, ?, ?, NULL, NULL)`
+      ).bind(deviceId, requestId, requestHash, claimToken, now, expiresAt),
+      configStatement.bind(...bindings, now, canonicalUserId, deviceId, requestId, claimToken),
+      env.DB.prepare(
+        `UPDATE device_request_nonces
+         SET completed_at = ?
+         WHERE device_id = ? AND request_id = ? AND claim_token = ?`
+      ).bind(now, deviceId, requestId, claimToken)
+    ]);
+    result = results[1];
+    const stored = await getDeviceRequestNonce(env, deviceId, requestId);
+    if (!stored) throw new HttpError(409, 'device state changed');
+    assertMatchingConfigRequest(stored, requestHash);
+    if (stored.claimToken !== claimToken) {
+      if (!stored.completedAt) throw new HttpError(409, 'config request in progress');
+      return json({
+        ...(await getConfigRequestReplayPayload(env, stored, deviceId, userId)),
+        requestId,
+        alreadyApplied: true
+      });
+    }
+  } else {
+    result = await configStatement.bind(...bindings, now, canonicalUserId).run();
+  }
   if (getD1Changes(result) === 0) {
+    if (requestId && claimToken) {
+      await env.DB.prepare(
+        'DELETE FROM device_request_nonces WHERE device_id = ? AND request_id = ? AND claim_token = ?'
+      )
+        .bind(deviceId, requestId, claimToken)
+        .run();
+    }
     const user = await env.DB.prepare(
       `SELECT
          users.status,
@@ -683,11 +781,72 @@ async function updateClientConfig(request: Request, env: Env): Promise<Response>
   await deleteEmptyUserRemoteConfig(env, canonicalUserId);
 
   const state = await getEffectiveClientStateForDevice(env, deviceId);
-  return json({
+  const responsePayload = {
     config: state.config,
     profile: { ...state.profile, userId },
     ...(state.notice ? { notice: state.notice } : {})
-  });
+  };
+  if (requestId && claimToken) {
+    await env.DB.prepare(
+      `UPDATE device_request_nonces
+       SET response_json = ?
+       WHERE device_id = ? AND request_id = ? AND claim_token = ? AND completed_at IS NOT NULL`
+    )
+      .bind(JSON.stringify(responsePayload), deviceId, requestId, claimToken)
+      .run();
+    return json({ ...responsePayload, requestId, alreadyApplied: false });
+  }
+  return json(responsePayload);
+}
+
+function parseClientConfigRequestId(request: Request, value: unknown): string | undefined {
+  const bodyRequestId = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  const headerRequestId = request.headers.get('x-youyu-request-id')?.trim().toLowerCase() ?? '';
+  if (!bodyRequestId && !headerRequestId) return undefined;
+  if (!bodyRequestId || !headerRequestId || bodyRequestId !== headerRequestId || !isUuid(bodyRequestId)) {
+    throw new HttpError(400, 'invalid request id');
+  }
+  return bodyRequestId;
+}
+
+async function getDeviceRequestNonce(
+  env: Env,
+  deviceId: string,
+  requestId: string
+): Promise<DeviceRequestNonceRow | null> {
+  return env.DB.prepare(
+    `SELECT
+       request_hash AS requestHash,
+       claim_token AS claimToken,
+       completed_at AS completedAt,
+       response_json AS responseJson
+     FROM device_request_nonces
+     WHERE device_id = ? AND request_id = ?`
+  )
+    .bind(deviceId, requestId)
+    .first<DeviceRequestNonceRow>();
+}
+
+function assertMatchingConfigRequest(nonce: DeviceRequestNonceRow, requestHash: string): void {
+  if (nonce.requestHash !== requestHash) {
+    throw new HttpError(409, 'config request conflict');
+  }
+}
+
+async function getConfigRequestReplayPayload(
+  env: Env,
+  nonce: DeviceRequestNonceRow,
+  deviceId: string,
+  userId: string
+): Promise<Record<string, unknown>> {
+  const stored = nonce.responseJson ? safeParseJson(nonce.responseJson) : null;
+  if (stored && typeof stored === 'object' && !Array.isArray(stored)) return stored as Record<string, unknown>;
+  const state = await getEffectiveClientStateForDevice(env, deviceId);
+  return {
+    config: state.config,
+    profile: { ...state.profile, userId },
+    ...(state.notice ? { notice: state.notice } : {})
+  };
 }
 
 async function updateDeviceVersionHeartbeat(
@@ -1010,6 +1169,25 @@ type AdminUserNoticeAuditRow = {
   updatedAt: string;
 };
 
+type AdminNoticeBatchRow = {
+  operation: string;
+  payloadHash: string;
+  targetCount: number;
+};
+
+type AdminNoticeBatchTargetRow = {
+  status: 'pending' | 'sent' | 'failed';
+  error: string | null;
+  resultJson: string | null;
+};
+
+type DeviceRequestNonceRow = {
+  requestHash: string;
+  claimToken: string;
+  completedAt: string | null;
+  responseJson: string | null;
+};
+
 type AdminNoticeAcknowledgementRow = {
   deviceId: string;
   deviceName: string | null;
@@ -1256,45 +1434,216 @@ async function broadcastAdminUserNotices(request: Request, env: Env): Promise<Re
   const tone = parseNoticeTone(input.tone);
   const durationMinutes = parseNoticeDurationMinutes(input.durationMinutes);
   const requestId = parseOptionalRequestId(input.requestId);
-  await requireKnownUsers(env, userIds);
+  const payloadHash = await hashAdminNoticeBatchPayload({
+    operation: 'broadcast',
+    userIds,
+    message,
+    tone,
+    durationMinutes
+  });
+  await prepareAdminNoticeBatch(env, requestId, 'broadcast', payloadHash, userIds);
 
   const notices: Array<{
     userId: string;
     notice: RemoteUserNotice & { enabled: boolean; durationMinutes: number };
   }> = [];
+  const failed: Array<{ userId: string; error: string }> = [];
+  let sent = 0;
   let alreadyAppliedCount = 0;
   for (const userId of userIds) {
-    const applied = await applyAdminUserNotice(env, userId, {
-      enabled: true,
-      message,
-      tone,
-      durationMinutes,
-      requestId: await deriveNoticeRequestId(requestId, userId)
-    });
-    notices.push({ userId, notice: applied.notice });
-    if (applied.alreadyApplied) alreadyAppliedCount += 1;
+    const storedTarget = await getAdminNoticeBatchTarget(env, requestId, userId);
+    const storedNotice = storedTarget?.status === 'sent' ? parseStoredBatchNotice(storedTarget.resultJson) : null;
+    if (storedNotice) {
+      notices.push({ userId, notice: storedNotice });
+      alreadyAppliedCount += 1;
+      continue;
+    }
+    try {
+      const applied = await applyAdminUserNotice(env, userId, {
+        enabled: true,
+        message,
+        tone,
+        durationMinutes,
+        requestId: await deriveNoticeRequestId(requestId, userId)
+      });
+      notices.push({ userId, notice: applied.notice });
+      await updateAdminNoticeBatchTarget(env, requestId, userId, 'sent', null, JSON.stringify(applied.notice));
+      if (applied.alreadyApplied) alreadyAppliedCount += 1;
+      else sent += 1;
+    } catch (error) {
+      const batchError = toAdminNoticeBatchError(error);
+      await updateAdminNoticeBatchTarget(env, requestId, userId, 'failed', batchError, null);
+      failed.push({ userId, error: batchError });
+    }
   }
 
   return json({
-    ok: true,
-    alreadyApplied: alreadyAppliedCount === userIds.length,
+    ok: failed.length === 0,
+    alreadyApplied: alreadyAppliedCount,
     requestId,
-    sent: userIds.length,
-    failed: [],
+    sent,
+    failed,
     notices
   });
 }
 
 async function resetAdminUserNotices(request: Request, env: Env): Promise<Response> {
   const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserNoticeResetInput;
-  assertOnlyFields(input, ['userIds'], 'unsupported notice field');
+  assertOnlyFields(input, ['userIds', 'requestId'], 'unsupported notice field');
   const userIds = parseNoticeUserIds(input.userIds);
-  await requireKnownUsers(env, userIds);
+  const requestId = parseOptionalRequestId(input.requestId);
+  const payloadHash = await hashAdminNoticeBatchPayload({ operation: 'reset', userIds });
+  await prepareAdminNoticeBatch(env, requestId, 'reset', payloadHash, userIds);
+
+  const failed: Array<{ userId: string; error: string }> = [];
+  let sent = 0;
+  let alreadyApplied = 0;
   let cleared = 0;
   for (const userId of userIds) {
-    if (await clearAdminUserNotice(env, userId)) cleared += 1;
+    const storedTarget = await getAdminNoticeBatchTarget(env, requestId, userId);
+    if (storedTarget?.status === 'sent') {
+      alreadyApplied += 1;
+      continue;
+    }
+    try {
+      const targetCleared = await applyAdminNoticeBatchReset(env, requestId, userId);
+      if (targetCleared) {
+        sent += 1;
+        cleared += 1;
+      } else {
+        alreadyApplied += 1;
+      }
+    } catch (error) {
+      const batchError = toAdminNoticeBatchError(error);
+      await updateAdminNoticeBatchTarget(env, requestId, userId, 'failed', batchError, null);
+      failed.push({ userId, error: batchError });
+    }
   }
-  return json({ ok: true, cleared });
+  return json({
+    ok: failed.length === 0,
+    requestId,
+    sent,
+    failed,
+    alreadyApplied,
+    cleared
+  });
+}
+
+async function hashAdminNoticeBatchPayload(input: {
+  operation: 'broadcast' | 'reset';
+  userIds: string[];
+  message?: string;
+  tone?: 'info' | 'warning';
+  durationMinutes?: number;
+}): Promise<string> {
+  return sha256Hex(JSON.stringify({ ...input, userIds: [...input.userIds].sort() }));
+}
+
+async function prepareAdminNoticeBatch(
+  env: Env,
+  requestId: string,
+  operation: 'broadcast' | 'reset',
+  payloadHash: string,
+  userIds: string[]
+): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO admin_notice_batches
+       (request_id, operation, payload_hash, target_count, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  )
+    .bind(requestId, operation, payloadHash, userIds.length, now, now)
+    .run();
+  const stored = await env.DB.prepare(
+    `SELECT operation, payload_hash AS payloadHash, target_count AS targetCount
+     FROM admin_notice_batches
+     WHERE request_id = ?`
+  )
+    .bind(requestId)
+    .first<AdminNoticeBatchRow>();
+  if (
+    !stored ||
+    stored.operation !== operation ||
+    stored.payloadHash !== payloadHash ||
+    stored.targetCount !== userIds.length
+  ) {
+    throw new HttpError(409, 'notice request conflict');
+  }
+  for (const userId of userIds) {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO admin_notice_batch_targets
+         (request_id, user_id, status, error, result_json, updated_at)
+       VALUES (?, ?, 'pending', NULL, NULL, ?)`
+    )
+      .bind(requestId, userId, now)
+      .run();
+  }
+}
+
+async function getAdminNoticeBatchTarget(
+  env: Env,
+  requestId: string,
+  userId: string
+): Promise<AdminNoticeBatchTargetRow | null> {
+  return env.DB.prepare(
+    `SELECT status, error, result_json AS resultJson
+     FROM admin_notice_batch_targets
+     WHERE request_id = ? AND user_id = ?`
+  )
+    .bind(requestId, userId)
+    .first<AdminNoticeBatchTargetRow>();
+}
+
+async function updateAdminNoticeBatchTarget(
+  env: Env,
+  requestId: string,
+  userId: string,
+  status: 'sent' | 'failed',
+  error: string | null,
+  resultJson: string | null
+): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE admin_notice_batch_targets
+       SET status = ?, error = ?, result_json = ?, updated_at = ?
+       WHERE request_id = ? AND user_id = ?`
+    ).bind(status, error, resultJson, now, requestId, userId),
+    env.DB.prepare('UPDATE admin_notice_batches SET updated_at = ? WHERE request_id = ?').bind(now, requestId)
+  ]);
+}
+
+async function applyAdminNoticeBatchReset(env: Env, requestId: string, userId: string): Promise<boolean> {
+  await requireKnownUser(env, userId);
+  const now = new Date().toISOString();
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE user_notices
+       SET revision = revision + 1, enabled = 0, updated_at = ?
+       WHERE user_id = ? AND enabled <> 0`
+    ).bind(now, userId),
+    env.DB.prepare('DELETE FROM user_notice_acknowledgements WHERE user_id = ?').bind(userId),
+    env.DB.prepare(
+      `UPDATE admin_notice_batch_targets
+       SET status = 'sent', error = NULL, result_json = ?, updated_at = ?
+       WHERE request_id = ? AND user_id = ?`
+    ).bind(JSON.stringify({ cleared: true }), now, requestId, userId),
+    env.DB.prepare('UPDATE admin_notice_batches SET updated_at = ? WHERE request_id = ?').bind(now, requestId)
+  ]);
+  return getD1Changes(results[0]) > 0;
+}
+
+function parseStoredBatchNotice(
+  value: string | null
+): (RemoteUserNotice & { enabled: boolean; durationMinutes: number }) | null {
+  if (!value) return null;
+  const parsed = safeParseJson(value);
+  if (!parsed || typeof parsed !== 'object') return null;
+  return parsed as RemoteUserNotice & { enabled: boolean; durationMinutes: number };
+}
+
+function toAdminNoticeBatchError(error: unknown): string {
+  return error instanceof HttpError ? error.message : 'internal error';
 }
 
 async function applyAdminUserNotice(
@@ -2308,6 +2657,9 @@ export async function cleanupExpiredData(
   let deletedRateLimitRows = 0;
   let completedRateLimitBatches = 0;
   let lastRateLimitBatchChanges = 0;
+  let deletedNonceRows = 0;
+  let completedNonceBatches = 0;
+  let lastNonceBatchChanges = 0;
 
   for (let batch = 0; batch < safeMaxBatches; batch += 1) {
     const result = await env.DB.prepare(
@@ -2345,13 +2697,75 @@ export async function cleanupExpiredData(
     if (lastRateLimitBatchChanges < RETENTION_DELETE_BATCH_SIZE) break;
   }
 
+  const nowIso = new Date(safeNow).toISOString();
+  for (let batch = 0; batch < safeMaxBatches; batch += 1) {
+    const result = await env.DB.prepare(
+      `DELETE FROM device_request_nonces
+       WHERE (device_id, request_id) IN (
+         SELECT device_id, request_id FROM device_request_nonces
+         WHERE expires_at <= ?
+         ORDER BY expires_at
+         LIMIT ?
+       )`
+    )
+      .bind(nowIso, RETENTION_DELETE_BATCH_SIZE)
+      .run();
+    lastNonceBatchChanges = getD1Changes(result);
+    deletedNonceRows += lastNonceBatchChanges;
+    completedNonceBatches += 1;
+    if (lastNonceBatchChanges < RETENTION_DELETE_BATCH_SIZE) break;
+  }
+
+  const dedupCapacity = await getTrafficReportDedupCapacity(env);
+
   return {
     cutoff,
     deletedReportRows,
     deletedRateLimitRows,
+    deletedNonceRows,
     reportBatchLimitReached: completedBatches === safeMaxBatches && lastBatchChanges === RETENTION_DELETE_BATCH_SIZE,
     rateLimitBatchLimitReached:
-      completedRateLimitBatches === safeMaxBatches && lastRateLimitBatchChanges === RETENTION_DELETE_BATCH_SIZE
+      completedRateLimitBatches === safeMaxBatches && lastRateLimitBatchChanges === RETENTION_DELETE_BATCH_SIZE,
+    nonceBatchLimitReached:
+      completedNonceBatches === safeMaxBatches && lastNonceBatchChanges === RETENTION_DELETE_BATCH_SIZE,
+    dedupCapacity
+  };
+}
+
+async function getTrafficReportDedupCapacity(env: Env): Promise<TrafficReportDedupCapacity> {
+  const row = await env.DB.prepare(
+    `SELECT
+       COUNT(*) AS rowCount,
+       COALESCE(SUM(
+         LENGTH(id) +
+         LENGTH(payload_hash) +
+         LENGTH(traffic_date) +
+         1 +
+         LENGTH(COALESCE(legacy_device_id, '')) +
+         LENGTH(COALESCE(CAST(legacy_upload_delta AS TEXT), '')) +
+         LENGTH(COALESCE(CAST(legacy_download_delta AS TEXT), '')) +
+         LENGTH(COALESCE(legacy_reported_at, '')) +
+         32
+       ), 0) AS estimatedBytes,
+       MIN(traffic_date) AS oldestTrafficDate,
+       MAX(traffic_date) AS newestTrafficDate
+     FROM traffic_report_dedup`
+  ).first<{
+    rowCount?: number | null;
+    estimatedBytes?: number | null;
+    oldestTrafficDate?: string | null;
+    newestTrafficDate?: string | null;
+  }>();
+  const rowCount = normalizeBytes(row?.rowCount);
+  const estimatedBytes = normalizeBytes(row?.estimatedBytes);
+  return {
+    rowCount,
+    estimatedBytes,
+    oldestTrafficDate: row?.oldestTrafficDate ?? null,
+    newestTrafficDate: row?.newestTrafficDate ?? null,
+    rowBudget: TRAFFIC_REPORT_DEDUP_ROW_BUDGET,
+    byteBudget: TRAFFIC_REPORT_DEDUP_BYTE_BUDGET,
+    overBudget: rowCount > TRAFFIC_REPORT_DEDUP_ROW_BUDGET || estimatedBytes > TRAFFIC_REPORT_DEDUP_BYTE_BUDGET
   };
 }
 
@@ -3034,19 +3448,6 @@ async function requireKnownUser(env: Env, userId: string): Promise<void> {
   if (!user) throw new HttpError(404, 'unknown user');
 }
 
-async function requireKnownUsers(env: Env, userIds: string[]): Promise<void> {
-  if (!userIds.length) throw new HttpError(400, 'invalid notice users');
-  const result = await env.DB.prepare(
-    `SELECT id FROM users
-     WHERE id IN (${userIds.map(() => '?').join(', ')})
-       AND status = 'active'
-       AND merged_into_user_id IS NULL`
-  )
-    .bind(...userIds)
-    .all<{ id: string }>();
-  if ((result.results ?? []).length !== userIds.length) throw new HttpError(400, 'unknown user');
-}
-
 async function resolveCanonicalUserId(env: Env, requestedUserId: string): Promise<string> {
   let userId = requestedUserId;
   const visited = new Set<string>();
@@ -3073,32 +3474,49 @@ async function verifyDeviceRequest(
   env: Env,
   userId: string,
   deviceId: string,
-  bodyText: string
+  bodyText: string,
+  requestId?: string
 ): Promise<string> {
-  const canonicalUserId = await resolveCanonicalUserId(env, userId);
-  const device = await env.DB.prepare('SELECT id, device_seed AS deviceSeed FROM devices WHERE id = ? AND user_id = ?')
-    .bind(deviceId, canonicalUserId)
-    .first<{ id: string; deviceSeed: string }>();
-  if (!device?.deviceSeed) throw new HttpError(403, 'unknown device');
-
+  if (!isUuid(userId) || !isUuid(deviceId)) throw new HttpError(400, 'invalid identity');
   const timestamp = request.headers.get('x-youyu-timestamp')?.trim() ?? '';
   const signature = request.headers.get('x-youyu-signature')?.trim() ?? '';
   if (!timestamp || !signature) throw new HttpError(401, 'signature required');
+  if (!/^\d{10,16}$/.test(timestamp)) throw new HttpError(401, 'stale signature');
+  if (!/^[0-9a-f]{64}$/i.test(signature)) throw new HttpError(401, 'invalid signature');
 
   const requestTime = Number(timestamp);
   if (!Number.isFinite(requestTime) || Math.abs(Date.now() - requestTime) > 5 * 60 * 1000) {
     throw new HttpError(401, 'stale signature');
   }
 
-  const expected = await signDeviceRequest(
-    request.method,
-    new URL(request.url),
-    bodyText,
-    device.deviceSeed,
-    timestamp
-  );
-  if (!constantTimeEqual(signature, expected)) throw new HttpError(401, 'invalid signature');
-  return canonicalUserId;
+  const rateLimitKey = `device-auth:${getClientIp(request)}:${deviceId}`;
+  await consumeRateLimitAttempt(env, rateLimitKey, DEVICE_AUTH_FAILURE_LIMIT, DEVICE_AUTH_FAILURE_WINDOW_MS);
+  try {
+    const canonicalUserId = await resolveCanonicalUserId(env, userId);
+    const device = await env.DB.prepare(
+      'SELECT id, device_seed AS deviceSeed FROM devices WHERE id = ? AND user_id = ?'
+    )
+      .bind(deviceId, canonicalUserId)
+      .first<{ id: string; deviceSeed: string }>();
+    if (!device?.deviceSeed) throw new HttpError(403, 'unknown device');
+
+    const expected = await signDeviceRequest(
+      request.method,
+      new URL(request.url),
+      bodyText,
+      device.deviceSeed,
+      timestamp,
+      requestId
+    );
+    if (!constantTimeEqual(signature, expected)) throw new HttpError(401, 'invalid signature');
+    await clearRateLimit(env, rateLimitKey);
+    return canonicalUserId;
+  } catch (error) {
+    if (!(error instanceof HttpError) || (error.status !== 401 && error.status !== 403)) {
+      await clearRateLimit(env, rateLimitKey).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 async function signDeviceRequest(
@@ -3106,11 +3524,13 @@ async function signDeviceRequest(
   url: URL,
   bodyText: string,
   secret: string,
-  timestamp: string
+  timestamp: string,
+  requestId?: string
 ): Promise<string> {
-  const canonical = [method.toUpperCase(), `${url.pathname}${url.search}`, timestamp, await sha256Hex(bodyText)].join(
-    '\n'
-  );
+  const canonicalParts = [method.toUpperCase(), `${url.pathname}${url.search}`, timestamp];
+  if (requestId) canonicalParts.push(requestId);
+  canonicalParts.push(await sha256Hex(bodyText));
+  const canonical = canonicalParts.join('\n');
   return hmacSha256Hex(secret, canonical);
 }
 
@@ -3783,6 +4203,8 @@ function errorCodeFor(status: number, message: string): string {
   const knownCodes: Record<string, string> = {
     'admin disabled': 'ADMIN_DISABLED',
     'config conflict': 'CONFIG_CONFLICT',
+    'config request conflict': 'CONFIG_REQUEST_CONFLICT',
+    'config request in progress': 'CONFIG_REQUEST_IN_PROGRESS',
     'managed config editing forbidden': 'MANAGED_CONFIG_EDITING_FORBIDDEN',
     'device state changed': 'DEVICE_STATE_CHANGED',
     forbidden: 'FORBIDDEN',

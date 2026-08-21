@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
@@ -251,9 +252,11 @@ export class RemoteConfigClient {
     const secret = await this.options.store.getDeviceSecret();
     if (!secret) throw new Error('remote config device secret missing');
     const url = `${endpoint}/api/config`;
+    const requestId = randomUUID();
     const bodyText = JSON.stringify({
       userId: identity.userId,
       deviceId: identity.deviceId,
+      requestId,
       ...(typeof input.subscriptionUrl !== 'undefined'
         ? { subscriptionUrl: input.subscriptionUrl?.trim() || null }
         : {}),
@@ -265,7 +268,7 @@ export class RemoteConfigClient {
       bodyText,
       {
         'content-type': 'application/json',
-        ...createDeviceAuthHeaders('POST', url, bodyText, secret)
+        ...createDeviceAuthHeaders('POST', url, bodyText, secret, requestId)
       },
       options.proxyUrl,
       this.options.requestTimeoutMs,
@@ -362,7 +365,19 @@ export class RemoteConfigClient {
 }
 
 function normalizeEndpoint(value: string): string {
-  return value.trim().replace(/\/+$/, '');
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  let endpoint: URL;
+  try {
+    endpoint = new URL(trimmed);
+  } catch {
+    throw new Error('remote config endpoint invalid');
+  }
+  if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || !endpoint.hostname) {
+    throw new Error('remote config endpoint invalid');
+  }
+  return endpoint.href.replace(/\/+$/, '');
 }
 
 function normalizeRemoteConfigCache(value: unknown): RemoteConfigCache | undefined {

@@ -10,12 +10,14 @@ import { TrafficStore } from '../../src/main/traffic/store';
 
 let dir: string;
 let server: Server | undefined;
+const defaultFetch = globalThis.fetch;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'youyu-traffic-reporter-'));
 });
 
 afterEach(async () => {
+  globalThis.fetch = defaultFetch;
   if (server) {
     await new Promise<void>((resolve) => server?.close(() => resolve()));
     server = undefined;
@@ -57,6 +59,25 @@ function deferred<T>() {
 }
 
 describe('TrafficReporter', () => {
+  it.each([
+    ['non-HTTPS', 'http://traffic.example.com'],
+    ['credentials', 'https://user:pass@traffic.example.com'],
+    ['malformed', 'not a url']
+  ])('rejects a %s runtime endpoint before any network request', async (_label, endpoint) => {
+    const fetch = vi.fn();
+    const reporter = new TrafficReporter({
+      store: new TrafficStore(dir),
+      endpoint,
+      appVersion: '1.7.7',
+      fetch
+    });
+
+    await expect(reporter.register({ name: 'Alice', passphrase: 'secret' })).rejects.toThrow(
+      'traffic endpoint invalid'
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('marks traffic reporting as not configured when the endpoint is missing', async () => {
     const store = new TrafficStore(dir);
     const reporter = new TrafficReporter({
@@ -74,7 +95,7 @@ describe('TrafficReporter', () => {
   });
 
   it('registers directly without requiring a running proxy', async () => {
-    const endpoint = await startJsonServer(async (body, request) => {
+    const endpoint = await startSecureJsonEndpoint(async (body, request) => {
       if (request.url === '/api/traffic/report') {
         expect(body.uploadDelta).toBe(0);
         expect(body.downloadDelta).toBe(0);
@@ -207,7 +228,7 @@ describe('TrafficReporter', () => {
 
   it('uses activation totals as the authoritative baseline without a follow-up heartbeat', async () => {
     let reportRequests = 0;
-    const endpoint = await startJsonServer(async (_body, request) => {
+    const endpoint = await startSecureJsonEndpoint(async (_body, request) => {
       if (request.url === '/api/traffic/report') {
         reportRequests += 1;
         return { status: 503, body: { error: 'heartbeat unavailable' } };
@@ -250,7 +271,7 @@ describe('TrafficReporter', () => {
   });
 
   it('rejects an incomplete activation baseline before replacing the local identity', async () => {
-    const endpoint = await startJsonServer(async () => ({
+    const endpoint = await startSecureJsonEndpoint(async () => ({
       status: 200,
       body: { userId: 'new-user', deviceId: 'device', name: 'Bob' }
     }));
@@ -301,28 +322,31 @@ describe('TrafficReporter', () => {
 
   it('reuses the exact activation body and device seed when a retryable direct response falls back', async () => {
     let proxiedBody: Record<string, unknown> | undefined;
-    const proxyUrl = await startJsonServer(async (body, request) => {
-      expect(request.url).toBe('http://traffic.invalid/api/activate');
+    const origin = await startJsonTlsOrigin(async (body, request) => {
+      expect(request).toContain('POST /api/activate HTTP/1.1');
       proxiedBody = body;
       return {
         status: 200,
         body: activationPayload('user_1', 'device_1', 'Alice')
       };
     });
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'temporary' }), { status: 503 }))
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ ok: true, traffic: { totalUpload: 0, totalDownload: 0 } }), { status: 200 })
-      );
+    const proxy = await startConnectProxy(origin.port);
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ error: 'temporary' }), { status: 503 }));
     const reporter = new TrafficReporter({
       store: new TrafficStore(dir),
-      endpoint: 'http://traffic.invalid',
+      endpoint: `https://agent1:${origin.port}`,
       appVersion: '1.6.0',
       fetch
     });
 
-    await reporter.register({ name: 'Alice', passphrase: 'secret' }, { proxyUrl });
+    try {
+      await withTestCertificate(() =>
+        reporter.register({ name: 'Alice', passphrase: 'secret' }, { proxyUrl: proxy.url })
+      );
+    } finally {
+      await proxy.close();
+      await origin.close();
+    }
 
     const directBody = String(fetch.mock.calls[0]?.[1]?.body);
     expect(JSON.parse(directBody)).toEqual(proxiedBody);
@@ -335,35 +359,41 @@ describe('TrafficReporter', () => {
   });
 
   it('reports both HTTP route outcomes without exposing the activation request', async () => {
-    const proxyUrl = await startJsonServer(async () => ({
+    const origin = await startJsonTlsOrigin(async () => ({
       status: 502,
       body: { error: 'gateway unavailable' }
     }));
+    const proxy = await startConnectProxy(origin.port);
     const fetch = vi.fn(async () => new Response(JSON.stringify({ error: 'service unavailable' }), { status: 503 }));
     const reporter = new TrafficReporter({
       store: new TrafficStore(dir),
-      endpoint: 'http://traffic.invalid',
+      endpoint: `https://agent1:${origin.port}`,
       appVersion: '1.6.0',
       fetch
     });
 
     let error: unknown;
     try {
-      await reporter.register({ name: 'Sensitive Name', passphrase: 'Sensitive Passphrase' }, { proxyUrl });
+      await withTestCertificate(() =>
+        reporter.register({ name: 'Sensitive Name', passphrase: 'Sensitive Passphrase' }, { proxyUrl: proxy.url })
+      );
     } catch (caught) {
       error = caught;
+    } finally {
+      await proxy.close();
+      await origin.close();
     }
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('direct=HTTP_503');
     expect((error as Error).message).toContain('proxy=HTTP_502');
-    expect((error as Error).message).not.toContain('traffic.invalid');
+    expect((error as Error).message).not.toContain('agent1');
     expect((error as Error).message).not.toContain('Sensitive Name');
     expect((error as Error).message).not.toContain('Sensitive Passphrase');
   });
 
   it('keeps the activation error detail returned by the backend', async () => {
-    const endpoint = await startJsonServer(async () => ({
+    const endpoint = await startSecureJsonEndpoint(async () => ({
       status: 403,
       body: { error: 'invalid passphrase' }
     }));
@@ -379,7 +409,7 @@ describe('TrafficReporter', () => {
   });
 
   it('times out stalled activation requests', async () => {
-    const endpoint = await startJsonServer(
+    const endpoint = await startSecureJsonEndpoint(
       async () =>
         new Promise((resolve) => {
           setTimeout(() => resolve({ status: 200, body: { userId: 'u', deviceId: 'd' } }), 200);
@@ -394,21 +424,6 @@ describe('TrafficReporter', () => {
 
     await expect(reporter.register({ name: 'Alice', passphrase: 'secret' })).rejects.toThrow(
       /traffic request timed out|aborted/i
-    );
-  });
-
-  it('rejects a truncated response from an HTTP proxy without hanging', async () => {
-    const proxyUrl = await startTruncatedHttpProxy();
-    const reporter = new TrafficReporter({
-      store: new TrafficStore(dir),
-      endpoint: 'http://traffic.invalid',
-      appVersion: '1.5.8',
-      requestTimeoutMs: 200,
-      fetch: rejectDirectFetch
-    });
-
-    await expect(within(reporter.register({ name: 'Alice', passphrase: 'secret' }, { proxyUrl }))).rejects.toThrow(
-      'traffic response aborted'
     );
   });
 
@@ -460,7 +475,7 @@ describe('TrafficReporter', () => {
 
   it('does not report traffic while the identity is still pending activation', async () => {
     let reportCount = 0;
-    const endpoint = await startJsonServer(async () => {
+    const endpoint = await startSecureJsonEndpoint(async () => {
       reportCount += 1;
       return {
         status: 403,
@@ -498,7 +513,7 @@ describe('TrafficReporter', () => {
 
   it('signs traffic reports and sends a report id', async () => {
     let reportCount = 0;
-    const endpoint = await startJsonServer(async (body, request) => {
+    const endpoint = await startSecureJsonEndpoint(async (body, request) => {
       reportCount += 1;
       expect(request.url).toBe('/api/traffic/report');
       expect(request.headers['x-youyu-timestamp']).toEqual(expect.any(String));
@@ -605,40 +620,21 @@ describe('TrafficReporter', () => {
     });
   });
 
-  it('rejects an oversized traffic response received through an HTTP proxy', async () => {
-    const proxyUrl = await startOversizedHttpProxy(64 * 1024 + 1);
-    const store = new TrafficStore(dir);
-    await store.createDeviceSeed();
-    await store.registerIdentity({ userId: 'user_1', deviceId: 'device_1', name: 'Alice', deviceName: 'DESKTOP' });
-    await store.addTraffic(100, 200);
-    const reporter = new TrafficReporter({
-      store,
-      endpoint: 'http://traffic.invalid',
-      appVersion: '1.6.5',
-      fetch: rejectDirectFetch,
-      getProxyUrl: () => proxyUrl
-    });
-
-    await expect(reporter.reportPending()).rejects.toThrow('code=RESPONSE_BODY_TOO_LARGE');
-    await expect(store.getSnapshot()).resolves.toMatchObject({
-      stats: { pendingUpload: 100, pendingDownload: 200 }
-    });
-  });
-
   it('reuses the exact signed report body and report id on proxy fallback', async () => {
     let proxiedBody: Record<string, unknown> | undefined;
-    let proxiedSignature: string | string[] | undefined;
-    let proxiedTimestamp: string | string[] | undefined;
-    const proxyUrl = await startJsonServer(async (body, request) => {
-      expect(request.url).toBe('http://traffic.invalid/api/traffic/report');
+    let proxiedSignature: string | undefined;
+    let proxiedTimestamp: string | undefined;
+    const origin = await startJsonTlsOrigin(async (body, request) => {
+      expect(request).toContain('POST /api/traffic/report HTTP/1.1');
       proxiedBody = body;
-      proxiedSignature = request.headers['x-youyu-signature'];
-      proxiedTimestamp = request.headers['x-youyu-timestamp'];
+      proxiedSignature = /^x-youyu-signature:\s*(.+)$/im.exec(request)?.[1]?.trim();
+      proxiedTimestamp = /^x-youyu-timestamp:\s*(.+)$/im.exec(request)?.[1]?.trim();
       return {
         status: 200,
         body: { ok: true, traffic: { totalUpload: 100, totalDownload: 200 } }
       };
     });
+    const proxy = await startConnectProxy(origin.port);
     const fetch = vi.fn(
       async (_input: string, _init?: RequestInit) =>
         new Response(JSON.stringify({ error: 'temporary' }), { status: 503 })
@@ -654,13 +650,18 @@ describe('TrafficReporter', () => {
     await store.addTraffic(100, 200);
     const reporter = new TrafficReporter({
       store,
-      endpoint: 'http://traffic.invalid',
+      endpoint: `https://agent1:${origin.port}`,
       appVersion: '1.6.0',
       fetch,
-      getProxyUrl: () => proxyUrl
+      getProxyUrl: () => proxy.url
     });
 
-    await reporter.reportPending();
+    try {
+      await withTestCertificate(() => reporter.reportPending());
+    } finally {
+      await proxy.close();
+      await origin.close();
+    }
 
     const directInit = fetch.mock.calls[0]?.[1];
     const directHeaders = directInit?.headers as Record<string, string>;
@@ -679,7 +680,7 @@ describe('TrafficReporter', () => {
 
   it('refreshes backend totals even when no local traffic is pending', async () => {
     let reportCount = 0;
-    const endpoint = await startJsonServer(async (body, request) => {
+    const endpoint = await startSecureJsonEndpoint(async (body, request) => {
       reportCount += 1;
       expect(request.url).toBe('/api/traffic/report');
       expect(body.uploadDelta).toBe(0);
@@ -724,7 +725,7 @@ describe('TrafficReporter', () => {
   it('reuses a persisted report id until the pending traffic is acknowledged', async () => {
     const reportIds: unknown[] = [];
     let attempts = 0;
-    const endpoint = await startJsonServer(async (body) => {
+    const endpoint = await startSecureJsonEndpoint(async (body) => {
       attempts += 1;
       reportIds.push(body.reportId);
       if (attempts === 1) return { status: 500, body: { error: 'response lost' } };
@@ -770,7 +771,7 @@ describe('TrafficReporter', () => {
     const requestStarted = new Promise<void>((resolve) => {
       markRequestStarted = resolve;
     });
-    const endpoint = await startJsonServer(async () => {
+    const endpoint = await startSecureJsonEndpoint(async () => {
       reportCount += 1;
       markRequestStarted?.();
       await responseGate;
@@ -792,7 +793,7 @@ describe('TrafficReporter', () => {
   });
 
   it('clears a rejected unknown device while preserving pending traffic', async () => {
-    const endpoint = await startJsonServer(async () => ({
+    const endpoint = await startSecureJsonEndpoint(async () => ({
       status: 403,
       body: { error: 'unknown device' }
     }));
@@ -824,7 +825,7 @@ describe('TrafficReporter', () => {
   });
 
   it('keeps identity for other authorization failures', async () => {
-    const endpoint = await startJsonServer(async () => ({
+    const endpoint = await startSecureJsonEndpoint(async () => ({
       status: 403,
       body: { error: 'stale request' }
     }));
@@ -852,7 +853,7 @@ describe('TrafficReporter', () => {
     const requestStarted = new Promise<void>((resolve) => {
       markRequestStarted = resolve;
     });
-    const endpoint = await startJsonServer(async () => {
+    const endpoint = await startSecureJsonEndpoint(async () => {
       markRequestStarted?.();
       await responseGate;
       return { status: 403, body: { error: 'unknown device' } };
@@ -918,7 +919,7 @@ describe('TrafficReporter', () => {
     const requestStarted = new Promise<void>((resolve) => {
       markRequestStarted = resolve;
     });
-    const endpoint = await startJsonServer(async () => {
+    const endpoint = await startSecureJsonEndpoint(async () => {
       markRequestStarted?.();
       await responseGate;
       return {
@@ -970,39 +971,63 @@ async function startJsonServer(
   return `http://127.0.0.1:${address.port}`;
 }
 
-async function startTruncatedHttpProxy(): Promise<string> {
-  server = createServer((request, response) => {
-    request.resume();
-    request.once('end', () => {
-      response.writeHead(200, {
-        'content-type': 'application/json; charset=utf-8',
-        'content-length': '200'
-      });
-      response.write('{"userId":"partial"');
-      setImmediate(() => response.destroy());
-    });
-  });
-  await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', () => resolve()));
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('test proxy failed to start');
-  return `http://127.0.0.1:${address.port}`;
+async function startSecureJsonEndpoint(
+  handler: (body: Record<string, unknown>, request: IncomingMessage) => Promise<{ status: number; body: unknown }>
+): Promise<string> {
+  const httpEndpoint = await startJsonServer(handler);
+  const httpsEndpoint = httpEndpoint.replace(/^http:/, 'https:');
+  globalThis.fetch = (input, init) => {
+    const value = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const rewritten = value.startsWith(httpsEndpoint) ? `${httpEndpoint}${value.slice(httpsEndpoint.length)}` : value;
+    return defaultFetch(rewritten, init);
+  };
+  return httpsEndpoint;
 }
 
-async function startOversizedHttpProxy(declaredLength: number): Promise<string> {
-  server = createServer((request, response) => {
-    request.resume();
-    request.once('end', () => {
-      response.writeHead(200, {
-        'content-type': 'application/json; charset=utf-8',
-        'content-length': String(declaredLength)
-      });
-      response.end('{}');
+async function startJsonTlsOrigin(
+  handler: (body: Record<string, unknown>, request: string) => Promise<{ status: number; body: unknown }>
+) {
+  const sockets = new Set<Socket>();
+  const tlsServer = createTlsServer({ key: testTlsKey, cert: testTlsCert }, (socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    socket.on('error', () => undefined);
+    socket.setEncoding('utf8');
+    let request = '';
+    let handled = false;
+    socket.on('data', async (chunk: string) => {
+      if (handled) return;
+      request += chunk;
+      const headerEnd = request.indexOf('\r\n\r\n');
+      if (headerEnd < 0) return;
+      const declaredLength = Number(/^content-length:\s*(\d+)$/im.exec(request.slice(0, headerEnd))?.[1] ?? '0');
+      const bodyText = request.slice(headerEnd + 4);
+      if (Buffer.byteLength(bodyText) < declaredLength) return;
+      handled = true;
+      try {
+        const result = await handler(JSON.parse(bodyText || '{}') as Record<string, unknown>, request);
+        const responseBody = JSON.stringify(result.body);
+        socket.end(
+          [
+            `HTTP/1.1 ${result.status} Test Response`,
+            'Content-Type: application/json; charset=utf-8',
+            `Content-Length: ${Buffer.byteLength(responseBody)}`,
+            'Connection: close',
+            '',
+            responseBody
+          ].join('\r\n')
+        );
+      } catch {
+        socket.destroy();
+      }
     });
   });
-  await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', () => resolve()));
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('test proxy failed to start');
-  return `http://127.0.0.1:${address.port}`;
+  tlsServer.on('tlsClientError', () => undefined);
+  const port = await listen(tlsServer);
+  return {
+    port,
+    close: () => closeServer(tlsServer, sockets)
+  };
 }
 
 async function startTruncatedTlsOrigin(declaredLength = 200, body = '{"userId":"partial"') {

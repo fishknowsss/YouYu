@@ -122,11 +122,17 @@ Content-Type: application/json
 X-YouYu-Timestamp: <milliseconds>
 X-YouYu-Signature: <device HMAC>
 
-{ "userId": "...", "deviceId": "...", "subscriptionUrl": "https://...", "ruleProfile": "subscription" }
+{ "userId": "...", "deviceId": "...", "requestId": "<uuid>", "subscriptionUrl": "https://...", "ruleProfile": "subscription" }
 ```
 
-The Worker verifies the body-bound device signature and only accepts `subscriptionUrl` and `ruleProfile`; status,
-region policy, and other admin-owned fields cannot be changed by a client. Client writes follow the global
+New clients also send the same UUID in `X-YouYu-Request-Id`; it is covered by the body-bound device signature. The
+Worker retains the completed result for 10 minutes, so a timeout retry with the same signed request returns the same
+state with `alreadyApplied: true` instead of advancing the config version or repeating the write. Reusing an ID with a
+different signed payload conflicts. Older clients that omit `requestId` remain accepted during the compatibility
+window and keep the existing last-writer-wins behavior.
+
+The Worker only accepts `subscriptionUrl` and `ruleProfile`; status, region policy, and other admin-owned fields cannot
+be changed by a client. Client writes follow the global
 `canEditManagedConfig` policy, which defaults to allowed. The user drawer can keep following that global value or set
 an explicit per-user exception through the authenticated endpoint:
 
@@ -228,12 +234,14 @@ acknowledgement row is a device with `deviceId`, `deviceName`, `lastSeenAt`, and
 
 `POST /api/admin/notices/broadcast` accepts `userIds` (1–200 unique UUIDs), `message`, `tone`, `durationMinutes`, and
 `requestId`. It writes the same enabled notice to each selected user through the existing per-user notice slot, so
-current 1.7.x clients receive it without an app update. Duplicate IDs are ignored. An unknown, merged, or inactive
-user rejects the whole request. The batch `requestId` is turned into a stable per-user request ID, so retries with the
-same payload are idempotent and a changed payload conflicts. The response reports `sent`, `failed`, `alreadyApplied`,
-and the resulting per-user notices.
+current 1.7.x clients receive it without an app update. Duplicate IDs are ignored. The Worker persists one result per
+target: eligible users are sent independently, while unknown, merged, or inactive users are reported as failures
+without rolling back successful targets. A retry with the same payload processes only prior failures; completed
+targets do not advance their revision or repeat side effects. A changed payload conflicts. The response reports the
+persisted `sent` and `alreadyApplied` counts, the `failed` target list, and per-user results.
 
-`POST /api/admin/notices/reset` accepts `{ "userIds": [...] }` and stops delivery for those users.
+`POST /api/admin/notices/reset` accepts `{ "userIds": [...], "requestId": "<uuid>" }` and uses the same persisted
+per-target retry semantics when stopping delivery for multiple users.
 
 Messages are limited to 500 characters and are data only: no HTML, link, command, or rich-content field is accepted.
 Only `info` and `warning` tones are supported. `durationMinutes` defaults to 10, must be an integer multiple of 5
@@ -275,7 +283,8 @@ Authorization: Bearer <ADMIN_TOKEN>
 ## Data retention
 
 The Worker runs D1 maintenance every six hours through the Cron Trigger in `wrangler.toml`.
-It keeps the detailed `traffic_reports` audit rows for 90 days and removes only expired `rate_limits` rows.
+It keeps the detailed `traffic_reports` audit rows for 90 days and removes expired `rate_limits` and
+`device_request_nonces` rows in bounded batches.
 The compact `traffic_report_dedup` proof (report id, canonical traffic-mutation hash, traffic date, and anomaly bit)
 is retained permanently, so a response-lost retry cannot be counted again after the audit row expires. Reusing a
 report id with a different device, byte delta, or normalized report timestamp is rejected. Mergeable user aliases and
@@ -292,11 +301,29 @@ proof; zero-traffic heartbeats update device presence and return current totals 
 the current two-minute client interval the theoretical worst case is still 720 proof rows per device per day (262,800
 per year) when every interval contains traffic, while an idle device adds none. New rows keep only the four proof fields
 above and use a `WITHOUT ROWID` table. Columns prefixed with `legacy_` exist only to backfill pre-migration audit rows
-and are cleared when such a row is first retried. Monitor D1 row/storage growth; a future protocol revision can add a
-monotonic per-device sequence and retire permanent UUID tombstones only after legacy clients have aged out.
+and are cleared when such a row is first retried. Each maintenance response exposes row count, estimated payload
+bytes, oldest/newest traffic date, and configured budgets for the permanent proof table. The current warning budgets
+are 5,000,000 rows or 1 GiB estimated payload; crossing either emits the structured
+`traffic_report_dedup_capacity_warning` event. Maintenance never deletes `traffic_report_dedup` rows.
+
+A compatible future evolution can add an additive per-device sequence state and capability-negotiated dual protocol.
+Sequence-capable reports must retain the current payload-hash conflict rule, while UUID report IDs and permanent
+tombstones continue to serve legacy clients. Tombstone retirement is deferred until legacy traffic is observably gone
+and sequence-state backfill has been verified; this phase performs no dedup cleanup.
 
 The authenticated `POST /api/admin/maintenance` endpoint runs the same bounded cleanup on demand.
 Use it after deploying the retention migration when an older database has a large backlog.
+
+## Deferred protocol compatibility designs
+
+Shared-passphrase registration is unchanged in this phase. A future additive flow can issue short-lived, single-use
+invite tokens bound to the approved user and `deviceKey` identity, record approval/revocation audit events, and rotate
+overlapping passphrase identifiers without changing existing long-lived device credentials. The legacy registration
+path must remain available until capable clients have completed the migration.
+
+Configuration remains server-ordered last-writer-wins in this phase. A future optional `revision` / `expectedRevision`
+contract can let capable clients receive a conflict with the current revision, while legacy requests continue through
+the existing behavior. Revision enforcement must not become mandatory until old clients have aged out.
 
 Run the Worker maintenance tests with Node.js 24 or newer:
 

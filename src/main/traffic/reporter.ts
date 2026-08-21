@@ -302,7 +302,19 @@ async function getOptionalDeviceKey(
 }
 
 function normalizeEndpoint(value: string): string {
-  return value.trim().replace(/\/+$/, '');
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  let endpoint: URL;
+  try {
+    endpoint = new URL(trimmed);
+  } catch {
+    throw new Error('traffic endpoint invalid');
+  }
+  if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || !endpoint.hostname) {
+    throw new Error('traffic endpoint invalid');
+  }
+  return endpoint.href.replace(/\/+$/, '');
 }
 
 function isNonNegativeNumber(value: unknown): value is number {

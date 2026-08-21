@@ -62,6 +62,8 @@ export const ADMIN_SCRIPT = String.raw`
     profileRequestId: '',
     noticeRequestId: '',
     broadcastRequestId: '',
+    resetNoticesRequestId: '',
+    resetNoticesUserKey: '',
     selectedUserIds: new Set()
   };
 
@@ -1426,8 +1428,11 @@ export const ADMIN_SCRIPT = String.raw`
         requestId: requestId
       })
     });
-    closeBroadcastDialog();
-    state.broadcastRequestId = '';
+    const failedCount = Array.isArray(data.failed) ? data.failed.length : 0;
+    if (!failedCount) {
+      closeBroadcastDialog();
+      state.broadcastRequestId = '';
+    }
     await loadUsers();
     renderUsers();
     if (state.activeUserId && userIds.includes(state.activeUserId)) {
@@ -1435,8 +1440,9 @@ export const ADMIN_SCRIPT = String.raw`
       renderUserNotice(noticeData.notice || null);
       renderNoticeReceipts(noticeData);
     }
-    setStatus('已发给 ' + data.sent + ' 人');
-    showToast('已发给 ' + data.sent + ' 人');
+    const result = formatNoticeBatchResult('发送', data);
+    setStatus(result);
+    showToast(result);
   }
 
   async function resetSelectedNotices() {
@@ -1444,11 +1450,23 @@ export const ADMIN_SCRIPT = String.raw`
     if (!userIds.length) return;
     const accepted = await askConfirm('停止选中 ' + userIds.length + ' 人的通知？', '停止');
     if (!accepted) return;
+    const userKey = userIds.slice().sort().join(',');
+    if (state.resetNoticesUserKey !== userKey) {
+      state.resetNoticesRequestId = '';
+      state.resetNoticesUserKey = userKey;
+    }
+    const requestId = state.resetNoticesRequestId || createRequestId();
+    state.resetNoticesRequestId = requestId;
     const data = await api('/api/admin/notices/reset', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ userIds: userIds })
+      body: JSON.stringify({ userIds: userIds, requestId: requestId })
     });
+    const failedCount = Array.isArray(data.failed) ? data.failed.length : 0;
+    if (!failedCount) {
+      state.resetNoticesRequestId = '';
+      state.resetNoticesUserKey = '';
+    }
     await loadUsers();
     renderUsers();
     if (state.activeUserId && userIds.includes(state.activeUserId)) {
@@ -1456,8 +1474,16 @@ export const ADMIN_SCRIPT = String.raw`
       renderUserNotice(noticeData.notice || null);
       renderNoticeReceipts(noticeData);
     }
-    setStatus('已停止 ' + data.cleared + ' 人的通知');
-    showToast('已停止 ' + data.cleared + ' 人的通知');
+    const result = formatNoticeBatchResult('停止', data);
+    setStatus(result);
+    showToast(result);
+  }
+
+  function formatNoticeBatchResult(action, data) {
+    const sent = Math.max(0, Number(data.sent) || 0);
+    const alreadyApplied = Math.max(0, Number(data.alreadyApplied) || 0);
+    const failed = Array.isArray(data.failed) ? data.failed.length : 0;
+    return action + ' ' + sent + ' 人，已完成 ' + alreadyApplied + ' 人，失败 ' + failed + ' 人';
   }
 
   async function refreshActiveUserNotice() {

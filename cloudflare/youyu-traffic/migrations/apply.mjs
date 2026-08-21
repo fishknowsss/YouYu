@@ -22,7 +22,9 @@ const migrationFiles = [
   '2026-08-10-add-node-region-policy.sql',
   '2026-08-11-add-managed-config-permission.sql',
   '2026-08-12-add-traffic-period-start.sql',
-  '2026-08-12-add-managed-config-default.sql'
+  '2026-08-12-add-managed-config-default.sql',
+  '2026-08-21-add-admin-notice-batches.sql',
+  '2026-08-21-add-device-request-nonces.sql'
 ].map((name) => resolve(migrationDirectory, name));
 const repairableColumns = new Map([
   ['remote_config.subscription_url', 'TEXT'],
@@ -142,6 +144,19 @@ const requiredTableColumns = {
     'duration_minutes',
     'expires_at',
     'updated_at'
+  ],
+  admin_notice_batches: ['request_id', 'operation', 'payload_hash', 'target_count', 'created_at', 'updated_at'],
+  admin_notice_batch_targets: ['request_id', 'user_id', 'status', 'error', 'result_json', 'updated_at'],
+  device_request_nonces: [
+    'device_id',
+    'request_id',
+    'operation',
+    'request_hash',
+    'claim_token',
+    'created_at',
+    'expires_at',
+    'completed_at',
+    'response_json'
   ]
 };
 const requiredIndexes = {
@@ -163,6 +178,14 @@ const requiredIndexes = {
   idx_user_notice_audit_user_updated: {
     table: 'user_notice_audit',
     columns: ['user_id', 'updated_at']
+  },
+  idx_admin_notice_batch_targets_status: {
+    table: 'admin_notice_batch_targets',
+    columns: ['request_id', 'status']
+  },
+  idx_device_request_nonces_expires_at: {
+    table: 'device_request_nonces',
+    columns: ['expires_at']
   }
 };
 const requiredPrimaryKeyColumns = {
@@ -181,7 +204,10 @@ const requiredPrimaryKeyColumns = {
   user_profile_audit: ['id'],
   user_notices: ['user_id'],
   user_notice_acknowledgements: ['user_id', 'revision', 'device_id'],
-  user_notice_audit: ['id']
+  user_notice_audit: ['id'],
+  admin_notice_batches: ['request_id'],
+  admin_notice_batch_targets: ['request_id', 'user_id'],
+  device_request_nonces: ['device_id', 'request_id']
 };
 const requiredUniqueConstraintColumns = {
   users: [['normalized_name']],

@@ -106,6 +106,46 @@ CREATE TABLE IF NOT EXISTS user_notice_audit (
 CREATE INDEX IF NOT EXISTS idx_user_notice_audit_user_updated
   ON user_notice_audit(user_id, updated_at);
 
+CREATE TABLE IF NOT EXISTS admin_notice_batches (
+  request_id TEXT PRIMARY KEY,
+  operation TEXT NOT NULL CHECK (operation IN ('broadcast', 'reset')),
+  payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),
+  target_count INTEGER NOT NULL CHECK (target_count > 0),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS admin_notice_batch_targets (
+  request_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+  error TEXT,
+  result_json TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (request_id, user_id),
+  FOREIGN KEY (request_id) REFERENCES admin_notice_batches(request_id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_admin_notice_batch_targets_status
+  ON admin_notice_batch_targets(request_id, status);
+
+CREATE TABLE IF NOT EXISTS device_request_nonces (
+  device_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK (operation IN ('config-update')),
+  request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
+  claim_token TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  completed_at TEXT,
+  response_json TEXT,
+  PRIMARY KEY (device_id, request_id),
+  FOREIGN KEY (device_id) REFERENCES devices(id)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_device_request_nonces_expires_at
+  ON device_request_nonces(expires_at);
+
 CREATE INDEX IF NOT EXISTS idx_traffic_daily_user_date ON traffic_daily(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_traffic_daily_date_user ON traffic_daily(date, user_id);
 

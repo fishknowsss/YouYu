@@ -93,6 +93,13 @@ test('migration runner repairs legacy subscription columns once and preserves th
       .get().count,
     1
   );
+  for (const table of ['admin_notice_batches', 'admin_notice_batch_targets', 'device_request_nonces']) {
+    assert.equal(
+      database.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)
+        .count,
+      1
+    );
+  }
 });
 
 test('migration CLI requires an explicit target and operation', () => {

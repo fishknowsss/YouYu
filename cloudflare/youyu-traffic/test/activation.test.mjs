@@ -462,7 +462,7 @@ test('admin notice broadcast fans out the same notice to selected users and is i
   assert.equal(created.status, 200);
   const createdBody = await created.json();
   assert.equal(createdBody.ok, true);
-  assert.equal(createdBody.alreadyApplied, false);
+  assert.equal(createdBody.alreadyApplied, 0);
   assert.equal(createdBody.requestId, requestId);
   assert.equal(createdBody.sent, 2);
   assert.equal(createdBody.failed.length, 0);
@@ -494,8 +494,8 @@ test('admin notice broadcast fans out the same notice to selected users and is i
   );
   assert.equal(replay.status, 200);
   const replayBody = await replay.json();
-  assert.equal(replayBody.alreadyApplied, true);
-  assert.equal(replayBody.sent, 2);
+  assert.equal(replayBody.alreadyApplied, 2);
+  assert.equal(replayBody.sent, 0);
   assert.equal((await (await getClientConfig(database, alice, aliceSeed)).json()).notice.revision, 1);
 
   const conflicting = await requestAdminConfig(
@@ -511,18 +511,71 @@ test('admin notice broadcast fans out the same notice to selected users and is i
   );
   await assertWorkerError(conflicting, 409, 'notice request conflict');
 
-  const unknown = await requestAdminConfig(
+  const partialRequestId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const unknownUserId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+  const partial = await requestAdminConfig(
     database,
     '/api/admin/notices/broadcast',
     JSON.stringify({
-      userIds: [alice.userId, 'ffffffff-ffff-4fff-8fff-ffffffffffff'],
+      userIds: [alice.userId, unknownUserId],
       message: '今晚维护',
       tone: 'warning',
       durationMinutes: 20,
-      requestId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+      requestId: partialRequestId
     })
   );
-  await assertWorkerError(unknown, 400, 'unknown user');
+  assert.equal(partial.status, 200);
+  const partialBody = await partial.json();
+  assert.equal(partialBody.ok, false);
+  assert.equal(partialBody.requestId, partialRequestId);
+  assert.equal(partialBody.sent, 1);
+  assert.deepEqual(partialBody.failed, [{ userId: unknownUserId, error: 'unknown user' }]);
+  assert.equal(partialBody.alreadyApplied, 0);
+  assert.equal(partialBody.notices.length, 1);
+  assert.equal(partialBody.notices[0].userId, alice.userId);
+  assert.equal(partialBody.notices[0].notice.revision, 2);
+  assert.equal(partialBody.notices[0].notice.enabled, true);
+  assert.deepEqual(
+    database
+      .queryAll(
+        `SELECT user_id AS userId, status, error
+         FROM admin_notice_batch_targets
+         WHERE request_id = ?
+         ORDER BY user_id`,
+        partialRequestId
+      )
+      .map((row) => ({ ...row })),
+    [
+      { userId: alice.userId, status: 'sent', error: null },
+      { userId: unknownUserId, status: 'failed', error: 'unknown user' }
+    ]
+  );
+
+  await database
+    .prepare(
+      `INSERT INTO users (id, name, normalized_name, status, created_at)
+       VALUES (?, 'Recovered', 'recovered', 'active', ?)`
+    )
+    .bind(unknownUserId, new Date().toISOString())
+    .run();
+  const partialReplay = await requestAdminConfig(
+    database,
+    '/api/admin/notices/broadcast',
+    JSON.stringify({
+      userIds: [unknownUserId, alice.userId],
+      message: '今晚维护',
+      tone: 'warning',
+      durationMinutes: 20,
+      requestId: partialRequestId
+    })
+  );
+  assert.equal(partialReplay.status, 200);
+  const partialReplayBody = await partialReplay.json();
+  assert.equal(partialReplayBody.ok, true);
+  assert.equal(partialReplayBody.sent, 1);
+  assert.equal(partialReplayBody.failed.length, 0);
+  assert.equal(partialReplayBody.alreadyApplied, 1);
+  assert.equal((await (await getClientConfig(database, alice, aliceSeed)).json()).notice.revision, 2);
 
   const empty = await requestAdminConfig(
     database,
@@ -557,17 +610,40 @@ test('admin notice broadcast can stop selected users notices', async (context) =
     })
   );
 
+  const resetRequestId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
   const reset = await requestAdminConfig(
     database,
     '/api/admin/notices/reset',
-    JSON.stringify({ userIds: [alice.userId] })
+    JSON.stringify({ userIds: [alice.userId], requestId: resetRequestId })
   );
   assert.equal(reset.status, 200);
   const resetBody = await reset.json();
   assert.equal(resetBody.ok, true);
+  assert.equal(resetBody.requestId, resetRequestId);
+  assert.equal(resetBody.sent, 1);
+  assert.equal(resetBody.alreadyApplied, 0);
+  assert.deepEqual(resetBody.failed, []);
   assert.equal(resetBody.cleared, 1);
   assert.equal((await (await getClientConfig(database, alice, aliceSeed)).json()).notice, undefined);
   assert.equal((await (await getClientConfig(database, bob, bobSeed)).json()).notice.message, '今晚维护');
+
+  const revisionAfterReset = database.queryAll('SELECT revision FROM user_notices WHERE user_id = ?', alice.userId)[0]
+    .revision;
+  const replay = await requestAdminConfig(
+    database,
+    '/api/admin/notices/reset',
+    JSON.stringify({ userIds: [alice.userId], requestId: resetRequestId })
+  );
+  assert.equal(replay.status, 200);
+  const replayBody = await replay.json();
+  assert.equal(replayBody.sent, 0);
+  assert.equal(replayBody.alreadyApplied, 1);
+  assert.deepEqual(replayBody.failed, []);
+  assert.equal(replayBody.cleared, 0);
+  assert.equal(
+    database.queryAll('SELECT revision FROM user_notices WHERE user_id = ?', alice.userId)[0].revision,
+    revisionAfterReset
+  );
 });
 
 test('a stable device key reuses one physical device when the signing seed is recreated', async (context) => {
@@ -3175,6 +3251,66 @@ test('clearing every admin override deletes the empty ownership row', async (con
   );
 });
 
+test('client config request ids are signed, replay-safe, and expire after a bounded nonce window', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const identity = await (await activate(database, { name: 'Alice', deviceSeed })).json();
+  assert.equal((await updateAdminManagedConfigPermission(database, identity.userId, true)).status, 200);
+  const requestId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+
+  const first = await updateClientConfigWithRequestId(database, identity, deviceSeed, requestId, {
+    ruleProfile: 'subscription'
+  });
+  assert.equal(first.status, 200, await first.clone().text());
+  const firstBody = await first.json();
+  assert.equal(firstBody.alreadyApplied, false);
+  assert.equal(firstBody.requestId, requestId);
+  assert.equal(firstBody.config.ruleProfile, 'subscription');
+  const firstUpdatedAt = database.queryAll(
+    'SELECT updated_at AS updatedAt FROM user_remote_config WHERE user_id = ?',
+    identity.userId
+  )[0].updatedAt;
+
+  const replay = await updateClientConfigWithRequestId(database, identity, deviceSeed, requestId, {
+    ruleProfile: 'subscription'
+  });
+  assert.equal(replay.status, 200, await replay.clone().text());
+  const replayBody = await replay.json();
+  assert.equal(replayBody.alreadyApplied, true);
+  assert.equal(replayBody.requestId, requestId);
+  assert.equal(
+    database.queryAll('SELECT updated_at AS updatedAt FROM user_remote_config WHERE user_id = ?', identity.userId)[0]
+      .updatedAt,
+    firstUpdatedAt
+  );
+
+  const conflict = await updateClientConfigWithRequestId(database, identity, deviceSeed, requestId, {
+    ruleProfile: 'ruleset'
+  });
+  await assertWorkerError(conflict, 409, 'config request conflict', 'CONFIG_REQUEST_CONFLICT');
+  assert.equal(
+    (await (await getClientConfig(database, identity, deviceSeed)).json()).config.ruleProfile,
+    'subscription'
+  );
+
+  const nonce = database.queryAll(
+    `SELECT request_hash AS requestHash, created_at AS createdAt, expires_at AS expiresAt, completed_at AS completedAt
+     FROM device_request_nonces
+     WHERE device_id = ? AND request_id = ?`,
+    identity.deviceId,
+    requestId
+  )[0];
+  assert.match(nonce.requestHash, /^[0-9a-f]{64}$/);
+  assert.ok(Date.parse(nonce.expiresAt) > Date.parse(nonce.createdAt));
+  assert.ok(Date.parse(nonce.expiresAt) - Date.parse(nonce.createdAt) <= 10 * 60 * 1000);
+  assert.match(nonce.completedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+  const legacy = await updateClientConfig(database, identity, deviceSeed, { ruleProfile: 'ruleset' });
+  assert.equal(legacy.status, 200, await legacy.clone().text());
+  assert.equal((await legacy.json()).alreadyApplied, undefined);
+});
+
 test('client config writes require the current device signature and reject admin-owned fields', async (context) => {
   const database = createD1Database();
   context.after(() => database.close());
@@ -3194,6 +3330,85 @@ test('client config writes require the current device signature and reject admin
 
   const adminView = await getAdminUserConfig(database, identity.userId);
   assert.equal((await adminView.json()).override, null);
+});
+
+test('device authentication rejects malformed identity and signature input before D1 access', async () => {
+  let databaseCalls = 0;
+  const database = {
+    prepare() {
+      databaseCalls += 1;
+      throw new Error('D1 must not be reached');
+    }
+  };
+  const validUserId = '11111111-1111-4111-8111-111111111111';
+  const validDeviceId = '22222222-2222-4222-8222-222222222222';
+  const timestamp = String(Date.now());
+  const requests = [
+    {
+      url: `https://worker.example/api/config?userId=not-a-uuid&deviceId=${validDeviceId}`,
+      headers: { 'x-youyu-timestamp': timestamp, 'x-youyu-signature': 'a'.repeat(64) },
+      status: 400,
+      message: 'invalid identity'
+    },
+    {
+      url: `https://worker.example/api/config?userId=${validUserId}&deviceId=${validDeviceId}`,
+      headers: {},
+      status: 401,
+      message: 'signature required'
+    },
+    {
+      url: `https://worker.example/api/config?userId=${validUserId}&deviceId=${validDeviceId}`,
+      headers: { 'x-youyu-timestamp': timestamp, 'x-youyu-signature': 'not-a-signature' },
+      status: 401,
+      message: 'invalid signature'
+    }
+  ];
+
+  for (const entry of requests) {
+    const response = await worker.fetch(new Request(entry.url, { headers: entry.headers }), {
+      DB: database,
+      REGISTRATION_PASSPHRASE: registrationPassphrase
+    });
+    await assertWorkerError(response, entry.status, entry.message);
+  }
+  assert.equal(databaseCalls, 0);
+});
+
+test('device API rate limits invalid authentication without penalizing valid sync bursts', async (context) => {
+  const database = createD1Database();
+  context.after(() => database.close());
+  const deviceSeed = '11111111-1111-4111-8111-111111111111';
+  const identity = await (await activate(database, { name: 'Alice', deviceSeed })).json();
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    assert.equal((await getClientConfig(database, identity, deviceSeed)).status, 200);
+  }
+
+  const url = new URL('https://worker.example/api/config');
+  url.searchParams.set('userId', identity.userId);
+  url.searchParams.set('deviceId', identity.deviceId);
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const response = await worker.fetch(
+      new Request(url, {
+        headers: {
+          'x-youyu-timestamp': String(Date.now()),
+          'x-youyu-signature': '0'.repeat(64)
+        }
+      }),
+      { DB: database, REGISTRATION_PASSPHRASE: registrationPassphrase }
+    );
+    await assertWorkerError(response, 401, 'invalid signature');
+  }
+  const blocked = await worker.fetch(
+    new Request(url, {
+      headers: {
+        'x-youyu-timestamp': String(Date.now()),
+        'x-youyu-signature': '0'.repeat(64)
+      }
+    }),
+    { DB: database, REGISTRATION_PASSPHRASE: registrationPassphrase }
+  );
+  await assertWorkerError(blocked, 429, 'too many attempts');
 });
 
 async function activate(database, input) {
@@ -3285,6 +3500,36 @@ async function updateClientConfig(database, identity, deviceSeed, config) {
       headers: {
         'content-type': 'application/json',
         'x-youyu-timestamp': timestamp,
+        'x-youyu-signature': signature
+      },
+      body
+    }),
+    {
+      DB: database,
+      REGISTRATION_PASSPHRASE: registrationPassphrase
+    }
+  );
+}
+
+async function updateClientConfigWithRequestId(database, identity, deviceSeed, requestId, config) {
+  const url = new URL('https://worker.example/api/config');
+  const body = JSON.stringify({
+    userId: identity.userId,
+    deviceId: identity.deviceId,
+    requestId,
+    ...config
+  });
+  const timestamp = String(Date.now());
+  const bodyHash = createHash('sha256').update(body).digest('hex');
+  const canonical = ['POST', url.pathname, timestamp, requestId, bodyHash].join('\n');
+  const signature = createHmac('sha256', deviceSeed).update(canonical).digest('hex');
+  return worker.fetch(
+    new Request(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-youyu-timestamp': timestamp,
+        'x-youyu-request-id': requestId,
         'x-youyu-signature': signature
       },
       body
