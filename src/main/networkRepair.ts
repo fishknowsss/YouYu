@@ -11,6 +11,7 @@ export type NetworkRepairDependencies<TSnapshot> = {
   pauseBackgroundWork: () => void;
   prepareRunningRuntime: () => Promise<void>;
   runTargetedRepair?: (issueKind: DiagnosticIssueKind, signal?: AbortSignal) => Promise<void>;
+  compensateCanceledTargetedRepair?: () => Promise<void>;
   onTargetedRepairError?: (issueKind: DiagnosticIssueKind, error: unknown) => void;
   onSupplementalRepairError?: (error: unknown) => void;
   repairLifecycle: (signal?: AbortSignal) => Promise<void>;
@@ -40,14 +41,44 @@ export async function runNetworkRepair<TSnapshot>(
   signal?.throwIfAborted();
   deps.pauseBackgroundWork();
 
+  async function throwIfRepairCanceled(targeted = false): Promise<void> {
+    if (!signal?.aborted) return;
+    try {
+      const status = deps.getStatus();
+      if (status === 'running') {
+        await deps.compensateCanceledTargetedRepair?.();
+        if (deps.getStatus() === 'running') {
+          if (initialStatus === 'running') deps.resumeRunningWork();
+        } else {
+          await deps.repairLifecycle();
+          if (deps.getStatus() !== 'stopped') {
+            throw new Error('canceled repair did not finish runtime cleanup');
+          }
+        }
+      } else if (targeted || status !== 'stopped') {
+        await deps.repairLifecycle();
+        if (deps.getStatus() !== 'stopped') {
+          throw new Error('canceled repair did not finish runtime cleanup');
+        }
+      }
+    } catch (error) {
+      throw new AggregateError(
+        [signal.reason ?? new Error('operation canceled'), error],
+        'network repair cancellation compensation failed',
+        { cause: error }
+      );
+    }
+    signal.throwIfAborted();
+  }
+
   if (options.issueKind && deps.runTargetedRepair) {
     try {
       await deps.runTargetedRepair(options.issueKind, signal);
     } catch (error) {
-      signal?.throwIfAborted();
+      await throwIfRepairCanceled(true);
       deps.onTargetedRepairError?.(options.issueKind, error);
     }
-    signal?.throwIfAborted();
+    await throwIfRepairCanceled(true);
   }
 
   let repairError: unknown;
@@ -55,6 +86,9 @@ export async function runNetworkRepair<TSnapshot>(
     await deps.repairLifecycle(signal);
   } catch (error) {
     repairError = error;
+  }
+  if (signal?.aborted && deps.getStatus() !== 'stopped') {
+    await throwIfRepairCanceled();
   }
 
   let cacheError: unknown;
@@ -67,7 +101,10 @@ export async function runNetworkRepair<TSnapshot>(
   }
 
   const stoppedAfterRepair = deps.getStatus() === 'stopped';
-  if (repairError !== undefined && !stoppedAfterRepair) throw repairError;
+  if (repairError !== undefined && !stoppedAfterRepair) {
+    if (initialStatus === 'running' && deps.getStatus() === 'running') deps.resumeRunningWork();
+    throw repairError;
+  }
   const supplementalFailures = [repairError, cacheError].filter((error) => error !== undefined);
   signal?.throwIfAborted();
 

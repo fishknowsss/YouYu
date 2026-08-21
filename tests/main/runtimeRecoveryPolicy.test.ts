@@ -4,6 +4,7 @@ import {
   classifyRuntimeFailure,
   runRuntimeOperationWithSafeRetry
 } from '../../src/main/runtimeRecoveryPolicy';
+import { allocateDistinctRuntimePorts } from '../../src/main/runtimePorts';
 
 describe('runtime recovery policy', () => {
   it('retries a clearly transient core failure only once', async () => {
@@ -38,6 +39,27 @@ describe('runtime recovery policy', () => {
 
     await expect(runRuntimeOperationWithSafeRetry(operation)).resolves.toBe('running');
     expect(operation).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['EADDRINUSE', 'address already in use', 'listen tcp 127.0.0.1:1053: bind failed'])(
+    'classifies %s as a retryable port conflict',
+    (message) => {
+      expect(classifyRuntimeFailure(new Error(message))).toMatchObject({ code: 'PORT_CONFLICT', retryable: true });
+    }
+  );
+
+  it('allocates distinct mixed, controller, and DNS ports when ephemeral probes repeat a port', async () => {
+    const ephemeralPorts = [7890, 9090, 9090, 1053];
+    const getEphemeralPort = vi.fn(async () => ephemeralPorts.shift() ?? 0);
+
+    await expect(
+      allocateDistinctRuntimePorts({
+        isPortAvailable: async () => true,
+        getEphemeralPort
+      })
+    ).resolves.toEqual({ mixedPort: 7890, controllerPort: 9090, dnsPort: 1053 });
+
+    expect(getEphemeralPort).toHaveBeenCalledTimes(4);
   });
 
   it.each([

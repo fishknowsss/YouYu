@@ -60,6 +60,9 @@ describe('update and exit lifecycle safety', () => {
 
     expect(deferredLaunch).toContain('!updateInstallerLaunchPending');
     expect(deferredLaunch).toContain('updateInstallAttempt !== installAttempt');
+    expect(deferredLaunch).toContain(
+      'isCurrent: () => updateInstallerLaunchPending && updateInstallAttempt === installAttempt'
+    );
     expect(deferredLaunch.indexOf('updateInstallAttempt !== installAttempt')).toBeLessThan(
       deferredLaunch.indexOf('await launchDownloadedUpdateInstaller({')
     );

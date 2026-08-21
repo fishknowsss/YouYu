@@ -1126,6 +1126,57 @@ proxies:
     await expect(runtime.start()).rejects.toThrow('recent mihomo output: listen tcp 127.0.0.1:1053: bind failed');
   });
 
+  it('rebuilds the config on fresh ports after a probed port is occupied before mihomo binds', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
+    tempDirs.push(userDataDir);
+    const firstChild = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+      stderr: EventEmitter;
+    };
+    firstChild.killed = false;
+    firstChild.kill = vi.fn();
+    firstChild.stderr = new EventEmitter();
+    const secondChild = new EventEmitter() as EventEmitter & {
+      killed: boolean;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    secondChild.killed = false;
+    secondChild.kill = vi.fn();
+    const getPorts = vi
+      .fn()
+      .mockResolvedValueOnce({ mixedPort: 7890, controllerPort: 9090, dnsPort: 1053 })
+      .mockResolvedValueOnce({ mixedPort: 7891, controllerPort: 9091, dnsPort: 1054 });
+    const spawnProcess = vi.fn().mockReturnValueOnce(firstChild).mockReturnValueOnce(secondChild);
+    const waitForReady = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>(() => {
+            firstChild.stderr.emit('data', 'listen tcp 127.0.0.1:7890: bind failed\n');
+            firstChild.emit('exit', 1, null);
+          })
+      )
+      .mockResolvedValueOnce(undefined);
+    const runtime = createMihomoRuntime({
+      binaryPath: 'C:/YouYu/mihomo.exe',
+      userDataDir,
+      readSettings: async () => makeSettings(),
+      getPorts,
+      spawnProcess,
+      waitForReady
+    });
+
+    await runtime.start();
+
+    expect(getPorts).toHaveBeenCalledTimes(2);
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
+    const config = await readFile(join(userDataDir, 'mihomo', 'config.yaml'), 'utf8');
+    expect(config).toContain('mixed-port: 7891');
+    expect(config).toContain('external-controller: 127.0.0.1:9091');
+    expect(config).toContain('listen: 127.0.0.1:1054');
+  });
+
   it('buffers split mihomo stream chunks until a complete diagnostic line is available', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'youyu-runtime-'));
     tempDirs.push(userDataDir);

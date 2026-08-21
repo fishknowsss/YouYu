@@ -165,11 +165,17 @@ export async function createUpdateInstallerHandoff(
   for (const [name, value] of Object.entries(assignedEnvironment)) environment[name] = value;
 
   let abandoned = false;
+  let cancelExpiryCleanup: () => void = () => undefined;
   const abandon = async (): Promise<void> => {
     if (abandoned) return;
     abandoned = true;
+    cancelExpiryCleanup();
     try {
-      await Promise.all([rm(path, { force: true }), rm(acknowledgementPath, { force: true })]);
+      await Promise.all([
+        rm(path, { force: true }),
+        rm(acknowledgementPath, { force: true }),
+        rm(cancellationPath, { force: true })
+      ]);
     } finally {
       for (const [name, assignedValue] of Object.entries(assignedEnvironment)) {
         if (environment[name] !== assignedValue) continue;
@@ -184,7 +190,7 @@ export async function createUpdateInstallerHandoff(
       timer.unref();
       return () => clearTimeout(timer);
     });
-  scheduleExpiryCleanup(async () => {
+  cancelExpiryCleanup = scheduleExpiryCleanup(async () => {
     try {
       await abandon();
     } finally {
@@ -208,6 +214,7 @@ export function deferUpdateInstallerLaunch(options: {
   onError: (error: unknown) => void;
   defer?: (task: () => Promise<void>) => void;
   prepareHandoff?: () => Promise<UpdateInstallerHandoffLease | undefined>;
+  isCurrent?: () => boolean;
 }): void {
   const reportError = (error: unknown): void => {
     try {
@@ -232,6 +239,10 @@ export function deferUpdateInstallerLaunch(options: {
     try {
       lease = await prepareHandoff();
       if (!lease) throw new Error('authenticated update handoff is unavailable');
+      if (options.isCurrent && !options.isCurrent()) {
+        await lease.abandon();
+        return;
+      }
       await options.launch(lease);
     } catch (error) {
       try {

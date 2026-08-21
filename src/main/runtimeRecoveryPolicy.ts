@@ -49,7 +49,7 @@ function inferFailureCode(error: Error): RuntimeFailureCode {
     return 'PROXY_RESTORE_REQUIRED';
   }
   if (/System network repair failed/i.test(message)) return 'SYSTEM_NETWORK_REPAIR_FAILED';
-  if (/\bEADDRINUSE\b|address already in use/i.test(message)) return 'PORT_CONFLICT';
+  if (/\bEADDRINUSE\b|address already in use|\bbind failed\b/i.test(message)) return 'PORT_CONFLICT';
   if (/mihomo controller not ready/i.test(message)) return 'CORE_NOT_READY';
   return 'UNKNOWN';
 }

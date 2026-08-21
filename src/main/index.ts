@@ -17,10 +17,10 @@ import { CancellationError, CancellationToken } from 'builder-util-runtime';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { writeFile as writeTextFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { release as getOsRelease } from 'node:os';
 import { createLifecycleController, type MihomoRuntime } from './lifecycle';
 import { runRuntimeOperationWithSafeRetry } from './runtimeRecoveryPolicy';
+import { allocateDistinctRuntimePorts } from './runtimePorts';
 import { createAppRuntimeCoordinator } from './appRuntimeCoordinator';
 import { IpcOperationRegistry } from './ipcOperations';
 import { LatestOperationCoordinator } from './latestOperationCoordinator';
@@ -652,7 +652,7 @@ async function performRemoteConfigSync(options: RemoteConfigSyncExecutionOptions
       runtimeIntent.isCurrent(options.intentGeneration)
     ) {
       restartAttempted = true;
-      await restartLifecycleForIntent(options.intentGeneration, options.signal);
+      await restartLifecycleForIntent(options.intentGeneration);
     }
   };
 
@@ -845,7 +845,8 @@ async function installDownloadedUpdate(): Promise<AppSnapshot> {
         isQuitting = true;
         app.quit();
       },
-      onError: recoverFromUpdateInstallerLaunchFailure
+      onError: recoverFromUpdateInstallerLaunchFailure,
+      isCurrent: () => updateInstallerLaunchPending && updateInstallAttempt === installAttempt
     });
     return snapshot;
   } catch (error) {
@@ -950,47 +951,8 @@ async function prepareForUpdateInstall(): Promise<void> {
   }
 }
 
-async function listenOnPort(port: number) {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => resolve());
-  });
-  return server;
-}
-
-async function closeServer(server: ReturnType<typeof createServer>) {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-}
-
-async function canListen(port: number): Promise<boolean> {
-  try {
-    const server = await listenOnPort(port);
-    await closeServer(server);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function getRandomPort(): Promise<number> {
-  const server = await listenOnPort(0);
-  const address = server.address();
-  await closeServer(server);
-  return typeof address === 'object' && address ? address.port : 0;
-}
-
-async function findAvailablePort(preferred: number): Promise<number> {
-  for (let port = preferred; port < preferred + 80; port += 1) {
-    if (await canListen(port)) return port;
-  }
-  return getRandomPort();
-}
-
 async function allocateRuntimePorts() {
-  const mixedPort = await findAvailablePort(7890);
-  const controllerPort = await getRandomPort();
-  const dnsPort = await getRandomPort();
+  const { mixedPort, controllerPort, dnsPort } = await allocateDistinctRuntimePorts();
   runtimePorts = { mixedPort, controllerPort, dnsPort };
   appendLog(`runtime ports: mixed=${mixedPort}, controller=${controllerPort}, dns=${dnsPort}`);
   return runtimePorts;
@@ -1073,7 +1035,7 @@ const trafficRegistration = createTrafficRegistrationCoordinator({
 
 const userRuntimeActions = {
   start: startLifecycleForUser,
-  restart: restartLifecycleForUser
+  restart: () => restartLifecycleForUser()
 };
 
 type SubscriptionRefreshOutcome = {
@@ -2063,6 +2025,7 @@ async function repairProxy(signal?: AbortSignal, options: NetworkRepairOptions =
           stopRemoteConfigPolling();
         },
         runTargetedRepair: runIssueTargetedRepair,
+        compensateCanceledTargetedRepair: () => systemProxy.restoreAfterRepairCancellation(),
         onTargetedRepairError: (issueKind, error) =>
           appendLog(`针对性修复未完成，继续完整修复 (${issueKind}): ${formatError(error)}`),
         onSupplementalRepairError: (error) =>
@@ -2314,23 +2277,19 @@ function registerIpc() {
     );
   });
   ipcMain.handle(ipcChannels.repair, async (event, request?: OperationRequest) => {
-    return runCancelableOperation(
-      event.sender.id,
-      request,
-      async (signal) =>
-        withTrayRefresh(async () => {
+    return runCancelableOperation(event.sender.id, request, async (signal) =>
+      withTrayRefresh(async () => {
+        throwIfAborted(signal);
+        try {
+          const snapshot = await repairProxy(signal);
           throwIfAborted(signal);
-          try {
-            const snapshot = await repairProxy(signal);
-            throwIfAborted(signal);
-            sendSnapshotToWindows(snapshot);
-            return snapshot;
-          } catch (error) {
-            recordError('修复失败', error);
-            throw error;
-          }
-        }),
-      cancelProxyStart
+          sendSnapshotToWindows(snapshot);
+          return snapshot;
+        } catch (error) {
+          recordError('修复失败', error);
+          throw error;
+        }
+      })
     );
   });
   ipcMain.handle(ipcChannels.selectNode, async (_event, name: string) => {
@@ -2354,21 +2313,17 @@ function registerIpc() {
     });
   });
   ipcMain.handle(ipcChannels.selectBestAutoNode, async (event, request?: OperationRequest) => {
-    return runCancelableOperation(
-      event.sender.id,
-      request,
-      async (signal) =>
-        withTrayRefresh(async () => {
-          try {
-            const snapshot = await selectBestAutoNode(signal);
-            sendSnapshotToWindows(snapshot);
-            return snapshot;
-          } catch (error) {
-            if (!isExpectedOperationCancellation(error)) recordError('自动选择节点失败', error);
-            throw error;
-          }
-        }),
-      cancelProxyStart
+    return runCancelableOperation(event.sender.id, request, async (signal) =>
+      withTrayRefresh(async () => {
+        try {
+          const snapshot = await selectBestAutoNode(signal);
+          sendSnapshotToWindows(snapshot);
+          return snapshot;
+        } catch (error) {
+          if (!isExpectedOperationCancellation(error)) recordError('自动选择节点失败', error);
+          throw error;
+        }
+      })
     );
   });
   ipcMain.handle(ipcChannels.selectStrategy, async (_event, strategy) => {
@@ -2488,64 +2443,56 @@ function registerIpc() {
     });
   });
   ipcMain.handle(ipcChannels.updateSubscription, async (event, request?: OperationRequest) => {
-    return runCancelableOperation(
-      event.sender.id,
-      request,
-      async (signal) =>
-        withTrayRefresh(async () => {
-          throwIfAborted(signal);
-          await requireTrafficIdentity();
-          await subscriptionCoordinator.refresh('subscription', { source: 'manual', signal });
-          throwIfAborted(signal);
-          return createSnapshot();
-        }),
-      cancelProxyStart
+    return runCancelableOperation(event.sender.id, request, async (signal) =>
+      withTrayRefresh(async () => {
+        throwIfAborted(signal);
+        await requireTrafficIdentity();
+        await subscriptionCoordinator.refresh('subscription', { source: 'manual', signal });
+        throwIfAborted(signal);
+        return createSnapshot();
+      })
     );
   });
   ipcMain.handle(ipcChannels.saveSettings, async (event, settings, intent, request?: OperationRequest) => {
-    return runCancelableOperation(
-      event.sender.id,
-      request,
-      async (signal) =>
-        withTrayRefresh(async () => {
-          const lastErrorBeforeSave = lastError;
-          const issueBeforeSave = classifyDiagnosticIssue(lastErrorBeforeSave);
-          try {
-            await saveSubscriptionSettings(
-              {
-                settingsStore,
-                lifecycle,
-                runtime: userRuntimeActions,
-                remoteConfig: {
-                  readSnapshot: () => remoteConfigClient.getActiveConfigSnapshot(),
-                  update: async (input, updateSignal) =>
-                    (
-                      await remoteConfigClient.updateUserConfig(input, {
-                        proxyUrl: getRuntimeTrafficProxyUrl(),
-                        signal: updateSignal
-                      })
-                    ).config,
-                  apply: async () => {
-                    const snapshot = await remoteConfigClient.getActiveConfigSnapshot();
-                    await applyRemoteSubscription(snapshot.config, snapshot);
-                  }
-                },
-                createSnapshot
+    return runCancelableOperation(event.sender.id, request, async (signal) =>
+      withTrayRefresh(async () => {
+        const lastErrorBeforeSave = lastError;
+        const issueBeforeSave = classifyDiagnosticIssue(lastErrorBeforeSave);
+        try {
+          await saveSubscriptionSettings(
+            {
+              settingsStore,
+              lifecycle,
+              runtime: userRuntimeActions,
+              remoteConfig: {
+                readSnapshot: () => remoteConfigClient.getActiveConfigSnapshot(),
+                update: async (input, updateSignal) =>
+                  (
+                    await remoteConfigClient.updateUserConfig(input, {
+                      proxyUrl: getRuntimeTrafficProxyUrl(),
+                      signal: updateSignal
+                    })
+                  ).config,
+                apply: async () => {
+                  const snapshot = await remoteConfigClient.getActiveConfigSnapshot();
+                  await applyRemoteSubscription(snapshot.config, snapshot);
+                }
               },
-              settings,
-              { signal, intent }
-            );
-            if (isDiagnosticIssueResolvedByOperation('save-settings', issueBeforeSave)) {
-              clearLastErrorIfUnchanged(lastErrorBeforeSave);
-            }
-            await subscriptionCoordinator.reschedule();
-            return createSnapshot();
-          } catch (error) {
-            recordError('保存设置失败', error);
-            throw error;
+              createSnapshot
+            },
+            settings,
+            { signal, intent }
+          );
+          if (isDiagnosticIssueResolvedByOperation('save-settings', issueBeforeSave)) {
+            clearLastErrorIfUnchanged(lastErrorBeforeSave);
           }
-        }),
-      cancelProxyStart
+          await subscriptionCoordinator.reschedule();
+          return createSnapshot();
+        } catch (error) {
+          recordError('保存设置失败', error);
+          throw error;
+        }
+      })
     );
   });
   ipcMain.handle(ipcChannels.registerTrafficIdentity, async (_event, input) => {
@@ -2563,33 +2510,29 @@ function registerIpc() {
     wakeRemoteConfig();
   });
   ipcMain.handle(ipcChannels.syncRemoteConfig, async (event, request?: OperationRequest) => {
-    return runCancelableOperation(
-      event.sender.id,
-      request,
-      async (signal) =>
-        withTrayRefresh(async () => {
-          const lastErrorBeforeSync = lastError;
-          const issueBeforeSync = classifyDiagnosticIssue(lastErrorBeforeSync);
-          try {
-            await requireTrafficIdentity();
-            await syncRemoteConfig({
-              proxyUrl: getRuntimeTrafficProxyUrl(),
-              restartIfRunning: true,
-              throwOnError: true,
-              signal,
-              intentGeneration: runtimeIntent.capture(),
-              source: 'manual'
-            });
-            if (isDiagnosticIssueResolvedByOperation('sync-settings', issueBeforeSync)) {
-              clearLastErrorIfUnchanged(lastErrorBeforeSync);
-            }
-            return createSnapshot();
-          } catch (error) {
-            recordError('同步设置失败', error);
-            throw error;
+    return runCancelableOperation(event.sender.id, request, async (signal) =>
+      withTrayRefresh(async () => {
+        const lastErrorBeforeSync = lastError;
+        const issueBeforeSync = classifyDiagnosticIssue(lastErrorBeforeSync);
+        try {
+          await requireTrafficIdentity();
+          await syncRemoteConfig({
+            proxyUrl: getRuntimeTrafficProxyUrl(),
+            restartIfRunning: true,
+            throwOnError: true,
+            signal,
+            intentGeneration: runtimeIntent.capture(),
+            source: 'manual'
+          });
+          if (isDiagnosticIssueResolvedByOperation('sync-settings', issueBeforeSync)) {
+            clearLastErrorIfUnchanged(lastErrorBeforeSync);
           }
-        }),
-      cancelProxyStart
+          return createSnapshot();
+        } catch (error) {
+          recordError('同步设置失败', error);
+          throw error;
+        }
+      })
     );
   });
   ipcMain.handle(ipcChannels.exportDiagnostics, async () => {

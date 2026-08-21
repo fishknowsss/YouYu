@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import { IpcOperationRegistry, normalizeOperationRequestId } from '../../src/main/ipcOperations';
 
 describe('IpcOperationRegistry', () => {
@@ -59,5 +60,51 @@ describe('IpcOperationRegistry', () => {
     expect(normalizeOperationRequestId('../escape')).toBe('');
     expect(normalizeOperationRequestId('short')).toBe('');
     expect(normalizeOperationRequestId('safe-request-123')).toBe('safe-request-123');
+  });
+
+  it('does not stop a running runtime when non-start IPC operations are canceled', async () => {
+    const source = await readFile('src/main/index.ts', 'utf8');
+    const operationChannels = ['selectBestAutoNode', 'updateSubscription', 'saveSettings', 'syncRemoteConfig'];
+
+    for (const channel of operationChannels) {
+      const start = source.indexOf(`ipcMain.handle(ipcChannels.${channel}`);
+      const end = source.indexOf('ipcMain.handle(ipcChannels.', start + 1);
+      const handler = source.slice(start, end);
+      expect(start, `${channel} handler should exist`).toBeGreaterThan(-1);
+      expect(handler, `${channel} cancellation must not stop the runtime`).not.toContain('cancelProxyStart');
+    }
+
+    const repairStart = source.indexOf('ipcMain.handle(ipcChannels.repair');
+    const repairEnd = source.indexOf('ipcMain.handle(ipcChannels.', repairStart + 1);
+    const repairHandler = source.slice(repairStart, repairEnd);
+    expect(repairHandler).not.toContain('cancelProxyStart');
+
+    const runtimeActions = source.slice(
+      source.indexOf('const userRuntimeActions'),
+      source.indexOf('type SubscriptionRefreshOutcome')
+    );
+    const remoteSync = source.slice(
+      source.indexOf('async function performRemoteConfigSync'),
+      source.indexOf('async function syncRemoteConfig')
+    );
+    expect(runtimeActions).toContain('restart: () => restartLifecycleForUser()');
+    expect(remoteSync).toContain('await restartLifecycleForIntent(options.intentGeneration);');
+    expect(remoteSync).not.toContain('restartLifecycleForIntent(options.intentGeneration, options.signal)');
+
+    const stopRuntime = vi.fn(async () => undefined);
+    const registry = new IpcOperationRegistry();
+    let operationSignal: AbortSignal | undefined;
+    const running = registry.run(1, { requestId: 'settings-save-1' }, (signal) => {
+      operationSignal = signal;
+      return new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    });
+
+    await vi.waitFor(() => expect(operationSignal).toBeDefined());
+    const cancel = registry.cancel(1, 'settings-save-1');
+    await expect(running).rejects.toThrow('operation canceled');
+    await expect(cancel).resolves.toBe(true);
+    expect(stopRuntime).not.toHaveBeenCalled();
   });
 });

@@ -12,6 +12,7 @@ import { selectMihomoProcessSpawner, spawnWindowsJobProcess } from '../platform/
 import { buildMihomoConfig, isBlockedSelectableNodeName, strategyTargets } from './config';
 import { monitorMihomoWarningLogs } from './controllerLogStream';
 import { isNodeInPreferredRegion, resolveNodeSelectionPolicy, type NodeSelectionPolicy } from './nodeSelectionPolicy';
+import { classifyRuntimeFailure } from '../runtimeRecoveryPolicy';
 
 type SpawnedProcess = {
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
@@ -807,7 +808,7 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         }
       }
 
-      const maxAttempts = options.waitForReady ? 1 : 3;
+      const maxAttempts = 3;
       let lastError: unknown;
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -954,10 +955,16 @@ export function createMihomoRuntime(options: MihomoRuntimeOptions): MihomoRuntim
         } catch (error) {
           lastError = error;
           await stopCurrentChild(current);
-          if (!isControllerNotReadyError(error) || attempt === maxAttempts) {
+          const portConflict = classifyRuntimeFailure(error).code === 'PORT_CONFLICT';
+          const controllerNotReady = !options.waitForReady && isControllerNotReadyError(error);
+          if ((!portConflict && !controllerNotReady) || attempt === maxAttempts) {
             throw error;
           }
-          options.logLine?.(`mihomo controller timeout, retrying with fresh ports (${attempt + 1}/${maxAttempts})`);
+          options.logLine?.(
+            portConflict
+              ? `mihomo port conflict, retrying with fresh ports (${attempt + 1}/${maxAttempts})`
+              : `mihomo controller timeout, retrying with fresh ports (${attempt + 1}/${maxAttempts})`
+          );
         } finally {
           signal?.removeEventListener('abort', abortCurrent);
           signal?.removeEventListener('abort', abortStartup);

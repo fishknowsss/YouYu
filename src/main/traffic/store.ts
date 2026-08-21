@@ -5,6 +5,7 @@ import { hostname } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import type { PersistentTrafficStats, TrafficIdentity } from '../../shared/ipc';
 import { readJsonFile, writeJsonFileAtomic } from '../storage/jsonFile';
+import { createTrafficJournal, type TrafficJournal, type TrafficJournalEntry } from './journal';
 
 type TrafficDay = {
   upload: number;
@@ -38,6 +39,7 @@ type TrafficFile = {
   pendingUpload: number;
   pendingDownload: number;
   pendingReport?: PendingTrafficReport;
+  appliedJournalIds: string[];
   daily: Record<string, TrafficDay>;
   nodeUsage: Record<string, TrafficNodeUsage>;
   lastUpdatedAt?: string;
@@ -88,6 +90,7 @@ export type TrafficSecretStorage = {
 type TrafficStoreOptions = {
   secretStorage?: TrafficSecretStorage;
   checkpointIntervalMs?: number;
+  journal?: TrafficJournal;
 };
 
 const trafficFileName = 'traffic.json';
@@ -104,12 +107,14 @@ export class TrafficStore {
   private cached: TrafficFile | undefined;
   private dirty = false;
   private checkpointTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly journal: TrafficJournal;
 
   constructor(
     private readonly baseDir: string,
     private readonly options: TrafficStoreOptions = {}
   ) {
     this.filePath = join(baseDir, trafficFileName);
+    this.journal = options.journal ?? createTrafficJournal(baseDir);
   }
 
   async read(): Promise<TrafficFile> {
@@ -135,7 +140,8 @@ export class TrafficStore {
       }
     });
     if (result.status === 'found') {
-      const normalized = this.normalize(result.value);
+      let normalized = this.normalize(result.value);
+      normalized = await this.recoverJournal(normalized);
       this.cached = normalized;
       const legacyPending = normalized.pendingRegistration;
       if (legacyPending?.passphrase && !this.options.secretStorage?.isEncryptionAvailable()) {
@@ -169,10 +175,13 @@ export class TrafficStore {
     }
 
     const defaults = this.createDefaults();
-    this.cached = defaults;
-    await this.write(defaults, false);
+    const recovered = await this.recoverJournal(defaults);
+    this.cached = recovered;
+    if (recovered === defaults) {
+      await this.write(defaults, false);
+    }
     await this.removeLegacySecretArtifacts();
-    return defaults;
+    return recovered;
   }
 
   async addTraffic(
@@ -186,43 +195,19 @@ export class TrafficStore {
     const nodeName = normalizeNodeName(usage?.nodeName);
     const durationMs = normalizeDurationMs(usage?.durationMs);
     if (upload === 0 && download === 0 && (!nodeName || durationMs === 0)) return;
+    const entry: TrafficJournalEntry = {
+      id: randomUUID(),
+      upload,
+      download,
+      recordedAt: now.toISOString(),
+      nodeName,
+      durationMs
+    };
 
     await this.enqueue(async () => {
       const current = await this.readCurrent();
-      const dateKey = toDateKey(now);
-      const day = current.daily[dateKey] ?? { upload: 0, download: 0 };
-      const nodeUsage = { ...current.nodeUsage };
-      if (nodeName) {
-        const currentNodeUsage = nodeUsage[nodeName] ?? { upload: 0, download: 0, durationMs: 0 };
-        nodeUsage[nodeName] = {
-          upload: currentNodeUsage.upload + upload,
-          download: currentNodeUsage.download + download,
-          durationMs: currentNodeUsage.durationMs + durationMs,
-          lastUsedAt: now.toISOString()
-        };
-      }
-      const next: TrafficFile = {
-        ...current,
-        totalUpload: current.totalUpload + upload,
-        totalDownload: current.totalDownload + download,
-        pendingUpload: current.pendingUpload + upload,
-        pendingDownload: current.pendingDownload + download,
-        daily: {
-          ...current.daily,
-          [dateKey]: {
-            upload: day.upload + upload,
-            download: day.download + download
-          }
-        },
-        nodeUsage,
-        lastUpdatedAt: now.toISOString(),
-        reportStatus:
-          current.identity && (current.pendingUpload + upload > 0 || current.pendingDownload + download > 0)
-            ? 'pending'
-            : (current.reportStatus ?? 'idle'),
-        reportError: undefined
-      };
-      this.stage(next);
+      await this.journal.append(entry);
+      this.stage(applyTrafficJournalEntry(current, entry));
     });
   }
 
@@ -689,6 +674,28 @@ export class TrafficStore {
     };
   }
 
+  private async recoverJournal(current: TrafficFile): Promise<TrafficFile> {
+    const entries = await this.journal.read();
+    if (entries.length === 0 && current.appliedJournalIds.length === 0) return current;
+
+    const appliedIds = new Set(current.appliedJournalIds);
+    let recovered = current;
+    for (const entry of entries) {
+      if (appliedIds.has(entry.id)) continue;
+      recovered = applyTrafficJournalEntry(recovered, entry);
+      appliedIds.add(entry.id);
+    }
+
+    const checkpointed: TrafficFile = { ...recovered, appliedJournalIds: [...appliedIds] };
+    if (entries.length > 0) {
+      await writeJsonFileAtomic(this.filePath, checkpointed, { preserveInvalid: false });
+      await this.journal.remove(entries.map((entry) => entry.id));
+    }
+    const cleaned: TrafficFile = { ...checkpointed, appliedJournalIds: [] };
+    await writeJsonFileAtomic(this.filePath, cleaned, { preserveInvalid: false });
+    return cleaned;
+  }
+
   private async write(value: TrafficFile, backupExisting = true): Promise<void> {
     this.cached = this.normalize(value);
     this.dirty = true;
@@ -711,6 +718,12 @@ export class TrafficStore {
     const value = this.cached;
     await writeJsonFileAtomic(this.filePath, value, { backupExisting, preserveInvalid: false });
     if (this.cached === value) {
+      if (value.appliedJournalIds.length > 0) {
+        await this.journal.remove(value.appliedJournalIds);
+        const cleaned = { ...value, appliedJournalIds: [] };
+        this.cached = cleaned;
+        await writeJsonFileAtomic(this.filePath, cleaned, { backupExisting, preserveInvalid: false });
+      }
       this.dirty = false;
       this.clearCheckpoint();
     }
@@ -799,6 +812,7 @@ export class TrafficStore {
       pendingUpload: normalizeBytes(value.pendingUpload),
       pendingDownload: normalizeBytes(value.pendingDownload),
       pendingReport: deviceSeed ? normalizePendingReport(value.pendingReport) : undefined,
+      appliedJournalIds: normalizeJournalIds(value.appliedJournalIds),
       daily: normalizeDaily(value.daily),
       nodeUsage: normalizeNodeUsage(value.nodeUsage),
       lastUpdatedAt: typeof value.lastUpdatedAt === 'string' ? value.lastUpdatedAt : undefined,
@@ -813,6 +827,48 @@ export class TrafficStore {
   private createDefaults(): TrafficFile {
     return this.normalize({});
   }
+}
+
+function applyTrafficJournalEntry(current: TrafficFile, entry: TrafficJournalEntry): TrafficFile {
+  const upload = normalizeBytes(entry.upload);
+  const download = normalizeBytes(entry.download);
+  const nodeName = normalizeNodeName(entry.nodeName);
+  const durationMs = normalizeDurationMs(entry.durationMs);
+  const recordedAt = new Date(entry.recordedAt);
+  const dateKey = toDateKey(recordedAt);
+  const day = current.daily[dateKey] ?? { upload: 0, download: 0 };
+  const nodeUsage = { ...current.nodeUsage };
+  if (nodeName) {
+    const currentNodeUsage = nodeUsage[nodeName] ?? { upload: 0, download: 0, durationMs: 0 };
+    nodeUsage[nodeName] = {
+      upload: currentNodeUsage.upload + upload,
+      download: currentNodeUsage.download + download,
+      durationMs: currentNodeUsage.durationMs + durationMs,
+      lastUsedAt: entry.recordedAt
+    };
+  }
+  return {
+    ...current,
+    totalUpload: current.totalUpload + upload,
+    totalDownload: current.totalDownload + download,
+    pendingUpload: current.pendingUpload + upload,
+    pendingDownload: current.pendingDownload + download,
+    appliedJournalIds: [...new Set([...current.appliedJournalIds, entry.id])],
+    daily: {
+      ...current.daily,
+      [dateKey]: {
+        upload: day.upload + upload,
+        download: day.download + download
+      }
+    },
+    nodeUsage,
+    lastUpdatedAt: entry.recordedAt,
+    reportStatus:
+      current.identity && (current.pendingUpload + upload > 0 || current.pendingDownload + download > 0)
+        ? 'pending'
+        : (current.reportStatus ?? 'idle'),
+    reportError: undefined
+  };
 }
 
 function shouldRewriteNormalizedTraffic(parsed: Partial<TrafficFile>, normalized: TrafficFile): boolean {
@@ -971,6 +1027,16 @@ function normalizePendingReport(value: unknown): PendingTrafficReport | undefine
     localDayUpload: normalizeOptionalBytes(report.localDayUpload),
     localDayDownload: normalizeOptionalBytes(report.localDayDownload)
   };
+}
+
+function normalizeJournalIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids = value.flatMap((candidate) => {
+    if (typeof candidate !== 'string') return [];
+    const id = candidate.trim().toLowerCase();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id) ? [id] : [];
+  });
+  return [...new Set(ids)];
 }
 
 function normalizeDaily(value: unknown): Record<string, TrafficDay> {

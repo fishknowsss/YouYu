@@ -50,6 +50,7 @@ export type SystemProxyOptions = {
 
 export type RepairableSystemProxyAdapter = SystemProxyAdapter & {
   disableForRepair: (signal?: AbortSignal) => Promise<void>;
+  restoreAfterRepairCancellation: () => Promise<void>;
   flushDnsForRepair: (signal?: AbortSignal) => Promise<void>;
   repairSystemNetwork: (signal?: AbortSignal) => Promise<void>;
 };
@@ -144,6 +145,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
   let previous: PreviousProxyState | null = null;
   let activeOwnership: ProxyOwnershipState | null = null;
   let enabledByApp = false;
+  let repairDisabledByApp = false;
 
   function reg(args: string[]): Promise<string> {
     return runCommand({ file: 'reg.exe', args });
@@ -413,6 +415,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
     previous = null;
     activeOwnership = null;
     enabledByApp = false;
+    repairDisabledByApp = false;
   }
 
   async function restoreOwnership(ownership: ProxyOwnershipState): Promise<void> {
@@ -458,35 +461,84 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
     }
   }
 
+  async function releaseOwnedProxyForRebind(): Promise<boolean> {
+    const ownership = activeOwnership ?? (await readOwnershipState());
+    if (!ownership?.appliedFields.server) return false;
+    const server = getProxyServer();
+    if (!server || server === ownership.applied.server) return false;
+
+    const current = await queryPrevious();
+    if (current.server !== ownership.applied.server) return false;
+    await restoreOwnership(ownership);
+    return true;
+  }
+
   async function disableForRepair(signal?: AbortSignal): Promise<void> {
     if (platform !== 'win32') return;
     signal?.throwIfAborted();
+    repairDisabledByApp = enabledByApp;
     await setProxyEnabled(false);
     await notifySettingsChanged();
-    signal?.throwIfAborted();
     if (await queryProxyEnabled()) {
       throw new Error('Failed to disable current-user proxy for repair: ProxyEnable is still enabled');
     }
-    await clearOwnershipState();
-    clearInMemoryOwnership();
+  }
+
+  async function restoreAfterRepairCancellation(): Promise<void> {
+    if (platform !== 'win32') return;
+    const ownership = activeOwnership ?? (await readOwnershipState());
+    if (!ownership) {
+      repairDisabledByApp = false;
+      return;
+    }
+    const current = await queryPrevious();
+    if (current.server !== ownership.applied.server || current.override !== ownership.applied.override) {
+      throw new RuntimeOperationError(
+        'PROXY_RESTORE_REQUIRED',
+        'Cannot restore the app-owned proxy after canceled repair because proxy strings changed'
+      );
+    }
+    await setProxyEnabled(ownership.applied.enabled);
+    await notifySettingsChanged();
+    await verifyAppliedProxy(ownership.applied);
+    repairDisabledByApp = false;
   }
 
   async function repairSystemNetwork(signal?: AbortSignal): Promise<void> {
     if (platform !== 'win32') return;
-    signal?.throwIfAborted();
-    const results = await Promise.allSettled([
-      clearProxyStringsForRepair(),
-      flushDnsCache(signal),
-      runPrivilegedRepair(signal)
-    ]);
-    throwCollectedFailures(rejectedReasons(results), 'System network repair failed');
+    const cleanupResults = await Promise.allSettled([clearProxyStringsForRepair()]);
+    const failures = rejectedReasons(cleanupResults);
+    if (failures.length === 0) {
+      try {
+        await clearOwnershipState();
+        clearInMemoryOwnership();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (signal?.aborted) {
+      throwCollectedFailures(
+        [...failures, signal.reason ?? new Error('operation canceled')],
+        'System network repair cancellation cleanup failed'
+      );
+      return;
+    }
+    const repairResults = await Promise.allSettled([flushDnsCache(signal), runPrivilegedRepair(signal)]);
+    failures.push(...rejectedReasons(repairResults));
+    throwCollectedFailures(failures, 'System network repair failed');
   }
 
   return {
     async enable(signal) {
       if (platform !== 'win32') return;
       signal?.throwIfAborted();
-      if (enabledByApp) return;
+      if (enabledByApp) {
+        if (repairDisabledByApp) {
+          throw new RuntimeOperationError('PROXY_APPLY_FAILED', 'system proxy repair cleanup is incomplete');
+        }
+        if (!(await releaseOwnedProxyForRebind())) return;
+        signal?.throwIfAborted();
+      }
       const shouldManage = await shouldManageProxy();
       await reconcilePersistedOwnership();
       if (!shouldManage) return;
@@ -547,6 +599,7 @@ export function createSystemProxyAdapter(options: SystemProxyOptions = {}): Repa
       }
     },
     disableForRepair,
+    restoreAfterRepairCancellation,
     flushDnsForRepair: flushDnsCache,
     repairSystemNetwork,
     async repair(signal) {

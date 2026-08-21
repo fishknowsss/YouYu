@@ -180,6 +180,81 @@ describe('createSystemProxyAdapter', () => {
     expect(calls.some((call) => call.includes('ProxyServer /t REG_SZ /d old:8080'))).toBe(true);
   });
 
+  it('rebinds an app-owned proxy to a recovered runtime port without losing the original proxy', async () => {
+    const proxyState = {
+      enabled: false,
+      server: 'old:8080',
+      override: 'old.local;<local>'
+    };
+    let mixedPort = 7890;
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: createMutableProxyCommands(proxyState),
+      getProxyServer: () => `127.0.0.1:${mixedPort}`
+    });
+
+    await proxy.enable();
+    expect(proxyState).toMatchObject({ enabled: true, server: '127.0.0.1:7890' });
+
+    mixedPort = 7891;
+    await proxy.enable();
+    expect(proxyState).toMatchObject({ enabled: true, server: '127.0.0.1:7891' });
+
+    await proxy.restore();
+    expect(proxyState).toEqual({
+      enabled: false,
+      server: 'old:8080',
+      override: 'old.local;<local>'
+    });
+  });
+
+  it('restores the original proxy if applying a recovered runtime port fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const ownershipPath = join(dir, 'system-proxy-ownership.json');
+    const proxyState = {
+      enabled: false,
+      server: 'old:8080',
+      override: 'old.local;<local>'
+    };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    let mixedPort = 7890;
+    let failRecoveredPort = false;
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      stateDirectory: dir,
+      getProxyServer: () => `127.0.0.1:${mixedPort}`,
+      runCommand: async (command) => {
+        if (
+          failRecoveredPort &&
+          command.file === 'reg.exe' &&
+          command.args[0] === 'add' &&
+          command.args.includes('ProxyServer') &&
+          command.args[command.args.indexOf('/d') + 1] === '127.0.0.1:7891'
+        ) {
+          throw new Error('recovered proxy port write failed');
+        }
+        return mutableCommands(command);
+      }
+    });
+
+    try {
+      await proxy.enable();
+      mixedPort = 7891;
+      failRecoveredPort = true;
+
+      await expect(proxy.enable()).rejects.toThrow('recovered proxy port write failed');
+
+      expect(proxyState).toEqual({
+        enabled: false,
+        server: 'old:8080',
+        override: 'old.local;<local>'
+      });
+      await expect(access(ownershipPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('treats the documented reg.exe missing-value result as an absent optional proxy string', async () => {
     const proxyState = { enabled: false, server: '', override: '' };
     const mutableCommands = createMutableProxyCommands(proxyState);
@@ -309,7 +384,7 @@ describe('createSystemProxyAdapter', () => {
     expect(calls.some((call) => call.includes('CheckNetIsolation.exe LoopbackExempt -a'))).toBe(false);
   });
 
-  it('disables and verifies the current-user proxy before clearing repair ownership', async () => {
+  it('disables and verifies the current-user proxy while retaining repair ownership until cleanup', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
     const ownershipPath = join(dir, 'system-proxy-ownership.json');
     const proxyState = {
@@ -343,6 +418,36 @@ describe('createSystemProxyAdapter', () => {
         server: '127.0.0.1:7890',
         override: expect.stringContaining('*.cn')
       });
+      await expect(access(ownershipPath)).resolves.toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('cleans proxy strings and ownership when repair is canceled after proxy disable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'youyu-system-proxy-'));
+    const ownershipPath = join(dir, 'system-proxy-ownership.json');
+    const proxyState = {
+      enabled: false,
+      server: 'external:8080',
+      override: 'external.local;<local>'
+    };
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: createMutableProxyCommands(proxyState),
+      stateDirectory: dir
+    });
+    const controller = new AbortController();
+    const reason = new Error('repair canceled after proxy disable');
+
+    try {
+      await proxy.enable();
+      await proxy.disableForRepair();
+      controller.abort(reason);
+
+      await expect(proxy.repairSystemNetwork(controller.signal)).rejects.toBe(reason);
+
+      expect(proxyState).toEqual({ enabled: false, server: '', override: '' });
       await expect(access(ownershipPath)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -554,6 +659,58 @@ describe('createSystemProxyAdapter', () => {
     expect(calls.some((call) => call.includes('ipconfig.exe /flushdns'))).toBe(true);
     expect(calls.some((call) => call.includes('netsh.exe winhttp reset proxy'))).toBe(true);
     expect(calls.some((call) => call.includes('Get-AppxPackage'))).toBe(true);
+  });
+
+  it('fails explicitly instead of accepting an empty proxy after partial repair cleanup', async () => {
+    const proxyState = { enabled: false, server: 'old:8080', override: 'old.local;<local>' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    let failServerDelete = false;
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        if (
+          failServerDelete &&
+          command.file === 'reg.exe' &&
+          command.args[0] === 'delete' &&
+          command.args.includes('ProxyServer')
+        ) {
+          throw new Error('ProxyServer delete denied');
+        }
+        return mutableCommands(command);
+      }
+    });
+
+    await proxy.enable();
+    await proxy.disableForRepair();
+    failServerDelete = true;
+    await expect(proxy.repairSystemNetwork()).rejects.toThrow(
+      'Failed to clear current-user proxy configuration for repair'
+    );
+
+    await expect(proxy.enable()).rejects.toThrow('system proxy repair cleanup is incomplete');
+    expect(proxyState.enabled).toBe(false);
+  });
+
+  it('fails explicitly after repair disable changes the registry but WinINet notification fails', async () => {
+    const proxyState = { enabled: false, server: 'old:8080', override: 'old.local;<local>' };
+    const mutableCommands = createMutableProxyCommands(proxyState);
+    let failRefresh = false;
+    const proxy = createSystemProxyAdapter({
+      platform: 'win32',
+      runCommand: async (command) => {
+        if (failRefresh && command.file === 'powershell.exe' && command.args.join(' ').includes('InternetSetOption')) {
+          throw new Error('WinINet refresh failed during repair disable');
+        }
+        return mutableCommands(command);
+      }
+    });
+
+    await proxy.enable();
+    failRefresh = true;
+    await expect(proxy.disableForRepair()).rejects.toThrow('WinINet refresh failed during repair disable');
+
+    await expect(proxy.enable()).rejects.toThrow('system proxy repair cleanup is incomplete');
+    expect(proxyState).toMatchObject({ enabled: false, server: '127.0.0.1:7890' });
   });
 
   it('keeps compatible repair ordered as proxy disable followed by network repair', async () => {

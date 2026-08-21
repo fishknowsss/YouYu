@@ -87,6 +87,171 @@ describe('runNetworkRepair', () => {
     expect(calls).toEqual(['pause', 'targeted', 'targeted-error', 'complete-repair', 'clear-cache']);
   });
 
+  it('compensates a canceled targeted proxy disable without stopping the running runtime', async () => {
+    const calls: string[] = [];
+    const controller = new AbortController();
+    const reason = new Error('repair canceled after proxy disable');
+    let status: 'running' | 'stopped' | 'failed' = 'running';
+
+    await expect(
+      runNetworkRepair(
+        {
+          getStatus: () => status,
+          captureRuntimeIntent: () => 4,
+          isRuntimeIntentCurrent: () => true,
+          pauseBackgroundWork: () => calls.push('pause'),
+          prepareRunningRuntime: async () => {
+            calls.push('prepare');
+          },
+          runTargetedRepair: async () => {
+            calls.push('targeted-disable');
+            controller.abort(reason);
+          },
+          compensateCanceledTargetedRepair: async () => {
+            calls.push('restore-proxy');
+          },
+          repairLifecycle: async () => {
+            calls.push('complete-repair');
+            status = 'stopped';
+          },
+          clearRuntimeCache: vi.fn(async () => undefined),
+          startRuntime: vi.fn(async () => undefined),
+          resumeRunningWork: () => calls.push('resume-work'),
+          createSnapshot: async () => ({ status })
+        },
+        { issueKind: 'system-proxy' },
+        controller.signal
+      )
+    ).rejects.toBe(reason);
+
+    expect(calls).toEqual(['prepare', 'pause', 'targeted-disable', 'restore-proxy', 'resume-work']);
+    expect(status).toBe('running');
+  });
+
+  it('finishes cleanup instead of restoring a dead proxy when targeted kernel stop is canceled', async () => {
+    const calls: string[] = [];
+    const controller = new AbortController();
+    const reason = new Error('repair canceled after kernel stop');
+    let status: 'running' | 'stopped' | 'failed' = 'running';
+
+    await expect(
+      runNetworkRepair(
+        {
+          getStatus: () => status,
+          captureRuntimeIntent: () => 5,
+          isRuntimeIntentCurrent: () => true,
+          pauseBackgroundWork: () => calls.push('pause'),
+          prepareRunningRuntime: async () => {
+            calls.push('prepare');
+          },
+          runTargetedRepair: async () => {
+            calls.push('targeted-kernel-stop');
+            status = 'failed';
+            controller.abort(reason);
+          },
+          compensateCanceledTargetedRepair: async () => {
+            calls.push('restore-proxy');
+          },
+          repairLifecycle: async () => {
+            calls.push('complete-cleanup');
+            status = 'stopped';
+          },
+          clearRuntimeCache: vi.fn(async () => undefined),
+          startRuntime: vi.fn(async () => undefined),
+          resumeRunningWork: () => calls.push('resume-work'),
+          createSnapshot: async () => ({ status })
+        },
+        { issueKind: 'kernel' },
+        controller.signal
+      )
+    ).rejects.toBe(reason);
+
+    expect(calls).toEqual(['prepare', 'pause', 'targeted-kernel-stop', 'complete-cleanup']);
+    expect(status).toBe('stopped');
+  });
+
+  it.each(['failed', 'stopped'] as const)(
+    'finishes cleanup instead of restoring a proxy when targeted repair starts %s',
+    async (initialStatus) => {
+      const calls: string[] = [];
+      const controller = new AbortController();
+      const reason = new Error(`repair canceled from ${initialStatus}`);
+      let status: 'running' | 'stopped' | 'failed' = initialStatus;
+
+      await expect(
+        runNetworkRepair(
+          {
+            getStatus: () => status,
+            captureRuntimeIntent: () => 6,
+            isRuntimeIntentCurrent: () => true,
+            pauseBackgroundWork: () => calls.push('pause'),
+            prepareRunningRuntime: async () => {
+              calls.push('prepare');
+            },
+            runTargetedRepair: async () => {
+              calls.push('targeted');
+              controller.abort(reason);
+            },
+            compensateCanceledTargetedRepair: async () => {
+              calls.push('restore-proxy');
+            },
+            repairLifecycle: async () => {
+              calls.push('complete-cleanup');
+              status = 'stopped';
+            },
+            clearRuntimeCache: vi.fn(async () => undefined),
+            startRuntime: vi.fn(async () => undefined),
+            resumeRunningWork: () => calls.push('resume-work'),
+            createSnapshot: async () => ({ status })
+          },
+          { issueKind: 'system-proxy' },
+          controller.signal
+        )
+      ).rejects.toBe(reason);
+
+      expect(calls).toEqual(['pause', 'targeted', 'complete-cleanup']);
+      expect(status).toBe('stopped');
+    }
+  );
+
+  it('resumes paused background work when complete repair is canceled before changing a running runtime', async () => {
+    const calls: string[] = [];
+    const controller = new AbortController();
+    const reason = new Error('repair canceled before proxy disable');
+    let status: 'running' | 'stopped' | 'failed' = 'running';
+
+    await expect(
+      runNetworkRepair(
+        {
+          getStatus: () => status,
+          captureRuntimeIntent: () => 7,
+          isRuntimeIntentCurrent: () => true,
+          pauseBackgroundWork: () => calls.push('pause'),
+          prepareRunningRuntime: async () => {
+            calls.push('prepare');
+          },
+          compensateCanceledTargetedRepair: async () => {
+            calls.push('restore-proxy');
+          },
+          repairLifecycle: async (signal) => {
+            calls.push('repair');
+            controller.abort(reason);
+            signal?.throwIfAborted();
+          },
+          clearRuntimeCache: vi.fn(async () => undefined),
+          startRuntime: vi.fn(async () => undefined),
+          resumeRunningWork: () => calls.push('resume-work'),
+          createSnapshot: async () => ({ status })
+        },
+        {},
+        controller.signal
+      )
+    ).rejects.toBe(reason);
+
+    expect(calls).toEqual(['prepare', 'pause', 'repair', 'restore-proxy', 'resume-work']);
+    expect(status).toBe('running');
+  });
+
   it('repairs a running runtime to stopped before starting a fresh runtime', async () => {
     const calls: string[] = [];
     let status: 'running' | 'stopped' | 'failed' = 'running';

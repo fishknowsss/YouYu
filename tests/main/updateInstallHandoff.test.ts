@@ -88,6 +88,25 @@ describe('deferUpdateInstallerLaunch', () => {
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'spawn failed' }));
   });
 
+  it('abandons a stale handoff immediately without launching the installer', async () => {
+    const launch = vi.fn();
+    const abandon = vi.fn(async () => undefined);
+    const scheduled: Array<() => Promise<void>> = [];
+
+    deferUpdateInstallerLaunch({
+      launch,
+      onError: vi.fn(),
+      defer: (task) => scheduled.push(task),
+      prepareHandoff: async () => ({ ...createLease(), abandon }),
+      isCurrent: () => false
+    });
+
+    await scheduled[0]();
+
+    expect(launch).not.toHaveBeenCalled();
+    expect(abandon).toHaveBeenCalledOnce();
+  });
+
   it('does not launch when the user-bound handoff cannot be prepared', async () => {
     const launch = vi.fn();
     const onError = vi.fn();
@@ -179,7 +198,7 @@ describe('deferUpdateInstallerLaunch', () => {
       await writeFile(cancellationPath, '{"state":"cancelled"}\n', 'utf8');
       await lease.abandon();
       await expect(readFile(lease.path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(readFile(cancellationPath, 'utf8')).resolves.toContain('cancelled');
+      await expect(readFile(cancellationPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
       expect(environment[updateInstallerHandoffEnvironment.path]).toBeUndefined();
       expect(environment[updateInstallerHandoffEnvironment.nonce]).toBeUndefined();
       expect(environment[updateInstallerHandoffEnvironment.userSid]).toBeUndefined();

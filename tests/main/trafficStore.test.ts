@@ -107,7 +107,186 @@ describe('TrafficStore', () => {
     expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8')).totalUpload).toBe(0);
 
     await store.flush();
-    expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8')).totalUpload).toBe(40);
+    expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8'))).toMatchObject({
+      totalUpload: 40,
+      appliedJournalIds: []
+    });
+    await expect(readFile(join(dir, 'traffic-journal.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('recovers traffic journaled before a checkpoint without replaying it twice', async () => {
+    const recordedAt = new Date('2026-05-10T08:00:00.000Z');
+    const store = new TrafficStore(dir, { checkpointIntervalMs: 60_000 });
+    await store.addTraffic(15, 25, recordedAt, { nodeName: 'JP Tokyo', durationMs: 5_000 });
+
+    await expect(readFile(join(dir, 'traffic-journal.json'), 'utf8')).resolves.toContain('JP Tokyo');
+    expect(JSON.parse(await readFile(join(dir, 'traffic.json'), 'utf8')).totalUpload).toBe(0);
+
+    const recovered = new TrafficStore(dir);
+    await expect(recovered.getSnapshot(recordedAt)).resolves.toMatchObject({
+      stats: {
+        totalUpload: 15,
+        totalDownload: 25,
+        pendingUpload: 15,
+        pendingDownload: 25,
+        nodeUsage: {
+          mostUsed: expect.objectContaining({ name: 'JP Tokyo', upload: 15, download: 25 })
+        }
+      }
+    });
+    await expect(readFile(join(dir, 'traffic-journal.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const replayed = new TrafficStore(dir);
+    await expect(replayed.getSnapshot(recordedAt)).resolves.toMatchObject({
+      stats: { totalUpload: 15, totalDownload: 25, pendingUpload: 15, pendingDownload: 25 }
+    });
+  });
+
+  it.each([
+    ['traffic file is missing', false],
+    ['traffic file and backup are corrupt', true]
+  ])('recovers a valid journal when %s', async (_label, writeCorruptTraffic) => {
+    const recordedAt = '2026-05-10T08:00:00.000Z';
+    const entry = {
+      id: '00000000-0000-4000-8000-000000000001',
+      upload: 15,
+      download: 25,
+      recordedAt
+    };
+    if (writeCorruptTraffic) {
+      await writeFile(join(dir, 'traffic.json'), '{"totalUpload":', 'utf8');
+      await writeFile(join(dir, 'traffic.json.bak'), '{"totalDownload":', 'utf8');
+    }
+    await writeFile(join(dir, 'traffic-journal.json'), JSON.stringify({ version: 1, entries: [entry] }), 'utf8');
+
+    const recovered = new TrafficStore(dir);
+    await expect(recovered.getSnapshot(new Date(recordedAt))).resolves.toMatchObject({
+      stats: { totalUpload: 15, totalDownload: 25, pendingUpload: 15, pendingDownload: 25 }
+    });
+    await expect(readFile(join(dir, 'traffic-journal.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not mutate traffic state when the durable journal write fails', async () => {
+    const journalError = new Error('journal disk full');
+    const store = new TrafficStore(dir, {
+      journal: {
+        read: async () => [],
+        append: async () => {
+          throw journalError;
+        },
+        remove: async () => undefined
+      }
+    });
+
+    await expect(store.addTraffic(15, 25, new Date('2026-05-10T08:00:00.000Z'))).rejects.toBe(journalError);
+    await expect(store.getSnapshot(new Date('2026-05-10T08:00:00.000Z'))).resolves.toMatchObject({
+      stats: { totalUpload: 0, totalDownload: 0, pendingUpload: 0, pendingDownload: 0 }
+    });
+  });
+
+  it('uses journal application ids to make a failed cleanup replay idempotent', async () => {
+    const recordedAt = new Date('2026-05-10T08:00:00.000Z');
+    const store = new TrafficStore(dir, { checkpointIntervalMs: 60_000 });
+    const journal = (store as unknown as { journal: { remove: (ids: readonly string[]) => Promise<void> } }).journal;
+    const remove = vi.spyOn(journal, 'remove').mockRejectedValueOnce(new Error('journal cleanup failed'));
+
+    await store.addTraffic(15, 25, recordedAt);
+    await expect(store.flush()).rejects.toThrow('journal cleanup failed');
+    remove.mockRestore();
+
+    const recovered = new TrafficStore(dir);
+    await expect(recovered.getSnapshot(recordedAt)).resolves.toMatchObject({
+      stats: { totalUpload: 15, totalDownload: 25, pendingUpload: 15, pendingDownload: 25 }
+    });
+    const replayed = new TrafficStore(dir);
+    await expect(replayed.getSnapshot(recordedAt)).resolves.toMatchObject({
+      stats: { totalUpload: 15, totalDownload: 25, pendingUpload: 15, pendingDownload: 25 }
+    });
+  });
+
+  it('does not truncate journal idempotency markers before every checkpointed entry is removed', async () => {
+    const recordedAt = '2026-05-10T08:00:00.000Z';
+    const ids = Array.from(
+      { length: 4_100 },
+      (_, index) => `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`
+    );
+    await writeFile(
+      join(dir, 'traffic.json'),
+      JSON.stringify({
+        version: 4,
+        deviceSeed: 'seed-1',
+        totalUpload: ids.length,
+        totalDownload: 0,
+        pendingUpload: ids.length,
+        pendingDownload: 0,
+        appliedJournalIds: ids,
+        daily: { '2026-05-10': { upload: ids.length, download: 0 } },
+        nodeUsage: {}
+      }),
+      'utf8'
+    );
+    await writeFile(
+      join(dir, 'traffic-journal.json'),
+      JSON.stringify({
+        version: 1,
+        entries: ids.map((id) => ({ id, upload: 1, download: 0, recordedAt }))
+      }),
+      'utf8'
+    );
+
+    const recovered = new TrafficStore(dir);
+    await expect(recovered.getSnapshot(new Date(recordedAt))).resolves.toMatchObject({
+      stats: {
+        totalUpload: ids.length,
+        totalDownload: 0,
+        pendingUpload: ids.length,
+        pendingDownload: 0
+      }
+    });
+    await expect(readFile(join(dir, 'traffic-journal.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const replayed = new TrafficStore(dir);
+    await expect(replayed.getSnapshot(new Date(recordedAt))).resolves.toMatchObject({
+      stats: { totalUpload: ids.length, pendingUpload: ids.length }
+    });
+  });
+
+  it('keeps legacy traffic files and pending report ids compatible', async () => {
+    await writeFile(
+      join(dir, 'traffic.json'),
+      JSON.stringify({
+        version: 3,
+        deviceSeed: 'legacy-seed',
+        identity: {
+          userId: 'u_1',
+          deviceId: 'd_1',
+          name: 'Alice',
+          registeredAt: '2026-05-10T08:00:00.000Z',
+          verificationStatus: 'verified'
+        },
+        totalUpload: 15,
+        totalDownload: 25,
+        pendingUpload: 15,
+        pendingDownload: 25,
+        pendingReport: {
+          id: 'legacy-report-id',
+          upload: 15,
+          download: 25,
+          reportedAt: '2026-05-10T08:00:00.000Z'
+        },
+        daily: { '2026-05-10': { upload: 15, download: 25 } },
+        nodeUsage: {}
+      }),
+      'utf8'
+    );
+    const store = new TrafficStore(dir);
+
+    await expect(
+      store.getOrCreatePendingReport(15, 25, new Date('2026-05-10T08:01:00.000Z'), {
+        userId: 'u_1',
+        deviceId: 'd_1'
+      })
+    ).resolves.toMatchObject({ id: 'legacy-report-id', upload: 15, download: 25 });
   });
 
   it('persists a dirty in-memory snapshot when the checkpoint expires', async () => {
