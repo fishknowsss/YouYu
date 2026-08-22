@@ -15,6 +15,7 @@ import {
   withTimeout
 } from '../appActions';
 import { createOperationRunner } from '../appOperationRunner';
+import { createRegistrationAction } from '../appRegistrationAction';
 import { createAppSnapshotStore } from '../appSnapshotStore';
 import type { PageKey, UsageMode } from '../components/AppShell';
 import { useAdvancedModeShortcut } from './useAdvancedModeShortcut';
@@ -122,7 +123,6 @@ export function useAppController() {
   const nodeSelectionNoticeIdRef = useRef<number | undefined>(undefined);
   const switchingNodeRef = useRef('');
   const advancedUnlockClicksRef = useRef(0);
-  const registrationInFlightRef = useRef(false);
   const registrationSwitchOpenRef = useRef(registrationSwitchOpen);
   const operationRunner = useMemo(
     () =>
@@ -152,6 +152,18 @@ export function useAppController() {
     return () => snapshotStore.unmount();
   }, [snapshotStore]);
   const runAction = operationRunner.run;
+  const registrationAction = useMemo(() => createRegistrationAction<TrafficRegistrationInput>(), []);
+  const registerTrafficIdentity = useCallback(
+    (input: TrafficRegistrationInput) =>
+      registrationAction(input, {
+        switchingUser: Boolean(snapshotStore.getSnapshot().trafficIdentity) && registrationSwitchOpenRef.current,
+        isMounted: snapshotStore.isMounted,
+        run: (registrationInput, options) =>
+          runAction((api) => api.registerTrafficIdentity(registrationInput), '', options),
+        closeSwitch: () => setRegistrationSwitchOpen(false)
+      }),
+    [registrationAction, runAction, snapshotStore]
+  );
 
   const loadInitialSnapshot = useCallback(
     async (retry = false) => {
@@ -410,24 +422,6 @@ export function useAppController() {
   }, []);
 
   const closeRegistrationSwitch = useCallback(() => setRegistrationSwitchOpen(false), []);
-
-  const registerTrafficIdentity = useCallback(
-    async (input: TrafficRegistrationInput) => {
-      if (registrationInFlightRef.current) return;
-      registrationInFlightRef.current = true;
-      try {
-        const switchingUser = Boolean(snapshotStore.getSnapshot().trafficIdentity) && registrationSwitchOpenRef.current;
-        const success = await runAction((api) => api.registerTrafficIdentity(input), '', {
-          workingMessage: switchingUser ? '切换中' : '登记中',
-          timeoutLabel: switchingUser ? '切换用户' : '登记'
-        });
-        if (success && switchingUser && snapshotStore.isMounted()) setRegistrationSwitchOpen(false);
-      } finally {
-        registrationInFlightRef.current = false;
-      }
-    },
-    [runAction, snapshotStore]
-  );
 
   const start = useCallback(
     () =>
