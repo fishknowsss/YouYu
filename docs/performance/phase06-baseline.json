@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "environment": {
     "node": "v24.14.0",
     "platform": "win32",
@@ -10,52 +10,283 @@
     "nodeCounts": [200, 500, 1000],
     "warmupSamples": 2,
     "measuredSamples": 5,
-    "rendererMeasurement": "React Profiler in jsdom; input dispatch is a synthetic MouseEvent proxy",
-    "ipcMeasurement": "UTF-8 JSON serialization proxy for Electron structured-clone payload cost",
-    "liveRegionMeasurement": "aria-live atomic update upper bound; no screen-reader automation"
+    "rendererMeasurement": "React Profiler in jsdom; fresh roots measure initial mount, a warmed root measures updates, and input dispatch is a synthetic MouseEvent proxy",
+    "ipcMeasurement": "UTF-8 JSON envelope proxy for Electron structured-clone payload cost; main and notice use the production window coordinator, while pet progress fan-out is expected to remain zero",
+    "liveRegionMeasurement": "aria-live atomic update upper bound; no screen-reader automation",
+    "budgetPolicy": "report only; observations are not CI gates and do not authorize production optimization by themselves"
   },
   "updateProgress": {
-    "processingMs": { "samples": 5, "median": 0.431, "p95": 0.642, "max": 0.642 },
-    "ipcEvents": 100,
-    "totalIpcBytes": 125110,
-    "averageIpcBytes": 1251,
-    "maxIpcBytes": 1266,
+    "byNodeCount": [
+      {
+        "nodeCount": 200,
+        "processingMs": {
+          "samples": 5,
+          "median": 2.699,
+          "p95": 3.042,
+          "max": 3.042
+        },
+        "windowFanout": {
+          "main": {
+            "ipcEvents": 100,
+            "totalIpcBytes": 1516810,
+            "averageIpcBytes": 15168,
+            "maxIpcBytes": 15183
+          },
+          "notice": {
+            "ipcEvents": 100,
+            "totalIpcBytes": 21900,
+            "averageIpcBytes": 219,
+            "maxIpcBytes": 219
+          },
+          "pet": {
+            "ipcEvents": 0,
+            "totalIpcBytes": 0,
+            "averageIpcBytes": 0,
+            "maxIpcBytes": 0
+          }
+        }
+      },
+      {
+        "nodeCount": 500,
+        "processingMs": {
+          "samples": 5,
+          "median": 7.127,
+          "p95": 7.235,
+          "max": 7.235
+        },
+        "windowFanout": {
+          "main": {
+            "ipcEvents": 100,
+            "totalIpcBytes": 3614810,
+            "averageIpcBytes": 36148,
+            "maxIpcBytes": 36163
+          },
+          "notice": {
+            "ipcEvents": 100,
+            "totalIpcBytes": 21900,
+            "averageIpcBytes": 219,
+            "maxIpcBytes": 219
+          },
+          "pet": {
+            "ipcEvents": 0,
+            "totalIpcBytes": 0,
+            "averageIpcBytes": 0,
+            "maxIpcBytes": 0
+          }
+        }
+      },
+      {
+        "nodeCount": 1000,
+        "processingMs": {
+          "samples": 5,
+          "median": 13.76,
+          "p95": 19.794,
+          "max": 19.794
+        },
+        "windowFanout": {
+          "main": {
+            "ipcEvents": 100,
+            "totalIpcBytes": 7105110,
+            "averageIpcBytes": 71051,
+            "maxIpcBytes": 71066
+          },
+          "notice": {
+            "ipcEvents": 100,
+            "totalIpcBytes": 21900,
+            "averageIpcBytes": 219,
+            "maxIpcBytes": 219
+          },
+          "pet": {
+            "ipcEvents": 0,
+            "totalIpcBytes": 0,
+            "averageIpcBytes": 0,
+            "maxIpcBytes": 0
+          }
+        }
+      }
+    ],
+    "petStatePayload": {
+      "referenceStateCount": 24,
+      "minIpcBytes": 53,
+      "maxIpcBytes": 63
+    },
     "liveRegionAnnouncementUpperBound": 100
   },
   "nodes": [
     {
       "nodeCount": 200,
-      "reactProfilerActualDurationMs": { "samples": 5, "median": 10.669, "p95": 10.95, "max": 10.95 },
-      "renderWallMs": { "samples": 5, "median": 13.679, "p95": 14.001, "max": 14.001 },
-      "longTaskSamplesOver50Ms": 0,
-      "inputDispatchMs": { "samples": 5, "median": 0.201, "p95": 0.22, "max": 0.22 },
-      "renderKeyMs": { "samples": 5, "median": 0.027, "p95": 0.044, "max": 0.044 },
-      "snapshotPayloadBytes": 14801,
-      "ipcSerializeMs": { "samples": 5, "median": 0.024, "p95": 0.027, "max": 0.027 },
-      "ipcParseMs": { "samples": 5, "median": 0.034, "p95": 0.059, "max": 0.059 }
+      "initialMountReactProfilerDurationMs": {
+        "samples": 5,
+        "median": 17.549,
+        "p95": 17.867,
+        "max": 17.867
+      },
+      "initialMountWallMs": {
+        "samples": 5,
+        "median": 19.451,
+        "p95": 23.854,
+        "max": 23.854
+      },
+      "initialMountSamplesOver50Ms": 0,
+      "updateReactProfilerDurationMs": {
+        "samples": 5,
+        "median": 1.763,
+        "p95": 11.507,
+        "max": 11.507
+      },
+      "updateWallMs": {
+        "samples": 5,
+        "median": 3.96,
+        "p95": 14.472,
+        "max": 14.472
+      },
+      "updateSamplesOver50Ms": 0,
+      "inputDispatchMs": {
+        "samples": 5,
+        "median": 0.146,
+        "p95": 2.772,
+        "max": 2.772
+      },
+      "renderKeyMs": {
+        "samples": 5,
+        "median": 0.019,
+        "p95": 0.031,
+        "max": 0.031
+      },
+      "snapshotPayloadBytes": 14967,
+      "ipcSerializeMs": {
+        "samples": 5,
+        "median": 0.019,
+        "p95": 0.019,
+        "max": 0.019
+      },
+      "ipcParseMs": {
+        "samples": 5,
+        "median": 0.03,
+        "p95": 0.03,
+        "max": 0.03
+      }
     },
     {
       "nodeCount": 500,
-      "reactProfilerActualDurationMs": { "samples": 5, "median": 27.03, "p95": 27.866, "max": 27.866 },
-      "renderWallMs": { "samples": 5, "median": 33.059, "p95": 40.577, "max": 40.577 },
-      "longTaskSamplesOver50Ms": 0,
-      "inputDispatchMs": { "samples": 5, "median": 0.152, "p95": 0.214, "max": 0.214 },
-      "renderKeyMs": { "samples": 5, "median": 0.056, "p95": 0.3, "max": 0.3 },
-      "snapshotPayloadBytes": 35781,
-      "ipcSerializeMs": { "samples": 5, "median": 0.051, "p95": 0.073, "max": 0.073 },
-      "ipcParseMs": { "samples": 5, "median": 0.068, "p95": 0.071, "max": 0.071 }
+      "initialMountReactProfilerDurationMs": {
+        "samples": 5,
+        "median": 19.09,
+        "p95": 21.666,
+        "max": 21.666
+      },
+      "initialMountWallMs": {
+        "samples": 5,
+        "median": 23.85,
+        "p95": 24.456,
+        "max": 24.456
+      },
+      "initialMountSamplesOver50Ms": 0,
+      "updateReactProfilerDurationMs": {
+        "samples": 5,
+        "median": 4.222,
+        "p95": 4.295,
+        "max": 4.295
+      },
+      "updateWallMs": {
+        "samples": 5,
+        "median": 9.704,
+        "p95": 13.92,
+        "max": 13.92
+      },
+      "updateSamplesOver50Ms": 0,
+      "inputDispatchMs": {
+        "samples": 5,
+        "median": 0.149,
+        "p95": 0.209,
+        "max": 0.209
+      },
+      "renderKeyMs": {
+        "samples": 5,
+        "median": 0.031,
+        "p95": 0.037,
+        "max": 0.037
+      },
+      "snapshotPayloadBytes": 35947,
+      "ipcSerializeMs": {
+        "samples": 5,
+        "median": 0.046,
+        "p95": 0.051,
+        "max": 0.051
+      },
+      "ipcParseMs": {
+        "samples": 5,
+        "median": 0.069,
+        "p95": 0.07,
+        "max": 0.07
+      }
     },
     {
       "nodeCount": 1000,
-      "reactProfilerActualDurationMs": { "samples": 5, "median": 8.048, "p95": 8.712, "max": 8.712 },
-      "renderWallMs": { "samples": 5, "median": 19.246, "p95": 23.203, "max": 23.203 },
-      "longTaskSamplesOver50Ms": 0,
-      "inputDispatchMs": { "samples": 5, "median": 0.167, "p95": 0.173, "max": 0.173 },
-      "renderKeyMs": { "samples": 5, "median": 0.06, "p95": 0.091, "max": 0.091 },
-      "snapshotPayloadBytes": 70684,
-      "ipcSerializeMs": { "samples": 5, "median": 0.117, "p95": 0.151, "max": 0.151 },
-      "ipcParseMs": { "samples": 5, "median": 0.136, "p95": 0.139, "max": 0.139 }
+      "initialMountReactProfilerDurationMs": {
+        "samples": 5,
+        "median": 35.323,
+        "p95": 41.516,
+        "max": 41.516
+      },
+      "initialMountWallMs": {
+        "samples": 5,
+        "median": 46.532,
+        "p95": 47.098,
+        "max": 47.098
+      },
+      "initialMountSamplesOver50Ms": 0,
+      "updateReactProfilerDurationMs": {
+        "samples": 5,
+        "median": 7.948,
+        "p95": 54.002,
+        "max": 54.002
+      },
+      "updateWallMs": {
+        "samples": 5,
+        "median": 19.358,
+        "p95": 65.255,
+        "max": 65.255
+      },
+      "updateSamplesOver50Ms": 1,
+      "inputDispatchMs": {
+        "samples": 5,
+        "median": 0.157,
+        "p95": 0.2,
+        "max": 0.2
+      },
+      "renderKeyMs": {
+        "samples": 5,
+        "median": 0.083,
+        "p95": 0.108,
+        "max": 0.108
+      },
+      "snapshotPayloadBytes": 70850,
+      "ipcSerializeMs": {
+        "samples": 5,
+        "median": 0.121,
+        "p95": 0.163,
+        "max": 0.163
+      },
+      "ipcParseMs": {
+        "samples": 5,
+        "median": 0.138,
+        "p95": 0.143,
+        "max": 0.143
+      }
     }
+  ],
+  "reportOnlyBudgets": {
+    "rendererSampleMs": 50,
+    "inputDispatchP95Ms": 100,
+    "mainIpcMaxBytes": 98304,
+    "noticeIpcMaxBytes": 512,
+    "petStateIpcMaxBytes": 128,
+    "liveRegionAnnouncementUpperBound": 12
+  },
+  "observedBudgetExceedances": [
+    "1000-node update p95 exceeded renderer sample budget",
+    "progress live-region candidate count exceeded report-only budget"
   ],
   "optimizationsApplied": []
 }
