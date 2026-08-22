@@ -109,51 +109,50 @@ describe('application relaunch safety', () => {
   });
 
   it('blocks competing core starts while repair owns the lifecycle queue', async () => {
-    const source = await readFile('src/main/index.ts', 'utf8');
-    const guardedStart = source.slice(
-      source.indexOf('async function startLifecycleWithSafeRetry'),
-      source.indexOf('async function startLifecycleForUser')
+    const [source, runtimeActionsSource] = await Promise.all([
+      readFile('src/main/index.ts', 'utf8'),
+      readFile('src/main/appRuntimeActions.ts', 'utf8')
+    ]);
+    const guardedStart = runtimeActionsSource.slice(
+      runtimeActionsSource.indexOf('async function start'),
+      runtimeActionsSource.indexOf('async function restart')
     );
-    const guardedRestart = source.slice(
-      source.indexOf('async function restartLifecycleForIntent'),
-      source.indexOf('function runtimeActionsForIntent')
+    const guardedRestart = runtimeActionsSource.slice(
+      runtimeActionsSource.indexOf('async function restart'),
+      runtimeActionsSource.indexOf('function forIntent')
     );
     const repair = source.slice(
       source.indexOf('async function repairProxy'),
       source.indexOf('async function registerTrafficIdentity')
     );
 
-    expect(guardedStart.match(/throwIfNetworkRepairInProgress/g)).toHaveLength(3);
-    expect(guardedRestart.match(/throwIfNetworkRepairInProgress/g)).toHaveLength(3);
+    expect(guardedStart).toContain('options.throwIfNetworkRepairInProgress(startOptions.allowDuringNetworkRepair)');
+    expect(guardedRestart).toContain('options.throwIfNetworkRepairInProgress()');
+    expect(source).toContain('throwIfNetworkRepairInProgress,');
     expect(repair).toContain('allowDuringNetworkRepair: true');
     expect(repair).toContain('if (handingOffToRelaunch) lifecycle.suspendStarts()');
     expect(repair).toContain('scheduleSubscriptionRefresh()');
   });
 
   it('keeps automatic runtime recovery on the safe retry policy and reserves full repair for explicit repair', async () => {
-    const source = await readFile('src/main/index.ts', 'utf8');
+    const [source, runtimeActionsSource] = await Promise.all([
+      readFile('src/main/index.ts', 'utf8'),
+      readFile('src/main/appRuntimeActions.ts', 'utf8')
+    ]);
     const unexpectedExitRecovery = source.slice(
       source.indexOf('async function performRuntimeRecovery'),
       source.indexOf('function isExpectedAppRuntimeCancellation')
-    );
-    const guardedStart = source.slice(
-      source.indexOf('async function startLifecycleWithSafeRetry'),
-      source.indexOf('async function startLifecycleForUser')
-    );
-    const guardedRestart = source.slice(
-      source.indexOf('async function restartLifecycleForIntent'),
-      source.indexOf('function runtimeActionsForIntent')
     );
     const explicitRepair = source.slice(
       source.indexOf('async function repairProxy'),
       source.indexOf('async function registerTrafficIdentity')
     );
 
-    expect(guardedStart).toContain('runRuntimeOperationWithSafeRetry');
-    expect(guardedRestart).toContain('runRuntimeOperationWithSafeRetry');
+    expect(runtimeActionsSource.match(/runRuntimeOperationWithSafeRetry/g)).toHaveLength(3);
+    expect(source).toContain('return appRuntimeActions.start(signal, intentGeneration, options)');
+    expect(source).toContain('return appRuntimeActions.restart(intentGeneration, signal)');
     expect(unexpectedExitRecovery).not.toContain('lifecycle.repair');
-    expect(guardedStart).not.toContain('lifecycle.repair');
-    expect(guardedRestart).not.toContain('lifecycle.repair');
+    expect(runtimeActionsSource).not.toContain('lifecycle.repair');
     expect(explicitRepair).toContain('repairLifecycle: (repairSignal) => lifecycle.repair(repairSignal)');
   });
 

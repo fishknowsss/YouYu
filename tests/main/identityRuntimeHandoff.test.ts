@@ -69,14 +69,14 @@ describe('traffic identity runtime handoff', () => {
   });
 
   it('routes the identity handoff restart through the serialized lifecycle controller', async () => {
-    const source = await readFile('src/main/index.ts', 'utf8');
-    const restart = source.slice(
-      source.indexOf('async function restartLifecycleForIntent'),
-      source.indexOf('function runtimeActionsForIntent')
-    );
+    const [source, runtimeActionsSource] = await Promise.all([
+      readFile('src/main/index.ts', 'utf8'),
+      readFile('src/main/appRuntimeActions.ts', 'utf8')
+    ]);
 
-    expect(restart).toContain('runRuntimeOperationWithSafeRetry(() => lifecycle.restart(signal)');
-    expect(restart).toContain('throwIfRuntimeIntentCanceled(intentGeneration)');
+    expect(source).toContain('return appRuntimeActions.restart(intentGeneration, signal)');
+    expect(runtimeActionsSource).toContain('runRuntimeOperationWithSafeRetry(() => options.restart(signal)');
+    expect(runtimeActionsSource).toContain('options.throwIfRuntimeIntentCanceled(intentGeneration)');
   });
 
   it('treats activation as the commit point and degrades post-commit failures into diagnostics', async () => {

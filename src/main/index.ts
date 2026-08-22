@@ -19,8 +19,8 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { writeFile as writeTextFile } from 'node:fs/promises';
 import { release as getOsRelease } from 'node:os';
 import { createLifecycleController, type MihomoRuntime } from './lifecycle';
-import { runRuntimeOperationWithSafeRetry } from './runtimeRecoveryPolicy';
 import { allocateDistinctRuntimePorts } from './runtimePorts';
+import { createAppRuntimeActions } from './appRuntimeActions';
 import { createAppRuntimeCoordinator } from './appRuntimeCoordinator';
 import { IpcOperationRegistry } from './ipcOperations';
 import { createTrustedIpcMain } from './trustedIpcMain';
@@ -977,6 +977,15 @@ lifecycle = createLifecycleController({
   }
 });
 
+const appRuntimeActions = createAppRuntimeActions({
+  start: (signal) => lifecycle.start(signal),
+  restart: (signal) => lifecycle.restart(signal),
+  throwIfNetworkRepairInProgress,
+  throwIfRuntimeIntentCanceled,
+  appendLog,
+  formatError
+});
+
 const appRuntimeCoordinator = createAppRuntimeCoordinator<AppSnapshot, AppSnapshot, void, AppSnapshot | undefined>({
   getStatus: () => lifecycle.getStatus(),
   start: ({ signal }) => performStartProxy(signal),
@@ -1731,18 +1740,7 @@ async function startLifecycleWithSafeRetry(
   intentGeneration?: number,
   options: { allowDuringNetworkRepair?: boolean } = {}
 ): Promise<void> {
-  throwIfNetworkRepairInProgress(options.allowDuringNetworkRepair);
-  if (intentGeneration !== undefined) throwIfRuntimeIntentCanceled(intentGeneration);
-  await runRuntimeOperationWithSafeRetry(() => lifecycle.start(signal), {
-    signal,
-    beforeRetry(failure) {
-      throwIfNetworkRepairInProgress(options.allowDuringNetworkRepair);
-      if (intentGeneration !== undefined) throwIfRuntimeIntentCanceled(intentGeneration);
-      appendLog(`启动遇到瞬时核心故障，正在安全重试一次 (${failure.code}): ${formatError(failure.error)}`);
-    }
-  });
-  throwIfNetworkRepairInProgress(options.allowDuringNetworkRepair);
-  if (intentGeneration !== undefined) throwIfRuntimeIntentCanceled(intentGeneration);
+  return appRuntimeActions.start(signal, intentGeneration, options);
 }
 
 async function startLifecycleForUser(signal?: AbortSignal): Promise<void> {
@@ -1766,25 +1764,11 @@ async function restartLifecycleForExpectedIntent(intentGeneration: number, signa
 }
 
 async function restartLifecycleForIntent(intentGeneration: number, signal?: AbortSignal): Promise<void> {
-  throwIfNetworkRepairInProgress();
-  throwIfRuntimeIntentCanceled(intentGeneration);
-  await runRuntimeOperationWithSafeRetry(() => lifecycle.restart(signal), {
-    signal,
-    beforeRetry(failure) {
-      throwIfNetworkRepairInProgress();
-      throwIfRuntimeIntentCanceled(intentGeneration);
-      appendLog(`重启遇到瞬时核心故障，正在安全重试一次 (${failure.code}): ${formatError(failure.error)}`);
-    }
-  });
-  throwIfNetworkRepairInProgress();
-  throwIfRuntimeIntentCanceled(intentGeneration);
+  return appRuntimeActions.restart(intentGeneration, signal);
 }
 
 function runtimeActionsForIntent(intentGeneration: number) {
-  return {
-    start: (signal?: AbortSignal) => startLifecycleWithSafeRetry(signal, intentGeneration),
-    restart: (signal?: AbortSignal) => restartLifecycleForIntent(intentGeneration, signal)
-  };
+  return appRuntimeActions.forIntent(intentGeneration);
 }
 
 async function handleTrafficIdentityInvalidated(): Promise<void> {
