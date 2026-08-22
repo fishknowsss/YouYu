@@ -1,4 +1,16 @@
-export function createAppSnapshotStore<Snapshot>(initialSnapshot: Snapshot, onCommit: (snapshot: Snapshot) => void) {
+export type AppSnapshotStore<Snapshot> = {
+  mount: () => void;
+  unmount: () => void;
+  isMounted: () => boolean;
+  getSnapshot: () => Snapshot;
+  getGeneration: () => number;
+  commit: (next: Snapshot, expectedGeneration?: number) => boolean;
+};
+
+export function createAppSnapshotStore<Snapshot>(
+  initialSnapshot: Snapshot,
+  onCommit: (snapshot: Snapshot) => void
+): AppSnapshotStore<Snapshot> {
   let snapshot = initialSnapshot;
   let generation = 0;
   let mounted = false;

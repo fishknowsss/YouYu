@@ -4,7 +4,6 @@ import type {
   AppSettingsInput,
   AppSnapshot,
   MihomoMode,
-  OperationRequest,
   StrategyKey,
   TrafficRegistrationInput
 } from '../../shared/ipc';
@@ -15,9 +14,9 @@ import {
   startEasyProxy,
   withTimeout
 } from '../appActions';
+import { createOperationRunner } from '../appOperationRunner';
 import { createAppSnapshotStore } from '../appSnapshotStore';
 import type { PageKey, UsageMode } from '../components/AppShell';
-import { createOperationRequest } from '../operationRequest';
 import { useAdvancedModeShortcut } from './useAdvancedModeShortcut';
 
 const emptySnapshot: AppSnapshot = {
@@ -95,18 +94,6 @@ const nodeTestActionTimeoutMs = 10 * 60 * 1000;
 
 type AppApi = NonNullable<Window['youyu']>;
 
-type ActionOptions = {
-  workingMessage?: string;
-  timeoutMs?: number;
-  timeoutLabel?: string;
-  messageSink?: Dispatch<SetStateAction<string>>;
-  cancellable?: boolean;
-  recoverSnapshotOnError?: boolean;
-  cancelNodeTestsOnDispose?: boolean;
-  clearMessage?: boolean;
-  onTimeout?: (api: AppApi) => void;
-};
-
 export type AppController = ReturnType<typeof useAppController>;
 
 export function useAppController() {
@@ -135,12 +122,20 @@ export function useAppController() {
   const nodeSelectionNoticeIdRef = useRef<number | undefined>(undefined);
   const switchingNodeRef = useRef('');
   const advancedUnlockClicksRef = useRef(0);
-  const activeOperationRequestsRef = useRef(new Map<string, AppApi>());
-  const canceledOperationRequestsRef = useRef(new Set<string>());
-  const activeNodeTestApisRef = useRef(new Set<AppApi>());
-  const activeTaskControllersRef = useRef(new Set<AbortController>());
   const registrationInFlightRef = useRef(false);
   const registrationSwitchOpenRef = useRef(registrationSwitchOpen);
+  const operationRunner = useMemo(
+    () =>
+      createOperationRunner<AppSnapshot, AppApi>({
+        getApi: () => window.youyu,
+        snapshotStore,
+        setBusy,
+        setBusyLabel,
+        setMessage,
+        defaultTimeoutMs: actionTimeoutMs
+      }),
+    [snapshotStore]
+  );
   const registered = Boolean(snapshot.trafficIdentity);
 
   useEffect(() => {
@@ -152,97 +147,11 @@ export function useAppController() {
     [snapshotStore]
   );
 
-  const cancelOperationOnce = useCallback(async (api: AppApi, request?: OperationRequest): Promise<boolean> => {
-    if (!request || canceledOperationRequestsRef.current.has(request.requestId)) return false;
-    canceledOperationRequestsRef.current.add(request.requestId);
-    return api.cancelOperation(request.requestId).catch(() => false);
-  }, []);
-
   useEffect(() => {
     snapshotStore.mount();
     return () => snapshotStore.unmount();
   }, [snapshotStore]);
-
-  const runAction = useCallback(
-    async (
-      action: (api: AppApi, request?: OperationRequest) => Promise<AppSnapshot>,
-      doneMessage: string,
-      options: ActionOptions = {}
-    ): Promise<boolean> => {
-      const {
-        workingMessage = '',
-        timeoutMs = actionTimeoutMs,
-        timeoutLabel = workingMessage.replace(/中$/, '') || '操作',
-        messageSink,
-        cancellable = false,
-        recoverSnapshotOnError = true,
-        cancelNodeTestsOnDispose = false,
-        clearMessage = true,
-        onTimeout
-      } = options;
-      const api = window.youyu;
-      if (!api) {
-        if (messageSink) messageSink('核心接口未加载');
-        else setMessage('核心接口未加载');
-        return false;
-      }
-
-      const request = cancellable ? createOperationRequest() : undefined;
-      const taskController = new AbortController();
-      activeTaskControllersRef.current.add(taskController);
-      if (request) activeOperationRequestsRef.current.set(request.requestId, api);
-      if (cancelNodeTestsOnDispose) activeNodeTestApisRef.current.add(api);
-      const snapshotGeneration = snapshotStore.getGeneration();
-      setBusy(true);
-      setBusyLabel(workingMessage);
-      if (clearMessage) {
-        if (messageSink) messageSink('');
-        else setMessage('');
-      }
-      try {
-        const actionPromise = action(api, request);
-        const next = await withTimeout(
-          actionPromise,
-          timeoutMs,
-          timeoutLabel,
-          () => onTimeout?.(api),
-          taskController.signal
-        );
-        if (!snapshotStore.isMounted()) return false;
-        commitSnapshot(next, snapshotGeneration);
-        if (messageSink) messageSink(doneMessage);
-        else setMessage(doneMessage);
-        return true;
-      } catch (error) {
-        if (!snapshotStore.isMounted() || taskController.signal.aborted) return false;
-        if (error instanceof ActionTimeoutError && request) {
-          await cancelOperationOnce(api, request);
-        }
-        if (!snapshotStore.isMounted()) return false;
-        if (recoverSnapshotOnError) {
-          const next = await api.getSnapshot().catch(() => snapshotStore.getSnapshot());
-          if (!snapshotStore.isMounted()) return false;
-          commitSnapshot(next, snapshotGeneration);
-        }
-        const errorMessage = getActionErrorMessage(error);
-        if (messageSink) messageSink(errorMessage);
-        else setMessage(errorMessage);
-        return false;
-      } finally {
-        activeTaskControllersRef.current.delete(taskController);
-        if (request) {
-          activeOperationRequestsRef.current.delete(request.requestId);
-          canceledOperationRequestsRef.current.delete(request.requestId);
-        }
-        if (cancelNodeTestsOnDispose) activeNodeTestApisRef.current.delete(api);
-        if (snapshotStore.isMounted()) {
-          setBusy(false);
-          setBusyLabel('');
-        }
-      }
-    },
-    [cancelOperationOnce, commitSnapshot, snapshotStore]
-  );
+  const runAction = operationRunner.run;
 
   const loadInitialSnapshot = useCallback(
     async (retry = false) => {
@@ -275,23 +184,7 @@ export function useAppController() {
     return dispose;
   }, [commitSnapshot]);
 
-  useEffect(
-    () => () => {
-      for (const controller of activeTaskControllersRef.current) {
-        controller.abort(new Error('operation canceled'));
-      }
-      activeTaskControllersRef.current.clear();
-      for (const [requestId, api] of activeOperationRequestsRef.current) {
-        void cancelOperationOnce(api, { requestId });
-      }
-      activeOperationRequestsRef.current.clear();
-      for (const api of activeNodeTestApisRef.current) {
-        void api.cancelNodeTests().catch(() => undefined);
-      }
-      activeNodeTestApisRef.current.clear();
-    },
-    [cancelOperationOnce]
-  );
+  useEffect(() => () => operationRunner.dispose(), [operationRunner]);
 
   useEffect(() => scheduleTransientMessageClear(message, setMessage), [message]);
   useEffect(() => scheduleTransientMessageClear(settingsMessage, setSettingsMessage), [settingsMessage]);
@@ -339,11 +232,10 @@ export function useAppController() {
       const quickStartController = new AbortController();
       const forwardTaskAbort = () => quickStartController.abort(taskController.signal.reason);
       taskController.signal.addEventListener('abort', forwardTaskAbort, { once: true });
-      activeTaskControllersRef.current.add(taskController);
-      activeNodeTestApisRef.current.add(api);
+      operationRunner.trackTask(taskController);
+      operationRunner.trackNodeTests(api);
       const requestTracker = createOperationRequestTracker((request, previous) => {
-        if (previous) activeOperationRequestsRef.current.delete(previous.requestId);
-        activeOperationRequestsRef.current.set(request.requestId, api);
+        operationRunner.trackRequest(api, request, previous);
       });
       const snapshotGeneration = snapshotStore.getGeneration();
       try {
@@ -375,7 +267,7 @@ export function useAppController() {
       } catch (error) {
         if (!snapshotStore.isMounted() || taskController.signal.aborted) return;
         if (error instanceof ActionTimeoutError) {
-          await cancelOperationOnce(api, requestTracker.current);
+          await operationRunner.cancelOperationOnce(api, requestTracker.current);
           await api.cancelNodeTests().catch(() => undefined);
         }
         if (!snapshotStore.isMounted()) return;
@@ -385,19 +277,16 @@ export function useAppController() {
         setMessage(getActionErrorMessage(error));
       } finally {
         taskController.signal.removeEventListener('abort', forwardTaskAbort);
-        activeTaskControllersRef.current.delete(taskController);
-        activeNodeTestApisRef.current.delete(api);
-        if (requestTracker.current) {
-          activeOperationRequestsRef.current.delete(requestTracker.current.requestId);
-          canceledOperationRequestsRef.current.delete(requestTracker.current.requestId);
-        }
+        operationRunner.untrackTask(taskController);
+        operationRunner.untrackNodeTests(api);
+        operationRunner.untrackRequest(requestTracker.current);
         if (snapshotStore.isMounted()) {
           setBusy(false);
           setBusyLabel('');
         }
       }
     },
-    [cancelOperationOnce, commitSnapshot, snapshotStore]
+    [commitSnapshot, operationRunner, snapshotStore]
   );
 
   const testAllNodes = useCallback(async () => {
@@ -436,7 +325,7 @@ export function useAppController() {
 
       const selectionGeneration = ++nodeSelectionGenerationRef.current;
       const taskController = new AbortController();
-      activeTaskControllersRef.current.add(taskController);
+      operationRunner.trackTask(taskController);
       switchingNodeRef.current = name;
       setSwitchingNode(name);
       setMessage('');
@@ -465,14 +354,14 @@ export function useAppController() {
         commitSnapshot(next);
         setMessage(getActionErrorMessage(error));
       } finally {
-        activeTaskControllersRef.current.delete(taskController);
+        operationRunner.untrackTask(taskController);
         if (selectionGeneration === nodeSelectionGenerationRef.current) {
           switchingNodeRef.current = '';
           if (snapshotStore.isMounted()) setSwitchingNode('');
         }
       }
     },
-    [commitSnapshot, snapshotStore]
+    [commitSnapshot, operationRunner, snapshotStore]
   );
 
   const exportDiagnostics = useCallback(async () => {
@@ -483,7 +372,7 @@ export function useAppController() {
     }
 
     const taskController = new AbortController();
-    activeTaskControllersRef.current.add(taskController);
+    operationRunner.trackTask(taskController);
     setBusy(true);
     setBusyLabel('导出中');
     setSettingsMessage('');
@@ -501,13 +390,13 @@ export function useAppController() {
         setSettingsMessage(error instanceof ActionTimeoutError ? getActionErrorMessage(error) : '导出失败');
       }
     } finally {
-      activeTaskControllersRef.current.delete(taskController);
+      operationRunner.untrackTask(taskController);
       if (snapshotStore.isMounted()) {
         setBusy(false);
         setBusyLabel('');
       }
     }
-  }, [snapshotStore]);
+  }, [operationRunner, snapshotStore]);
 
   const handleAdvancedUnlockClick = useCallback(() => {
     advancedUnlockClicksRef.current += 1;
