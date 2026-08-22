@@ -16,6 +16,7 @@
     "validate:mihomo": "node scripts/validate-mihomo-runtime.mjs",
     "validate:repo": "node scripts/validate-repository-hygiene.mjs",
     "test": "vitest run",
+    "measure:phase06": "tsx scripts/measure-phase06-performance.ts",
     "test:coverage": "vitest run --coverage",
     "test:worker": "node --import tsx --test cloudflare/youyu-traffic/test/*.test.mjs",
     "typecheck:worker": "tsc -p cloudflare/youyu-traffic/tsconfig.json",
