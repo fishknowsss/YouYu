@@ -23,9 +23,9 @@ import { runRuntimeOperationWithSafeRetry } from './runtimeRecoveryPolicy';
 import { allocateDistinctRuntimePorts } from './runtimePorts';
 import { createAppRuntimeCoordinator } from './appRuntimeCoordinator';
 import { IpcOperationRegistry } from './ipcOperations';
+import { createTrustedIpcMain } from './trustedIpcMain';
 import { LatestOperationCoordinator } from './latestOperationCoordinator';
 import { NodeSelectionCoordinator } from './nodeSelectionCoordinator';
-import { parseIpcArguments } from './ipcSchemas';
 import { connectivityServices, probeProxyExitRegionCode, testAllConnectivity, testConnectivity } from './connectivity';
 import { createMihomoApiClient, type NodeDelayProbeFailure } from './mihomo/api';
 import {
@@ -80,7 +80,6 @@ import {
 import { createAppSnapshotReader } from './appSnapshot';
 import { createAppWindowCoordinator } from './appWindowCoordinator';
 import {
-  canWindowRoleInvokeIpc,
   ipcChannels,
   toDesktopNoticeSnapshot,
   type AppUpdateSnapshot,
@@ -91,7 +90,6 @@ import {
   type OperationRequest,
   type ProxyNode,
   type RemoteControlConfig,
-  type RendererWindowRole,
   type StrategyKey
 } from '../shared/ipc';
 import { isExpectedOperationCancellation } from '../shared/operationCancellation';
@@ -168,27 +166,14 @@ let updateRelaunchResumeStarted = false;
 let recoveredUpdateInstallFailureReported = false;
 let petWindow: BrowserWindow | null = null;
 let noticeWindow: BrowserWindow | null = null;
-const ipcMain: Pick<typeof electronIpcMain, 'handle'> = {
-  handle(channel, listener) {
-    return electronIpcMain.handle(channel, (event, ...args) => {
-      const role: RendererWindowRole | undefined =
-        event.sender === mainWindow?.webContents
-          ? 'main'
-          : event.sender === noticeWindow?.webContents
-            ? 'notice'
-            : event.sender === petWindow?.webContents
-              ? 'pet'
-              : undefined;
-      if (!role || event.senderFrame !== event.sender.mainFrame || !isTrustedRendererUrl(event.senderFrame.url)) {
-        throw new Error('untrusted IPC sender');
-      }
-      if (!canWindowRoleInvokeIpc(role, channel)) {
-        throw new Error(`IPC channel is not available to the ${role} window`);
-      }
-      return listener(event, ...parseIpcArguments(channel, args));
-    });
-  }
-};
+const ipcMain = createTrustedIpcMain({
+  ipcMain: electronIpcMain,
+  getMainWebContents: () => mainWindow?.webContents,
+  getNoticeWebContents: () => noticeWindow?.webContents,
+  getPetWebContents: () => petWindow?.webContents,
+  isDev,
+  rendererUrl: process.env.ELECTRON_RENDERER_URL
+});
 let tray: Tray | null = null;
 let trayMenu: Menu | null = null;
 let cleanupFinished = false;
@@ -293,18 +278,6 @@ const remoteConfigWakeCooldownMs = 12 * 1000;
 const updatePeriodicIntervalMs = 30 * 60 * 1000;
 const trafficSnapshotBroadcastIntervalMs = 10000;
 const runtimeRecoveryInitialDelayMs = 1500;
-
-function isTrustedRendererUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (isDev && process.env.ELECTRON_RENDERER_URL) {
-      return url.origin === new URL(process.env.ELECTRON_RENDERER_URL).origin;
-    }
-    return url.protocol === 'file:' && url.pathname.endsWith('/renderer/index.html');
-  } catch {
-    return false;
-  }
-}
 
 app.setName('YouYu');
 if (process.platform === 'win32') {

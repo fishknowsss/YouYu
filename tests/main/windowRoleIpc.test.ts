@@ -66,15 +66,19 @@ describe('window-role IPC data boundaries', () => {
   });
 
   it('binds BrowserWindows and invoke handlers to their declared roles', async () => {
-    const source = await readFile('src/main/index.ts', 'utf8');
+    const [indexSource, trustedIpcSource] = await Promise.all([
+      readFile('src/main/index.ts', 'utf8'),
+      readFile('src/main/trustedIpcMain.ts', 'utf8')
+    ]);
 
-    expect(source).toContain('canWindowRoleInvokeIpc(role, channel)');
-    expect(source).not.toContain('const petIpcChannels');
-    expect(source).not.toContain('const noticeIpcChannels');
-    expect(source.match(/additionalArguments: \['--youyu-window-role=main'\]/g)).toHaveLength(1);
-    expect(source.match(/additionalArguments: \['--youyu-window-role=notice'\]/g)).toHaveLength(1);
-    expect(source.match(/additionalArguments: \['--youyu-window-role=pet'\]/g)).toHaveLength(1);
-    expect(source).toContain('ipcMain.handle(ipcChannels.getDesktopNoticeSnapshot');
-    expect(source).toContain('ipcMain.handle(ipcChannels.acknowledgeDesktopNotice');
+    expect(indexSource).toContain('createTrustedIpcMain');
+    expect(trustedIpcSource).toContain('canWindowRoleInvokeIpc(role, channel)');
+    expect(indexSource).not.toContain('const petIpcChannels');
+    expect(indexSource).not.toContain('const noticeIpcChannels');
+    expect(indexSource.match(/additionalArguments: \['--youyu-window-role=main'\]/g)).toHaveLength(1);
+    expect(indexSource.match(/additionalArguments: \['--youyu-window-role=notice'\]/g)).toHaveLength(1);
+    expect(indexSource.match(/additionalArguments: \['--youyu-window-role=pet'\]/g)).toHaveLength(1);
+    expect(indexSource).toContain('ipcMain.handle(ipcChannels.getDesktopNoticeSnapshot');
+    expect(indexSource).toContain('ipcMain.handle(ipcChannels.acknowledgeDesktopNotice');
   });
 });

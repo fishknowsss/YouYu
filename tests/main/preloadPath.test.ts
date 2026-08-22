@@ -5,6 +5,7 @@ import { productionRendererCsp } from '../../scripts/renderer-csp';
 describe('packaged preload path', () => {
   it('loads the electron-vite preload output file', async () => {
     const source = await readFile('src/main/index.ts', 'utf8');
+    const trustedIpcSource = await readFile('src/main/trustedIpcMain.ts', 'utf8');
     const config = await readFile('electron.vite.config.ts', 'utf8');
     const html = await readFile('index.html', 'utf8');
     const builder = await readFile('electron-builder.yml', 'utf8');
@@ -19,8 +20,9 @@ describe('packaged preload path', () => {
     expect(source).toContain("setWindowOpenHandler(() => ({ action: 'deny' }))");
     expect(source).toContain("window.webContents.on('will-navigate'");
     expect(source).toContain("window.webContents.on('will-attach-webview'");
-    expect(source).toContain('untrusted IPC sender');
-    expect(source).toContain('parseIpcArguments(channel, args)');
+    expect(source).toContain('createTrustedIpcMain');
+    expect(trustedIpcSource).toContain('untrusted IPC sender');
+    expect(trustedIpcSource).toContain('parseIpcArguments(channel, args)');
     expect(source).toContain('await systemProxy.restore()');
     expect(source).toContain("recordError('恢复遗留系统代理失败', error)");
     expect(html).toContain('Content-Security-Policy');
