@@ -318,15 +318,14 @@ describe('RemoteConfigClient', () => {
   });
 
   it('renders the effective remote rule and ownership instead of stale local settings', async () => {
-    const source = await readFile('src/main/index.ts', 'utf8');
-    const snapshot = source.slice(
-      source.indexOf('async function createSnapshot'),
-      source.indexOf('function sendSnapshotToWindows')
-    );
+    const [indexSource, snapshotSource] = await Promise.all([
+      readFile('src/main/index.ts', 'utf8'),
+      readFile('src/main/appSnapshot.ts', 'utf8')
+    ]);
 
-    expect(snapshot).toContain('remoteConfigClient.getActiveConfigSnapshot()');
-    expect(snapshot).toContain('ruleProfile: remoteConfigSnapshot.config?.ruleProfile ?? settings.ruleProfile');
-    expect(snapshot).toContain("configSource: remoteConfigSnapshot.config?.configSource ?? 'local'");
+    expect(indexSource).toContain('readRemoteConfigSnapshot: () => remoteConfigClient.getActiveConfigSnapshot()');
+    expect(snapshotSource).toContain('ruleProfile: remoteConfigSnapshot.config?.ruleProfile ?? settings.ruleProfile');
+    expect(snapshotSource).toContain("configSource: remoteConfigSnapshot.config?.configSource ?? 'local'");
   });
 
   it('clears a persisted remote subscription when traffic identity ownership changes', async () => {

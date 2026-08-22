@@ -36,7 +36,6 @@ import {
   resolveNodeSelectionPolicy,
   type NodeSelectionPolicy
 } from './mihomo/nodeSelectionPolicy';
-import { strategyLabels, strategyTargets } from './mihomo/config';
 import { createMihomoRuntime } from './mihomo/process';
 import { createWindowsDeviceKeyProvider } from './platform/deviceKey';
 import { createSystemProxyAdapter } from './platform/systemProxy';
@@ -79,6 +78,7 @@ import {
   testMihomoNode,
   updateSubscriptionNodes
 } from './appActions';
+import { createAppSnapshotReader } from './appSnapshot';
 import {
   canWindowRoleInvokeIpc,
   ipcChannels,
@@ -92,7 +92,6 @@ import {
   type ProxyNode,
   type RemoteControlConfig,
   type RendererWindowRole,
-  type StrategyGroup,
   type StrategyKey
 } from '../shared/ipc';
 import { isExpectedOperationCancellation } from '../shared/operationCancellation';
@@ -1385,74 +1384,30 @@ function isAutomaticStrategy(strategy: StrategyKey): strategy is Exclude<Strateg
   return strategy === 'auto' || strategy === 'fallback' || strategy === 'load-balance';
 }
 
-async function createSnapshot(): Promise<AppSnapshot> {
-  const settings = await settingsStore.read();
-  const mihomoApi = createMihomoApiClient({
-    secret: settings.controllerSecret,
-    controllerPort: runtimePorts.controllerPort
-  });
-  const running = lifecycle.getStatus() === 'running';
-  const [nodes, strategies, runtime, currentNode] = running
-    ? await Promise.all([
-        mihomoApi.listNodes().catch(() => []),
-        mihomoApi.listStrategies().catch(() => createDefaultStrategies(settings.strategy)),
-        mihomoApi.getRuntimeStats().catch(() => ({ activeConnections: 0, uploadTotal: 0, downloadTotal: 0 })),
-        mihomoApi.getCurrentNode().catch(() => strategyTargets.auto)
-      ])
-    : [
-        [],
-        createDefaultStrategies(settings.strategy),
-        { activeConnections: 0, uploadTotal: 0, downloadTotal: 0 },
-        strategyTargets[settings.strategy === 'manual' ? 'auto' : settings.strategy]
-      ];
-  const activeStrategy = strategies.find((strategy) => strategy.active)?.key ?? settings.strategy;
-  const [trafficSnapshot, userNotice, remoteConfigSnapshot] = await Promise.all([
-    trafficStore.getSnapshot(),
-    remoteConfigClient.getActiveNotice(),
-    remoteConfigClient.getActiveConfigSnapshot()
-  ]);
-  const nodeHealth = await getCurrentNodeHealthSnapshot(currentNode, running, settings);
-
-  return {
-    status: lifecycle.getStatus(),
-    currentNode,
-    nodes,
-    nodeHealth,
-    strategies,
-    mode: settings.mode,
-    strategy: activeStrategy,
-    ruleProfile: remoteConfigSnapshot.config?.ruleProfile ?? settings.ruleProfile,
-    configSource: remoteConfigSnapshot.config?.configSource ?? 'local',
-    canEditManagedConfig: remoteConfigSnapshot.canEditManagedConfig,
-    remoteConfigReady: remoteConfigSnapshot.ready,
-    configUpdatedAt: remoteConfigSnapshot.config?.updatedAt,
-    features: {
-      systemProxyEnabled: settings.systemProxyEnabled,
-      dnsEnhanced: settings.dnsEnhanced,
-      snifferEnabled: settings.snifferEnabled,
-      tunEnabled: settings.tunEnabled,
-      strictRouteEnabled: settings.strictRouteEnabled,
-      allowLan: settings.allowLan,
-      subscriptionRefreshIntervalHours: settings.subscriptionRefreshIntervalHours
-    },
-    runtime,
-    traffic: trafficSnapshot.stats,
-    trafficIdentity: trafficSnapshot.identity,
-    userNotice,
+const appSnapshotReader = createAppSnapshotReader({
+  readSettings: () => settingsStore.read(),
+  getRuntimeStatus: () => lifecycle.getStatus(),
+  getControllerPort: () => runtimePorts.controllerPort,
+  createMihomoApi: createMihomoApiClient,
+  readTrafficSnapshot: () => trafficStore.getSnapshot(),
+  readUserNotice: () => remoteConfigClient.getActiveNotice(),
+  readRemoteConfigSnapshot: () => remoteConfigClient.getActiveConfigSnapshot(),
+  readNodeHealth: getCurrentNodeHealthSnapshot,
+  readDynamicState: () => ({
     nodeSelectionNotice,
-    subscriptionUrl: settings.subscriptionUrl,
-    remoteSubscriptionUrl: settings.remoteSubscriptionUrl,
     subscriptionRevision,
     update: updateSnapshot,
-    diagnostics: {
-      lastError,
-      logs: appLogs.getLogs(diagnosticSnapshotLogLimit),
-      logCount: appLogs.size,
-      logCapacity: appLogs.capacity,
-      droppedLogCount: appLogs.droppedCount,
-      issueKind: classifyDiagnosticIssue(lastError)
-    }
-  };
+    lastError,
+    logs: appLogs.getLogs(diagnosticSnapshotLogLimit),
+    logCount: appLogs.size,
+    logCapacity: appLogs.capacity,
+    droppedLogCount: appLogs.droppedCount
+  }),
+  classifyDiagnosticIssue
+});
+
+function createSnapshot(): Promise<AppSnapshot> {
+  return appSnapshotReader.read();
 }
 
 function sendSnapshotToWindows(snapshot: AppSnapshot) {
@@ -1634,19 +1589,6 @@ function createSnapshotProgressNotifier(intervalMs = 300, shouldSend: () => bool
       queued = false;
     }
   };
-}
-
-function createDefaultStrategies(active: string): StrategyGroup[] {
-  return (Object.entries(strategyTargets) as Array<[Exclude<keyof typeof strategyTargets, 'manual'>, string]>).map(
-    ([key, target]) => ({
-      key,
-      label: strategyLabels[key],
-      target,
-      active: active === key,
-      now: undefined,
-      delay: undefined
-    })
-  );
 }
 
 function createRuntimeMihomoApi(options: { secret: string }) {
