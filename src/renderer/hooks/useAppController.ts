@@ -15,6 +15,7 @@ import {
   withTimeout
 } from '../appActions';
 import { createOperationRunner } from '../appOperationRunner';
+import { createPageActions } from '../appPageActions';
 import { createRegistrationAction } from '../appRegistrationAction';
 import { createAppSnapshotStore } from '../appSnapshotStore';
 import { createUpdateActions } from '../appUpdateActions';
@@ -123,7 +124,6 @@ export function useAppController() {
   const nodeSelectionGenerationRef = useRef(0);
   const nodeSelectionNoticeIdRef = useRef<number | undefined>(undefined);
   const switchingNodeRef = useRef('');
-  const advancedUnlockClicksRef = useRef(0);
   const registrationSwitchOpenRef = useRef(registrationSwitchOpen);
   const operationRunner = useMemo(
     () =>
@@ -156,6 +156,20 @@ export function useAppController() {
   const updateActions = useMemo(
     () => createUpdateActions<AppApi, AppSnapshot>({ run: runAction, setSettingsMessage }),
     [runAction]
+  );
+  const pageActions = useMemo(
+    () =>
+      createPageActions<PageKey, UsageMode>({
+        homePage: 'home',
+        nodesPage: 'nodes',
+        easyMode: 'easy',
+        advancedMode: 'advanced',
+        setPage,
+        setUsageMode,
+        setMessage,
+        setRegistrationSwitchOpen
+      }),
+    []
   );
   const registrationAction = useMemo(() => createRegistrationAction<TrafficRegistrationInput>(), []);
   const registerTrafficIdentity = useCallback(
@@ -219,13 +233,7 @@ export function useAppController() {
     document.querySelector<HTMLButtonElement>('.version-chip')?.focus();
   }, [registrationSwitchOpen]);
 
-  const changeUsageMode = useCallback((next: UsageMode) => {
-    advancedUnlockClicksRef.current = 0;
-    setUsageMode(next);
-    if (next === 'easy') setPage('home');
-  }, []);
-
-  useAdvancedModeShortcut(usageMode, changeUsageMode);
+  useAdvancedModeShortcut(usageMode, pageActions.changeUsageMode);
 
   const quickStart = useCallback(
     async (subscriptionUrl: string) => {
@@ -415,18 +423,13 @@ export function useAppController() {
     }
   }, [operationRunner, snapshotStore]);
 
-  const handleAdvancedUnlockClick = useCallback(() => {
-    advancedUnlockClicksRef.current += 1;
-    if (advancedUnlockClicksRef.current >= 7) changeUsageMode('advanced');
-  }, [changeUsageMode]);
-
-  const openRegistrationSwitch = useCallback(() => {
-    setMessage('');
-    restoreRegistrationEntryFocusRef.current = true;
-    setRegistrationSwitchOpen(true);
-  }, []);
-
-  const closeRegistrationSwitch = useCallback(() => setRegistrationSwitchOpen(false), []);
+  const openRegistrationSwitch = useCallback(
+    () =>
+      pageActions.openRegistrationSwitch(() => {
+        restoreRegistrationEntryFocusRef.current = true;
+      }),
+    [pageActions]
+  );
 
   const start = useCallback(
     () =>
@@ -469,7 +472,7 @@ export function useAppController() {
         : runAction((api) => api.selectStrategy(strategy), '已切换')),
     [runAction]
   );
-  const openNodes = useCallback(() => setPage('nodes'), []);
+
   const testNode = useCallback((name: string) => void runAction((api) => api.testNode(name), '测速完成'), [runAction]);
   const updateSubscription = useCallback(
     () =>
@@ -535,10 +538,10 @@ export function useAppController() {
     retrySnapshot,
     registered,
     registrationSwitchOpen,
-    changeUsageMode,
-    handleAdvancedUnlockClick,
+    changeUsageMode: pageActions.changeUsageMode,
+    handleAdvancedUnlockClick: pageActions.handleAdvancedUnlockClick,
     openRegistrationSwitch,
-    closeRegistrationSwitch,
+    closeRegistrationSwitch: pageActions.closeRegistrationSwitch,
     registerTrafficIdentity,
     acknowledgeUserNotice,
     quickStart,
@@ -547,7 +550,7 @@ export function useAppController() {
     repair,
     setMode,
     selectStrategy,
-    openNodes,
+    openNodes: pageActions.openNodes,
     selectNode,
     testNode,
     testAllNodes,
