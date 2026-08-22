@@ -8,6 +8,7 @@ describe('build security boundaries', () => {
     const html = await readFile('index.html', 'utf8');
     const electronVite = await readFile('electron.vite.config.ts', 'utf8');
     const browserVite = await readFile('vite.config.ts', 'utf8');
+    const sharedRendererVite = await readFile('scripts/renderer-vite-config.ts', 'utf8');
 
     expect(productionRendererCsp).toContain("connect-src 'self'");
     expect(productionRendererCsp).not.toMatch(/localhost|127\.0\.0\.1|ws:/);
@@ -16,8 +17,9 @@ describe('build security boundaries', () => {
     expect(resolveRendererCsp('build')).toBe(productionRendererCsp);
     expect(resolveRendererCsp('serve')).toBe(developmentRendererCsp);
     expect(html).toContain('__YOUYU_RENDERER_CSP__');
-    expect(electronVite).toContain('createRendererCspPlugin()');
-    expect(browserVite).toContain('createRendererCspPlugin()');
+    expect(sharedRendererVite).toContain('createRendererCspPlugin()');
+    expect(electronVite).toContain('loadRendererBuildDefinition(__dirname)');
+    expect(browserVite).toContain('loadRendererBuildDefinition(__dirname)');
   });
 
   it('rejects mutable GitHub Action tags while allowing full commit SHAs and local actions', () => {
