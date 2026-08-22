@@ -17,6 +17,7 @@ import {
 import { createOperationRunner } from '../appOperationRunner';
 import { createRegistrationAction } from '../appRegistrationAction';
 import { createAppSnapshotStore } from '../appSnapshotStore';
+import { createUpdateActions } from '../appUpdateActions';
 import type { PageKey, UsageMode } from '../components/AppShell';
 import { useAdvancedModeShortcut } from './useAdvancedModeShortcut';
 
@@ -152,6 +153,10 @@ export function useAppController() {
     return () => snapshotStore.unmount();
   }, [snapshotStore]);
   const runAction = operationRunner.run;
+  const updateActions = useMemo(
+    () => createUpdateActions<AppApi, AppSnapshot>({ run: runAction, setSettingsMessage }),
+    [runAction]
+  );
   const registrationAction = useMemo(() => createRegistrationAction<TrafficRegistrationInput>(), []);
   const registerTrafficIdentity = useCallback(
     (input: TrafficRegistrationInput) =>
@@ -513,26 +518,6 @@ export function useAppController() {
       }),
     [runAction]
   );
-  const checkForUpdates = useCallback(
-    () =>
-      void runAction((api) => api.checkForUpdates(), '', {
-        workingMessage: '检查中',
-        timeoutLabel: '检查更新',
-        messageSink: setSettingsMessage
-      }),
-    [runAction]
-  );
-  const handleInstallUpdate = useCallback(
-    (messageSink?: Dispatch<SetStateAction<string>>) =>
-      void runAction((api) => api.installUpdate(), '', {
-        workingMessage: '确认新版中',
-        timeoutLabel: '安装更新',
-        messageSink
-      }),
-    [runAction]
-  );
-  const installUpdate = useCallback(() => handleInstallUpdate(), [handleInstallUpdate]);
-  const installSettingsUpdate = useCallback(() => handleInstallUpdate(setSettingsMessage), [handleInstallUpdate]);
 
   return {
     page,
@@ -571,9 +556,9 @@ export function useAppController() {
     settingsRepair,
     saveSettings,
     syncRemoteConfig,
-    checkForUpdates,
-    installUpdate,
-    installSettingsUpdate,
+    checkForUpdates: updateActions.checkForUpdates,
+    installUpdate: updateActions.installUpdate,
+    installSettingsUpdate: updateActions.installSettingsUpdate,
     exportDiagnostics
   };
 }
