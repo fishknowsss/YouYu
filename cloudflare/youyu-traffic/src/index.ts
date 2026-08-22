@@ -1,6 +1,7 @@
 import { adminPage } from './adminPage';
 import { ADMIN_SCRIPT } from './adminScript';
 import { ADMIN_STYLES } from './adminStyles';
+import { createWorkerRouter } from './router';
 
 export interface Env {
   DB: D1Database;
@@ -353,131 +354,219 @@ export default {
   }
 };
 
-async function dispatchRequest(request: Request, env: Env, url: URL): Promise<Response> {
-  if (request.method === 'OPTIONS') return optionsResponse();
-  if (request.method === 'POST' && url.pathname === '/api/activate') return activate(request, env);
-  if (request.method === 'POST' && url.pathname === '/api/traffic/report') return reportTraffic(request, env);
-  if (request.method === 'POST' && url.pathname === '/api/notices/acknowledge') {
-    return acknowledgeUserNotice(request, env);
-  }
-  if (request.method === 'GET' && url.pathname === '/api/config') return getClientConfig(request, env);
-  if (request.method === 'POST' && url.pathname === '/api/config') return updateClientConfig(request, env);
-  if (request.method === 'GET' && url.pathname === '/api/admin/users') {
-    await requireAdmin(request, env);
-    return listUsers(env, parseAdminPagination(url, ADMIN_USERS_DEFAULT_PAGE_SIZE));
-  }
-  if (request.method === 'GET' && url.pathname === '/api/admin/config') {
-    await requireAdmin(request, env);
-    return getAdminConfig(env);
-  }
-  if (request.method === 'POST' && url.pathname === '/api/admin/config') {
-    await requireAdmin(request, env);
-    return updateAdminConfig(request, env);
-  }
-  if (request.method === 'GET' && url.pathname === '/api/admin/traffic-limit') {
-    await requireAdmin(request, env);
-    return getAdminTrafficLimit(env);
-  }
-  if (request.method === 'POST' && url.pathname === '/api/admin/traffic-limit') {
-    await requireAdmin(request, env);
-    return updateAdminTrafficLimit(request, env);
-  }
-  if (request.method === 'GET' && url.pathname === '/api/admin/traffic-trend') {
-    await requireAdmin(request, env);
-    return getAdminTrafficTrend(env, url.searchParams.get('range'));
-  }
-  if (request.method === 'POST' && url.pathname === '/api/admin/config/sync-users') {
-    await requireAdmin(request, env);
-    await requireEmptyBody(request);
-    return syncGlobalConfigToUsers(env);
-  }
-  if (request.method === 'POST' && url.pathname === '/api/admin/maintenance') {
-    await requireAdmin(request, env);
-    await requireEmptyBody(request);
-    return json({ ok: true, cleanup: await cleanupExpiredData(env) });
-  }
-  if (request.method === 'GET' && url.pathname === '/admin/assets/app.css') {
-    return staticAsset(ADMIN_STYLES, 'text/css; charset=utf-8');
-  }
-  if (request.method === 'GET' && url.pathname === '/admin/assets/app.js') {
-    return staticAsset(ADMIN_SCRIPT, 'text/javascript; charset=utf-8');
-  }
-  if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/admin')) {
-    return new Response(adminPage(), {
-      headers: {
-        'cache-control': 'no-store, no-transform',
-        'content-security-policy':
-          "default-src 'none'; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
-        'content-type': 'text/html; charset=utf-8',
-        'cross-origin-resource-policy': 'same-origin',
-        'referrer-policy': 'no-referrer',
-        'x-content-type-options': 'nosniff'
+const workerRouter = createWorkerRouter<Env>(
+  [
+    { method: 'OPTIONS', handle: () => optionsResponse() },
+    { method: 'POST', path: '/api/activate', handle: ({ request, env }) => activate(request, env) },
+    { method: 'POST', path: '/api/traffic/report', handle: ({ request, env }) => reportTraffic(request, env) },
+    {
+      method: 'POST',
+      path: '/api/notices/acknowledge',
+      handle: ({ request, env }) => acknowledgeUserNotice(request, env)
+    },
+    { method: 'GET', path: '/api/config', handle: ({ request, env }) => getClientConfig(request, env) },
+    { method: 'POST', path: '/api/config', handle: ({ request, env }) => updateClientConfig(request, env) },
+    {
+      method: 'GET',
+      path: '/api/admin/users',
+      async handle({ request, env, url }) {
+        await requireAdmin(request, env);
+        return listUsers(env, parseAdminPagination(url, ADMIN_USERS_DEFAULT_PAGE_SIZE));
       }
-    });
+    },
+    {
+      method: 'GET',
+      path: '/api/admin/config',
+      async handle({ request, env }) {
+        await requireAdmin(request, env);
+        return getAdminConfig(env);
+      }
+    },
+    {
+      method: 'POST',
+      path: '/api/admin/config',
+      async handle({ request, env }) {
+        await requireAdmin(request, env);
+        return updateAdminConfig(request, env);
+      }
+    },
+    {
+      method: 'GET',
+      path: '/api/admin/traffic-limit',
+      async handle({ request, env }) {
+        await requireAdmin(request, env);
+        return getAdminTrafficLimit(env);
+      }
+    },
+    {
+      method: 'POST',
+      path: '/api/admin/traffic-limit',
+      async handle({ request, env }) {
+        await requireAdmin(request, env);
+        return updateAdminTrafficLimit(request, env);
+      }
+    },
+    {
+      method: 'GET',
+      path: '/api/admin/traffic-trend',
+      async handle({ request, env, url }) {
+        await requireAdmin(request, env);
+        return getAdminTrafficTrend(env, url.searchParams.get('range'));
+      }
+    },
+    {
+      method: 'POST',
+      path: '/api/admin/config/sync-users',
+      async handle({ request, env }) {
+        await requireAdmin(request, env);
+        await requireEmptyBody(request);
+        return syncGlobalConfigToUsers(env);
+      }
+    },
+    {
+      method: 'POST',
+      path: '/api/admin/maintenance',
+      async handle({ request, env }) {
+        await requireAdmin(request, env);
+        await requireEmptyBody(request);
+        return json({ ok: true, cleanup: await cleanupExpiredData(env) });
+      }
+    },
+    {
+      method: 'GET',
+      path: '/admin/assets/app.css',
+      handle: () => staticAsset(ADMIN_STYLES, 'text/css; charset=utf-8')
+    },
+    {
+      method: 'GET',
+      path: '/admin/assets/app.js',
+      handle: () => staticAsset(ADMIN_SCRIPT, 'text/javascript; charset=utf-8')
+    },
+    {
+      method: 'GET',
+      path: /^\/(?:admin)?$/,
+      handle: () =>
+        new Response(adminPage(), {
+          headers: {
+            'cache-control': 'no-store, no-transform',
+            'content-security-policy':
+              "default-src 'none'; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+            'content-type': 'text/html; charset=utf-8',
+            'cross-origin-resource-policy': 'same-origin',
+            'referrer-policy': 'no-referrer',
+            'x-content-type-options': 'nosniff'
+          }
+        })
+    },
+    {
+      method: 'POST',
+      path: '/api/admin/notices/broadcast',
+      async handle({ request, env }) {
+        await requireAdmin(request, env);
+        return broadcastAdminUserNotices(request, env);
+      }
+    },
+    {
+      method: 'POST',
+      path: '/api/admin/notices/reset',
+      async handle({ request, env }) {
+        await requireAdmin(request, env);
+        return resetAdminUserNotices(request, env);
+      }
+    },
+    {
+      method: 'GET',
+      path: /^\/api\/admin\/users\/([^/]+)\/traffic$/,
+      async handle({ request, env, url, match }) {
+        await requireAdmin(request, env);
+        return getUserTraffic(env, match![1], parseAdminPagination(url, ADMIN_TRAFFIC_DEFAULT_PAGE_SIZE));
+      }
+    },
+    {
+      path: /^\/api\/admin\/users\/([^/]+)\/profile$/,
+      async handle({ request, env, match }) {
+        await requireAdmin(request, env);
+        if (request.method === 'GET') return getAdminUserProfile(env, match![1]);
+        if (request.method === 'POST') return updateAdminUserProfile(request, env, match![1]);
+        throw new HttpError(404, 'not found');
+      }
+    },
+    {
+      path: /^\/api\/admin\/users\/([^/]+)\/notice$/,
+      async handle({ request, env, match }) {
+        await requireAdmin(request, env);
+        if (request.method === 'GET') return getAdminUserNotice(env, match![1]);
+        if (request.method === 'POST') return updateAdminUserNotice(request, env, match![1]);
+        throw new HttpError(404, 'not found');
+      }
+    },
+    {
+      method: 'POST',
+      path: /^\/api\/admin\/users\/([^/]+)\/notice\/reset$/,
+      async handle({ request, env, match }) {
+        await requireAdmin(request, env);
+        await requireEmptyBody(request);
+        return resetAdminUserNotice(env, match![1]);
+      }
+    },
+    {
+      method: 'GET',
+      path: /^\/api\/admin\/users\/([^/]+)\/merge-preview$/,
+      async handle({ request, env, match }) {
+        await requireAdmin(request, env);
+        return previewAdminUserMerge(request, env, match![1]);
+      }
+    },
+    {
+      method: 'POST',
+      path: /^\/api\/admin\/users\/([^/]+)\/merge$/,
+      async handle({ request, env, match }) {
+        await requireAdmin(request, env);
+        return mergeAdminUser(request, env, match![1]);
+      }
+    },
+    {
+      path: /^\/api\/admin\/users\/([^/]+)\/config$/,
+      async handle({ request, env, match }) {
+        await requireAdmin(request, env);
+        if (request.method === 'GET') return getAdminUserConfig(env, match![1]);
+        if (request.method === 'POST') return updateAdminUserConfig(request, env, match![1]);
+        throw new HttpError(404, 'not found');
+      }
+    },
+    {
+      method: 'POST',
+      path: /^\/api\/admin\/users\/([^/]+)\/config\/reset$/,
+      async handle({ request, env, match }) {
+        await requireAdmin(request, env);
+        await requireEmptyBody(request);
+        return resetAdminUserConfig(env, match![1]);
+      }
+    },
+    {
+      method: 'POST',
+      path: /^\/api\/admin\/users\/([^/]+)\/config-permission$/,
+      async handle({ request, env, match }) {
+        await requireAdmin(request, env);
+        return updateAdminManagedConfigPermission(request, env, match![1]);
+      }
+    },
+    {
+      method: 'GET',
+      path: '/api/admin/anomalies',
+      async handle({ request, env, url }) {
+        await requireAdmin(request, env);
+        return listAnomalies(env, parseAdminPagination(url, ADMIN_ANOMALIES_DEFAULT_PAGE_SIZE));
+      }
+    }
+  ],
+  () => {
+    throw new HttpError(404, 'not found');
   }
-  if (request.method === 'POST' && url.pathname === '/api/admin/notices/broadcast') {
-    await requireAdmin(request, env);
-    return broadcastAdminUserNotices(request, env);
-  }
-  if (request.method === 'POST' && url.pathname === '/api/admin/notices/reset') {
-    await requireAdmin(request, env);
-    return resetAdminUserNotices(request, env);
-  }
-  const userTrafficMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/traffic$/);
-  if (request.method === 'GET' && userTrafficMatch) {
-    await requireAdmin(request, env);
-    return getUserTraffic(env, userTrafficMatch[1], parseAdminPagination(url, ADMIN_TRAFFIC_DEFAULT_PAGE_SIZE));
-  }
-  const userProfileMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/profile$/);
-  if (userProfileMatch) {
-    await requireAdmin(request, env);
-    if (request.method === 'GET') return getAdminUserProfile(env, userProfileMatch[1]);
-    if (request.method === 'POST') return updateAdminUserProfile(request, env, userProfileMatch[1]);
-  }
-  const userNoticeMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/notice$/);
-  if (userNoticeMatch) {
-    await requireAdmin(request, env);
-    if (request.method === 'GET') return getAdminUserNotice(env, userNoticeMatch[1]);
-    if (request.method === 'POST') return updateAdminUserNotice(request, env, userNoticeMatch[1]);
-  }
-  const userNoticeResetMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/notice\/reset$/);
-  if (request.method === 'POST' && userNoticeResetMatch) {
-    await requireAdmin(request, env);
-    await requireEmptyBody(request);
-    return resetAdminUserNotice(env, userNoticeResetMatch[1]);
-  }
-  const userMergePreviewMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/merge-preview$/);
-  if (request.method === 'GET' && userMergePreviewMatch) {
-    await requireAdmin(request, env);
-    return previewAdminUserMerge(request, env, userMergePreviewMatch[1]);
-  }
-  const userMergeMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/merge$/);
-  if (request.method === 'POST' && userMergeMatch) {
-    await requireAdmin(request, env);
-    return mergeAdminUser(request, env, userMergeMatch[1]);
-  }
-  const userConfigMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/config$/);
-  if (userConfigMatch) {
-    await requireAdmin(request, env);
-    if (request.method === 'GET') return getAdminUserConfig(env, userConfigMatch[1]);
-    if (request.method === 'POST') return updateAdminUserConfig(request, env, userConfigMatch[1]);
-  }
-  const userConfigResetMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/config\/reset$/);
-  if (request.method === 'POST' && userConfigResetMatch) {
-    await requireAdmin(request, env);
-    await requireEmptyBody(request);
-    return resetAdminUserConfig(env, userConfigResetMatch[1]);
-  }
-  const userConfigPermissionMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/config-permission$/);
-  if (request.method === 'POST' && userConfigPermissionMatch) {
-    await requireAdmin(request, env);
-    return updateAdminManagedConfigPermission(request, env, userConfigPermissionMatch[1]);
-  }
-  if (request.method === 'GET' && url.pathname === '/api/admin/anomalies') {
-    await requireAdmin(request, env);
-    return listAnomalies(env, parseAdminPagination(url, ADMIN_ANOMALIES_DEFAULT_PAGE_SIZE));
-  }
-  throw new HttpError(404, 'not found');
+);
+
+async function dispatchRequest(request: Request, env: Env, url: URL): Promise<Response> {
+  return workerRouter(request, env, url);
 }
 
 async function activate(request: Request, env: Env): Promise<Response> {
