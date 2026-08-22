@@ -645,6 +645,107 @@ describe('RemoteConfigClient', () => {
     await expect(client.getActiveConfig()).resolves.toMatchObject({ configSource: 'user' });
   });
 
+  it('retries a config update once with the legacy signature only after the exact unsupported requestId rejection', async () => {
+    await writeFile(
+      join(dir, 'remote-config.json'),
+      JSON.stringify(cacheEnvelope({ ...cachedConfig, canEditManagedConfig: true })),
+      'utf8'
+    );
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(url), init });
+      if (requests.length === 1) {
+        return new Response(JSON.stringify({ error: 'unsupported client config field', code: 'REQUEST_REJECTED' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          config: {
+            version: 7,
+            enabled: true,
+            configSource: 'user',
+            canEditManagedConfig: true,
+            subscriptionUrl: 'https://example.com/legacy',
+            ruleProfile: 'subscription',
+            directRules: [],
+            proxyRules: [],
+            updatedAt: '2026-08-22T00:00:00.000Z'
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    });
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.7.13',
+      store: createRegisteredStore(),
+      fetch
+    });
+
+    await expect(
+      client.updateUserConfig({
+        subscriptionUrl: ' https://example.com/legacy ',
+        ruleProfile: 'subscription'
+      })
+    ).resolves.toMatchObject({
+      changed: true,
+      config: { configSource: 'user', subscriptionUrl: 'https://example.com/legacy' }
+    });
+
+    expect(requests).toHaveLength(2);
+    const currentBody = JSON.parse(String(requests[0]?.init?.body)) as Record<string, unknown>;
+    const currentHeaders = new Headers(requests[0]?.init?.headers);
+    expect(currentBody.requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(currentHeaders.get('x-youyu-request-id')).toBe(currentBody.requestId);
+
+    const legacyBodyText = String(requests[1]?.init?.body);
+    const legacyBody = JSON.parse(legacyBodyText) as Record<string, unknown>;
+    const legacyHeaders = new Headers(requests[1]?.init?.headers);
+    expect(legacyBody).toEqual({
+      userId: 'user-1',
+      deviceId: 'device-1',
+      subscriptionUrl: 'https://example.com/legacy',
+      ruleProfile: 'subscription'
+    });
+    expect(legacyHeaders.get('x-youyu-request-id')).toBeNull();
+    const timestamp = legacyHeaders.get('x-youyu-timestamp') ?? '';
+    const bodyHash = createHash('sha256').update(legacyBodyText).digest('hex');
+    const canonical = ['POST', '/api/config', timestamp, bodyHash].join('\n');
+    expect(legacyHeaders.get('x-youyu-signature')).toBe(
+      createHmac('sha256', 'device-secret').update(canonical).digest('hex')
+    );
+  });
+
+  it('does not retry a rejected config update for any other server error', async () => {
+    await writeFile(
+      join(dir, 'remote-config.json'),
+      JSON.stringify(cacheEnvelope({ ...cachedConfig, canEditManagedConfig: true })),
+      'utf8'
+    );
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: 'invalid rule profile', code: 'INVALID_RULE_PROFILE' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' }
+        })
+    );
+    const client = new RemoteConfigClient({
+      baseDir: dir,
+      endpoint: 'https://config.example.com',
+      appVersion: '1.7.13',
+      store: createRegisteredStore(),
+      fetch
+    });
+
+    await expect(client.updateUserConfig({ ruleProfile: 'subscription' })).rejects.toThrow(
+      'remote config update failed: 400'
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('exposes the managed-config permission and refuses writes before a current authorized cache exists', async () => {
     const client = new RemoteConfigClient({
       baseDir: dir,

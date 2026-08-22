@@ -253,16 +253,19 @@ export class RemoteConfigClient {
     if (!secret) throw new Error('remote config device secret missing');
     const url = `${endpoint}/api/config`;
     const requestId = randomUUID();
-    const bodyText = JSON.stringify({
-      userId: identity.userId,
-      deviceId: identity.deviceId,
-      requestId,
+    const configFields = {
       ...(typeof input.subscriptionUrl !== 'undefined'
         ? { subscriptionUrl: input.subscriptionUrl?.trim() || null }
         : {}),
       ...(typeof input.ruleProfile !== 'undefined' ? { ruleProfile: input.ruleProfile } : {})
+    };
+    const bodyText = JSON.stringify({
+      userId: identity.userId,
+      deviceId: identity.deviceId,
+      requestId,
+      ...configFields
     });
-    const response = await requestJson(
+    let response = await requestJson(
       url,
       'POST',
       bodyText,
@@ -275,6 +278,26 @@ export class RemoteConfigClient {
       options.signal,
       this.options.fetch
     );
+    if (isLegacyConfigRequestFieldRejection(response)) {
+      const legacyBodyText = JSON.stringify({
+        userId: identity.userId,
+        deviceId: identity.deviceId,
+        ...configFields
+      });
+      response = await requestJson(
+        url,
+        'POST',
+        legacyBodyText,
+        {
+          'content-type': 'application/json',
+          ...createDeviceAuthHeaders('POST', url, legacyBodyText, secret)
+        },
+        options.proxyUrl,
+        this.options.requestTimeoutMs,
+        options.signal,
+        this.options.fetch
+      );
+    }
     if (!response.ok) {
       throw new Error(`remote config update failed: ${response.status} (${responseRouteDetails(response)})`);
     }
@@ -826,6 +849,15 @@ function parseJson(text: string): unknown {
   } catch {
     return {};
   }
+}
+
+function isLegacyConfigRequestFieldRejection(response: JsonResponse): boolean {
+  return (
+    response.status === 400 &&
+    isRecord(response.body) &&
+    response.body.code === 'REQUEST_REJECTED' &&
+    response.body.error === 'unsupported client config field'
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
