@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type {
   AppSettingsInput,
@@ -15,6 +15,7 @@ import {
   startEasyProxy,
   withTimeout
 } from '../appActions';
+import { createAppSnapshotStore } from '../appSnapshotStore';
 import type { PageKey, UsageMode } from '../components/AppShell';
 import { createOperationRequest } from '../operationRequest';
 import { useAdvancedModeShortcut } from './useAdvancedModeShortcut';
@@ -120,10 +121,16 @@ export function useAppController() {
   const [switchingNode, setSwitchingNode] = useState('');
   const [snapshotState, setSnapshotState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [registrationSwitchOpen, setRegistrationSwitchOpen] = useState(false);
+  const snapshotStore = useMemo(
+    () =>
+      createAppSnapshotStore(emptySnapshot, (next) => {
+        setSnapshot(next);
+        setSnapshotState('ready');
+      }),
+    []
+  );
   const restoreRegistrationEntryFocusRef = useRef(false);
   const initialSnapshotPromiseRef = useRef<Promise<AppSnapshot> | undefined>(undefined);
-  const snapshotRef = useRef(snapshot);
-  const snapshotGenerationRef = useRef(0);
   const nodeSelectionGenerationRef = useRef(0);
   const nodeSelectionNoticeIdRef = useRef<number | undefined>(undefined);
   const switchingNodeRef = useRef('');
@@ -133,7 +140,6 @@ export function useAppController() {
   const activeNodeTestApisRef = useRef(new Set<AppApi>());
   const activeTaskControllersRef = useRef(new Set<AbortController>());
   const registrationInFlightRef = useRef(false);
-  const mountedRef = useRef(false);
   const registrationSwitchOpenRef = useRef(registrationSwitchOpen);
   const registered = Boolean(snapshot.trafficIdentity);
 
@@ -141,15 +147,10 @@ export function useAppController() {
     registrationSwitchOpenRef.current = registrationSwitchOpen;
   }, [registrationSwitchOpen]);
 
-  const commitSnapshot = useCallback((next: AppSnapshot, expectedGeneration?: number): boolean => {
-    if (!mountedRef.current) return false;
-    if (expectedGeneration !== undefined && snapshotGenerationRef.current !== expectedGeneration) return false;
-    snapshotGenerationRef.current += 1;
-    snapshotRef.current = next;
-    setSnapshot(next);
-    setSnapshotState('ready');
-    return true;
-  }, []);
+  const commitSnapshot = useCallback(
+    (next: AppSnapshot, expectedGeneration?: number): boolean => snapshotStore.commit(next, expectedGeneration),
+    [snapshotStore]
+  );
 
   const cancelOperationOnce = useCallback(async (api: AppApi, request?: OperationRequest): Promise<boolean> => {
     if (!request || canceledOperationRequestsRef.current.has(request.requestId)) return false;
@@ -158,11 +159,9 @@ export function useAppController() {
   }, []);
 
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+    snapshotStore.mount();
+    return () => snapshotStore.unmount();
+  }, [snapshotStore]);
 
   const runAction = useCallback(
     async (
@@ -193,7 +192,7 @@ export function useAppController() {
       activeTaskControllersRef.current.add(taskController);
       if (request) activeOperationRequestsRef.current.set(request.requestId, api);
       if (cancelNodeTestsOnDispose) activeNodeTestApisRef.current.add(api);
-      const snapshotGeneration = snapshotGenerationRef.current;
+      const snapshotGeneration = snapshotStore.getGeneration();
       setBusy(true);
       setBusyLabel(workingMessage);
       if (clearMessage) {
@@ -209,20 +208,20 @@ export function useAppController() {
           () => onTimeout?.(api),
           taskController.signal
         );
-        if (!mountedRef.current) return false;
+        if (!snapshotStore.isMounted()) return false;
         commitSnapshot(next, snapshotGeneration);
         if (messageSink) messageSink(doneMessage);
         else setMessage(doneMessage);
         return true;
       } catch (error) {
-        if (!mountedRef.current || taskController.signal.aborted) return false;
+        if (!snapshotStore.isMounted() || taskController.signal.aborted) return false;
         if (error instanceof ActionTimeoutError && request) {
           await cancelOperationOnce(api, request);
         }
-        if (!mountedRef.current) return false;
+        if (!snapshotStore.isMounted()) return false;
         if (recoverSnapshotOnError) {
-          const next = await api.getSnapshot().catch(() => snapshotRef.current);
-          if (!mountedRef.current) return false;
+          const next = await api.getSnapshot().catch(() => snapshotStore.getSnapshot());
+          if (!snapshotStore.isMounted()) return false;
           commitSnapshot(next, snapshotGeneration);
         }
         const errorMessage = getActionErrorMessage(error);
@@ -236,33 +235,33 @@ export function useAppController() {
           canceledOperationRequestsRef.current.delete(request.requestId);
         }
         if (cancelNodeTestsOnDispose) activeNodeTestApisRef.current.delete(api);
-        if (mountedRef.current) {
+        if (snapshotStore.isMounted()) {
           setBusy(false);
           setBusyLabel('');
         }
       }
     },
-    [cancelOperationOnce, commitSnapshot]
+    [cancelOperationOnce, commitSnapshot, snapshotStore]
   );
 
   const loadInitialSnapshot = useCallback(
     async (retry = false) => {
       const api = window.youyu;
       if (!api) {
-        if (mountedRef.current) setSnapshotState('error');
+        if (snapshotStore.isMounted()) setSnapshotState('error');
         return;
       }
       if (retry) initialSnapshotPromiseRef.current = undefined;
-      if (mountedRef.current) setSnapshotState('loading');
+      if (snapshotStore.isMounted()) setSnapshotState('loading');
       try {
         const next = await (initialSnapshotPromiseRef.current ??= api.getSnapshot());
         commitSnapshot(next);
       } catch {
         initialSnapshotPromiseRef.current = undefined;
-        if (mountedRef.current) setSnapshotState('error');
+        if (snapshotStore.isMounted()) setSnapshotState('error');
       }
     },
-    [commitSnapshot]
+    [commitSnapshot, snapshotStore]
   );
 
   useEffect(() => {
@@ -326,7 +325,7 @@ export function useAppController() {
         return;
       }
 
-      const currentSnapshot = snapshotRef.current;
+      const currentSnapshot = snapshotStore.getSnapshot();
       const nextUrl = subscriptionUrl.trim() || currentSnapshot.subscriptionUrl.trim();
       if (!nextUrl) {
         setMessage('先填写订阅地址');
@@ -346,7 +345,7 @@ export function useAppController() {
         if (previous) activeOperationRequestsRef.current.delete(previous.requestId);
         activeOperationRequestsRef.current.set(request.requestId, api);
       });
-      const snapshotGeneration = snapshotGenerationRef.current;
+      const snapshotGeneration = snapshotStore.getGeneration();
       try {
         const saveRequest = requestTracker.next();
         await withTimeout(
@@ -370,18 +369,18 @@ export function useAppController() {
           () => quickStartController.abort(new Error('operation canceled')),
           taskController.signal
         );
-        if (!mountedRef.current) return;
+        if (!snapshotStore.isMounted()) return;
         commitSnapshot(next, snapshotGeneration);
         setMessage('已启动');
       } catch (error) {
-        if (!mountedRef.current || taskController.signal.aborted) return;
+        if (!snapshotStore.isMounted() || taskController.signal.aborted) return;
         if (error instanceof ActionTimeoutError) {
           await cancelOperationOnce(api, requestTracker.current);
           await api.cancelNodeTests().catch(() => undefined);
         }
-        if (!mountedRef.current) return;
-        const next = await api.getSnapshot().catch(() => snapshotRef.current);
-        if (!mountedRef.current) return;
+        if (!snapshotStore.isMounted()) return;
+        const next = await api.getSnapshot().catch(() => snapshotStore.getSnapshot());
+        if (!snapshotStore.isMounted()) return;
         commitSnapshot(next, snapshotGeneration);
         setMessage(getActionErrorMessage(error));
       } finally {
@@ -392,17 +391,17 @@ export function useAppController() {
           activeOperationRequestsRef.current.delete(requestTracker.current.requestId);
           canceledOperationRequestsRef.current.delete(requestTracker.current.requestId);
         }
-        if (mountedRef.current) {
+        if (snapshotStore.isMounted()) {
           setBusy(false);
           setBusyLabel('');
         }
       }
     },
-    [cancelOperationOnce, commitSnapshot]
+    [cancelOperationOnce, commitSnapshot, snapshotStore]
   );
 
   const testAllNodes = useCallback(async () => {
-    if (!mountedRef.current) return;
+    if (!snapshotStore.isMounted()) return;
     setTestingAllNodes(true);
     try {
       await runAction((api) => api.testAllNodes(), '测速完成', {
@@ -413,9 +412,9 @@ export function useAppController() {
         onTimeout: (api) => void api.cancelNodeTests().catch(() => undefined)
       });
     } finally {
-      if (mountedRef.current) setTestingAllNodes(false);
+      if (snapshotStore.isMounted()) setTestingAllNodes(false);
     }
-  }, [runAction]);
+  }, [runAction, snapshotStore]);
 
   const cancelNodeTests = useCallback(async () => {
     setMessage('停止中');
@@ -423,8 +422,8 @@ export function useAppController() {
       timeoutLabel: '停止测速',
       clearMessage: false
     });
-    if (mountedRef.current) setTestingAllNodes(false);
-  }, [runAction]);
+    if (snapshotStore.isMounted()) setTestingAllNodes(false);
+  }, [runAction, snapshotStore]);
 
   const selectNode = useCallback(
     async (name: string) => {
@@ -449,31 +448,31 @@ export function useAppController() {
           undefined,
           taskController.signal
         );
-        if (!mountedRef.current || selectionGeneration !== nodeSelectionGenerationRef.current) return;
+        if (!snapshotStore.isMounted() || selectionGeneration !== nodeSelectionGenerationRef.current) return;
         commitSnapshot(next);
         const activeNode = next.nodes.find((node) => node.active)?.name || next.currentNode;
         const selected = activeNode === name || next.currentNode === name;
         setMessage(selected ? '已切换' : activeNode ? `已切至${activeNode}` : '切换失败');
       } catch (error) {
         if (
-          !mountedRef.current ||
+          !snapshotStore.isMounted() ||
           taskController.signal.aborted ||
           selectionGeneration !== nodeSelectionGenerationRef.current
         )
           return;
-        const next = await api.getSnapshot().catch(() => snapshotRef.current);
-        if (!mountedRef.current || selectionGeneration !== nodeSelectionGenerationRef.current) return;
+        const next = await api.getSnapshot().catch(() => snapshotStore.getSnapshot());
+        if (!snapshotStore.isMounted() || selectionGeneration !== nodeSelectionGenerationRef.current) return;
         commitSnapshot(next);
         setMessage(getActionErrorMessage(error));
       } finally {
         activeTaskControllersRef.current.delete(taskController);
         if (selectionGeneration === nodeSelectionGenerationRef.current) {
           switchingNodeRef.current = '';
-          if (mountedRef.current) setSwitchingNode('');
+          if (snapshotStore.isMounted()) setSwitchingNode('');
         }
       }
     },
-    [commitSnapshot]
+    [commitSnapshot, snapshotStore]
   );
 
   const exportDiagnostics = useCallback(async () => {
@@ -496,19 +495,19 @@ export function useAppController() {
         undefined,
         taskController.signal
       );
-      if (mountedRef.current && !result.canceled) setSettingsMessage('已导出');
+      if (snapshotStore.isMounted() && !result.canceled) setSettingsMessage('已导出');
     } catch (error) {
-      if (mountedRef.current && !taskController.signal.aborted) {
+      if (snapshotStore.isMounted() && !taskController.signal.aborted) {
         setSettingsMessage(error instanceof ActionTimeoutError ? getActionErrorMessage(error) : '导出失败');
       }
     } finally {
       activeTaskControllersRef.current.delete(taskController);
-      if (mountedRef.current) {
+      if (snapshotStore.isMounted()) {
         setBusy(false);
         setBusyLabel('');
       }
     }
-  }, []);
+  }, [snapshotStore]);
 
   const handleAdvancedUnlockClick = useCallback(() => {
     advancedUnlockClicksRef.current += 1;
@@ -528,17 +527,17 @@ export function useAppController() {
       if (registrationInFlightRef.current) return;
       registrationInFlightRef.current = true;
       try {
-        const switchingUser = Boolean(snapshotRef.current.trafficIdentity) && registrationSwitchOpenRef.current;
+        const switchingUser = Boolean(snapshotStore.getSnapshot().trafficIdentity) && registrationSwitchOpenRef.current;
         const success = await runAction((api) => api.registerTrafficIdentity(input), '', {
           workingMessage: switchingUser ? '切换中' : '登记中',
           timeoutLabel: switchingUser ? '切换用户' : '登记'
         });
-        if (success && switchingUser && mountedRef.current) setRegistrationSwitchOpen(false);
+        if (success && switchingUser && snapshotStore.isMounted()) setRegistrationSwitchOpen(false);
       } finally {
         registrationInFlightRef.current = false;
       }
     },
-    [runAction]
+    [runAction, snapshotStore]
   );
 
   const start = useCallback(
