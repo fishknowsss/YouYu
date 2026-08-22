@@ -43,6 +43,43 @@ describe('spinner animation styles', () => {
     expect(petStyles).not.toContain('@keyframes startup-ring-spin {');
   });
 
+  it('gives the easy connection status distinct active, success, shutdown, off, and failure motion states', async () => {
+    const [homeStyles, petStyles, homeSource] = await Promise.all([
+      readFile('src/renderer/styles/home.css', 'utf8'),
+      readFile('src/renderer/styles/pet.css', 'utf8'),
+      readFile('src/renderer/pages/Home.tsx', 'utf8')
+    ]);
+
+    expect(homeSource).toContain('<EasyConnectionFeedback phase={connectionPhase} />');
+    expect(homeSource).not.toContain('startup-ring');
+    expect(homeStyles).toContain('.easy-connection-feedback.is-starting .easy-status-ring {');
+    expect(homeStyles).toContain('animation: easy-status-orbit 880ms linear infinite;');
+    expect(homeStyles).toContain('.easy-connection-feedback.is-running .easy-status-check {');
+    expect(homeStyles).toContain('animation: easy-status-check-in 300ms cubic-bezier(0.16, 1, 0.3, 1) 140ms both;');
+    expect(homeStyles).toContain('.easy-connection-feedback.is-stopping .easy-status-ring {');
+    expect(homeStyles).toContain('animation: easy-status-orbit-reverse 720ms linear infinite;');
+    expect(homeStyles).toContain('.easy-connection-feedback.is-stopped .easy-status-core {');
+    expect(homeStyles).toContain('animation: easy-status-power-down 360ms cubic-bezier(0.4, 0, 1, 1) both;');
+    expect(homeStyles).toContain('.easy-connection-feedback.is-failed .easy-status-alert,');
+    expect(petStyles).not.toContain('.startup-ring {');
+  });
+
+  it('positions easy connection feedback independently from the unchanged power-button geometry', async () => {
+    const homeStyles = await readFile('src/renderer/styles/home.css', 'utf8');
+    const buttonStart = homeStyles.indexOf('.easy-power-button {');
+    const buttonEnd = homeStyles.indexOf('\n}', buttonStart);
+    const buttonRule = homeStyles.slice(buttonStart, buttonEnd);
+    const feedbackStart = homeStyles.indexOf('.easy-connection-feedback {');
+    const feedbackEnd = homeStyles.indexOf('\n}', feedbackStart);
+    const feedbackRule = homeStyles.slice(feedbackStart, feedbackEnd);
+
+    expect(buttonRule).toContain('width: 204px;');
+    expect(buttonRule).toContain('height: 226px;');
+    expect(feedbackStart).toBeGreaterThanOrEqual(0);
+    expect(feedbackRule).toContain('position: absolute;');
+    expect(feedbackRule).toContain('pointer-events: none;');
+  });
+
   it('keeps update activity attached to the action affordance instead of the left edge of either component', async () => {
     const [settingsStyles, homeStyles] = await Promise.all([
       readFile('src/renderer/styles/settings.css', 'utf8'),

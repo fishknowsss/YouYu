@@ -116,12 +116,7 @@ describe('testing interactions', () => {
     expect(rows[1]?.getAttribute('aria-selected')).toBe('true');
   });
 
-  it('marks the selected pet state and offers the pet interaction from the main window', async () => {
-    const wavePet = vi.fn(async () => undefined);
-    Object.defineProperty(window, 'youyu', {
-      configurable: true,
-      value: { wavePet } as unknown as NonNullable<Window['youyu']>
-    });
+  it('marks the selected pet state without exposing a redundant header interaction', async () => {
     const container = document.createElement('div');
     document.body.append(container);
     root = createRoot(container);
@@ -135,12 +130,8 @@ describe('testing interactions', () => {
     await act(async () => cards[1]?.click());
     expect(cards[0]?.getAttribute('aria-pressed')).toBe('false');
     expect(cards[1]?.getAttribute('aria-pressed')).toBe('true');
-
-    const waveButton = findButton(container, '挥手');
-    waveButton?.focus();
-    expect(document.activeElement).toBe(waveButton);
-    await act(async () => waveButton?.click());
-    expect(wavePet).toHaveBeenCalledOnce();
+    expect(findButton(container, '挥手')).toBeUndefined();
+    expect(container.querySelector('.header-actions')).toBeNull();
   });
 
   it('keeps the desktop pet focusable and activates its primary action from the keyboard', async () => {

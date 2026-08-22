@@ -41,6 +41,15 @@ function EasyHome(props: HomeProps) {
   const starting = props.busyLabel === '启动中' && !running;
   const stopping = props.busyLabel === '停止中';
   const primaryLabel = props.busy ? props.busyLabel || '处理中' : running ? '停止使用' : '一键连接';
+  const connectionPhase: EasyConnectionPhase = failed
+    ? 'failed'
+    : running
+      ? stopping
+        ? 'stopping'
+        : 'running'
+      : starting
+        ? 'starting'
+        : 'stopped';
   const boardClassName = [
     'home-board',
     'easy-board',
@@ -82,8 +91,8 @@ function EasyHome(props: HomeProps) {
             <span className="startup-mark">
               <BrandMark size="lg" />
             </span>
-            <span className={`startup-ring ${starting ? 'is-starting' : ''}`} aria-hidden="true" />
           </button>
+          <EasyConnectionFeedback phase={connectionPhase} />
         </div>
         <div className="easy-notice-stack">
           {isActionNoticeMessage(props.message) && (
@@ -109,6 +118,34 @@ function EasyHome(props: HomeProps) {
         </div>
       </section>
     </div>
+  );
+}
+
+type EasyConnectionPhase = 'starting' | 'running' | 'stopping' | 'stopped' | 'failed';
+
+const easyConnectionLabels: Record<EasyConnectionPhase, string> = {
+  starting: '正在连接',
+  running: '已连接',
+  stopping: '正在关闭',
+  stopped: '未连接',
+  failed: '连接失败'
+};
+
+function EasyConnectionFeedback({ phase }: { phase: EasyConnectionPhase }) {
+  return (
+    <span className={`easy-connection-feedback is-${phase}`} role="status" aria-live="polite" aria-atomic="true">
+      <span className="easy-connection-visual" aria-hidden="true">
+        <svg viewBox="0 0 36 36" focusable="false">
+          <circle className="easy-status-track" cx="18" cy="18" r="14" pathLength="100" />
+          <circle className="easy-status-ring" cx="18" cy="18" r="14" pathLength="100" />
+          <path className="easy-status-check" d="M11.5 18.5 16.2 23 25 13.5" pathLength="100" />
+          <path className="easy-status-alert" d="M18 10.5v10" pathLength="100" />
+          <circle className="easy-status-alert-dot" cx="18" cy="25" r="1.6" />
+          <circle className="easy-status-core" cx="18" cy="18" r="2.4" />
+        </svg>
+      </span>
+      <span className="easy-connection-label">{easyConnectionLabels[phase]}</span>
+    </span>
   );
 }
 

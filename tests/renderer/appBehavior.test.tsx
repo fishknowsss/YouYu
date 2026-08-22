@@ -708,8 +708,8 @@ describe('RegistrationGate', () => {
   });
 });
 
-describe('easy home fallback notice', () => {
-  it('does not keep the start ring after the proxy is already running', () => {
+describe('easy home connection feedback', () => {
+  it('switches from startup activity to a completed running state as soon as the proxy is ready', () => {
     const snapshot = createRegisteredRendererSnapshot();
     snapshot.status = 'running';
     const html = renderToStaticMarkup(
@@ -732,7 +732,82 @@ describe('easy home fallback notice', () => {
     );
 
     expect(html).toContain('easy-power-button running');
-    expect(html).not.toContain('startup-ring is-starting');
+    expect(html).toContain('easy-connection-feedback is-running');
+    expect(html).toContain('已连接');
+    expect(html).not.toContain('is-starting');
+    expect(html).not.toContain('startup-ring');
+  });
+
+  it('shows the stopped feedback immediately while the stop action is still busy', () => {
+    const snapshot = createRegisteredRendererSnapshot();
+    snapshot.status = 'stopped';
+    const html = renderToStaticMarkup(
+      <Home
+        usageMode="easy"
+        snapshot={snapshot}
+        busy
+        busyLabel="停止中"
+        message=""
+        onQuickStart={vi.fn()}
+        onStart={vi.fn()}
+        onStop={vi.fn()}
+        onRepair={vi.fn()}
+        onModeChange={vi.fn()}
+        onStrategyChange={vi.fn()}
+        onOpenNodes={vi.fn()}
+        onUsageModeChange={vi.fn()}
+        onInstallUpdate={vi.fn()}
+      />
+    );
+
+    expect(html).toContain('easy-connection-feedback is-stopped');
+    expect(html).toContain('未连接');
+    expect(html).toContain('class="easy-power-button idle stopping" disabled=""');
+  });
+
+  it.each<
+    [
+      phase: 'starting' | 'running' | 'stopping' | 'stopped' | 'failed',
+      status: AppSnapshot['status'],
+      busy: boolean,
+      busyLabel: string,
+      label: string
+    ]
+  >([
+    ['starting', 'stopped', true, '启动中', '正在连接'],
+    ['running', 'running', false, '', '已连接'],
+    ['stopping', 'running', true, '停止中', '正在关闭'],
+    ['stopped', 'stopped', false, '', '未连接'],
+    ['failed', 'failed', false, '', '连接失败']
+  ])('renders the %s state as an atomic polite status', (_phase, status, busy, busyLabel, label) => {
+    const snapshot = createRegisteredRendererSnapshot();
+    snapshot.status = status;
+    const html = renderToStaticMarkup(
+      <Home
+        usageMode="easy"
+        snapshot={snapshot}
+        busy={busy}
+        busyLabel={busyLabel}
+        message=""
+        onQuickStart={vi.fn()}
+        onStart={vi.fn()}
+        onStop={vi.fn()}
+        onRepair={vi.fn()}
+        onModeChange={vi.fn()}
+        onStrategyChange={vi.fn()}
+        onOpenNodes={vi.fn()}
+        onUsageModeChange={vi.fn()}
+        onInstallUpdate={vi.fn()}
+      />
+    );
+
+    expect(html).toContain(
+      `class="easy-connection-feedback is-${_phase}" role="status" aria-live="polite" aria-atomic="true"`
+    );
+    expect(html).not.toContain('aria-busy');
+    expect(html).toContain(label);
+    expect(html).toContain('class="easy-power-button');
+    expect(html).toContain('startup-mark');
   });
 
   it('shows a region fallback as information without a repair button', () => {
