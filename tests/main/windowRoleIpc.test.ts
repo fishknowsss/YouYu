@@ -51,18 +51,18 @@ describe('window-role IPC data boundaries', () => {
   });
 
   it('sends full snapshots only to the main window and narrow updates only to notices', async () => {
-    const source = await readFile('src/main/index.ts', 'utf8');
-    const dispatch = source.slice(
-      source.indexOf('function sendSnapshotToWindows'),
-      source.indexOf('let latestNoticeSnapshot')
-    );
+    const [indexSource, coordinatorSource] = await Promise.all([
+      readFile('src/main/index.ts', 'utf8'),
+      readFile('src/main/appWindowCoordinator.ts', 'utf8')
+    ]);
 
-    expect(dispatch).toContain('mainWindow.webContents.send(ipcChannels.snapshotUpdated, snapshot)');
-    expect(dispatch).toContain(
+    expect(indexSource).toContain('appWindowCoordinator.send(snapshot)');
+    expect(coordinatorSource).toContain('mainWindow.webContents.send(ipcChannels.snapshotUpdated, snapshot)');
+    expect(coordinatorSource).toContain(
       'noticeWindow.webContents.send(ipcChannels.desktopNoticeUpdated, toDesktopNoticeSnapshot(snapshot))'
     );
-    expect(dispatch).not.toContain('BrowserWindow.getAllWindows()');
-    expect(dispatch).not.toContain('petWindow');
+    expect(coordinatorSource).not.toContain('BrowserWindow.getAllWindows()');
+    expect(coordinatorSource).not.toContain('petWindow.webContents.send');
   });
 
   it('binds BrowserWindows and invoke handlers to their declared roles', async () => {

@@ -57,7 +57,6 @@ import {
 } from './storage/nodeHealth';
 import { createNodeHealthCoordinator, type NodeHealthContext } from './nodeHealthCoordinator';
 import { createNodeSwitchCooldown } from './nodeSwitchCooldown';
-import { resolvePetNoticePlacement } from './noticePlacement';
 import { resolveDefaultSubscriptionUrl } from './defaultSubscription';
 import { formatReportedAppVersion, resolveAppVersion } from './appVersion';
 import { TrafficReporter } from './traffic/reporter';
@@ -79,6 +78,7 @@ import {
   updateSubscriptionNodes
 } from './appActions';
 import { createAppSnapshotReader } from './appSnapshot';
+import { createAppWindowCoordinator } from './appWindowCoordinator';
 import {
   canWindowRoleInvokeIpc,
   ipcChannels,
@@ -200,7 +200,6 @@ let petDragTimer: ReturnType<typeof setInterval> | undefined;
 let petDockTimer: ReturnType<typeof setTimeout> | undefined;
 let petSequenceTimer: ReturnType<typeof setTimeout> | undefined;
 let petMoveTimer: ReturnType<typeof setInterval> | undefined;
-let noticeLayoutFrame: ReturnType<typeof setTimeout> | undefined;
 let petMousePassthrough = false;
 let petFullscreenProbe: WindowsFullscreenProbe | undefined;
 let petFullscreenProbeHelperPath: string | undefined;
@@ -1410,107 +1409,36 @@ function createSnapshot(): Promise<AppSnapshot> {
   return appSnapshotReader.read();
 }
 
-function sendSnapshotToWindows(snapshot: AppSnapshot) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(ipcChannels.snapshotUpdated, snapshot);
+const appWindowCoordinator = createAppWindowCoordinator({
+  getMainWindow: () => mainWindow,
+  getNoticeWindow: () => noticeWindow,
+  getPetWindow: () => petWindow,
+  createNoticeWindow,
+  isPetFeatureEnabled: () => petFeatureEnabled,
+  isPetFullscreenSuppressed: () => petVisibilityController.isFullscreenSuppressed(),
+  isCleanupStarted: () => cleanupStarted,
+  isQuitting: () => isQuitting,
+  screen,
+  noticeWindowSize,
+  onNoticeExpired: async () => {
+    await broadcastSnapshot();
+  },
+  onError: (context, error) => {
+    const message = context === 'expiry' ? 'notice expiry snapshot failed' : 'notice window synchronization failed';
+    console.error(message, error);
   }
-  if (noticeWindow && !noticeWindow.isDestroyed()) {
-    noticeWindow.webContents.send(ipcChannels.desktopNoticeUpdated, toDesktopNoticeSnapshot(snapshot));
-  }
-  scheduleNoticeLayout(snapshot);
-}
+});
 
-let latestNoticeSnapshot: AppSnapshot | undefined;
-let noticeExpiryTimer: ReturnType<typeof setTimeout> | undefined;
-let scheduledNoticeExpiryAt: string | undefined;
+function sendSnapshotToWindows(snapshot: AppSnapshot): void {
+  appWindowCoordinator.send(snapshot);
+}
 
 function scheduleNoticeLayout(snapshot?: AppSnapshot): void {
-  if (snapshot) latestNoticeSnapshot = snapshot;
-  if (noticeLayoutFrame) return;
-  noticeLayoutFrame = setTimeout(() => {
-    noticeLayoutFrame = undefined;
-    void syncNoticeWindow().catch((error) => console.error('notice window synchronization failed', error));
-  }, 0);
-  noticeLayoutFrame.unref?.();
+  appWindowCoordinator.schedule(snapshot);
 }
 
-function clearNoticeExpiryTimer(): void {
-  if (noticeExpiryTimer) {
-    clearTimeout(noticeExpiryTimer);
-    noticeExpiryTimer = undefined;
-  }
-  scheduledNoticeExpiryAt = undefined;
-}
-
-function scheduleNoticeExpiry(notice: AppSnapshot['userNotice']): void {
-  if (!notice) {
-    clearNoticeExpiryTimer();
-    return;
-  }
-  if (scheduledNoticeExpiryAt === notice.expiresAt) return;
-  clearNoticeExpiryTimer();
-  const expiresAt = Date.parse(notice.expiresAt);
-  const delay = expiresAt - Date.now();
-  if (!Number.isFinite(delay)) return;
-  scheduledNoticeExpiryAt = notice.expiresAt;
-  noticeExpiryTimer = setTimeout(
-    () => {
-      noticeExpiryTimer = undefined;
-      scheduledNoticeExpiryAt = undefined;
-      void broadcastSnapshot().catch((error) => console.error('notice expiry snapshot failed', error));
-    },
-    Math.max(0, delay)
-  );
-  noticeExpiryTimer.unref?.();
-}
-
-function hasActiveUserNotice(snapshot: AppSnapshot | undefined): boolean {
-  const expiresAt = snapshot?.userNotice ? Date.parse(snapshot.userNotice.expiresAt) : Number.NaN;
-  return Number.isFinite(expiresAt) && expiresAt > Date.now();
-}
-
-function getNoticeWindowBounds(): Rectangle | undefined {
-  if (petFeatureEnabled && petVisibilityController.isFullscreenSuppressed()) return undefined;
-
-  if (petFeatureEnabled && petWindow && !petWindow.isDestroyed() && petWindow.isVisible()) {
-    const petBounds = petWindow.getBounds();
-    const workArea = screen.getDisplayMatching(petBounds).workArea;
-    return resolvePetNoticePlacement(petBounds, workArea, noticeWindowSize);
-  }
-
-  const workArea = screen.getPrimaryDisplay().workArea;
-  return {
-    ...noticeWindowSize,
-    x: workArea.x + workArea.width - noticeWindowSize.width - 16,
-    y: workArea.y + workArea.height - noticeWindowSize.height - 16
-  };
-}
-
-function hideNoticeWindow(): void {
-  if (!noticeWindow || noticeWindow.isDestroyed()) return;
-  noticeWindow.hide();
-}
-
-async function syncNoticeWindow(): Promise<void> {
-  const snapshot = latestNoticeSnapshot;
-  scheduleNoticeExpiry(snapshot?.userNotice);
-  if (!hasActiveUserNotice(snapshot) || cleanupStarted || isQuitting) {
-    hideNoticeWindow();
-    return;
-  }
-
-  const bounds = getNoticeWindowBounds();
-  if (!bounds) {
-    hideNoticeWindow();
-    return;
-  }
-
-  const win = await createNoticeWindow();
-  if (!win || win.isDestroyed()) return;
-  win.setBounds(bounds, false);
-  if (!win.webContents.isLoading() && !win.isVisible()) {
-    win.showInactive();
-  }
+function syncNoticeWindow(): Promise<void> {
+  return appWindowCoordinator.sync();
 }
 
 async function broadcastSnapshot(): Promise<AppSnapshot> {
@@ -3601,12 +3529,7 @@ async function cleanupBeforeExit(options: ExitCleanupOptions = {}): Promise<bool
     clearTimeout(trafficSnapshotBroadcastTimer);
     trafficSnapshotBroadcastTimer = undefined;
   }
-  if (noticeLayoutFrame) {
-    clearTimeout(noticeLayoutFrame);
-    noticeLayoutFrame = undefined;
-  }
-  clearNoticeExpiryTimer();
-  hideNoticeWindow();
+  appWindowCoordinator.dispose();
   updateCoordinator.pause();
   stopNodeHealthMonitor();
   appRuntimeCoordinator.stopRecovery();
