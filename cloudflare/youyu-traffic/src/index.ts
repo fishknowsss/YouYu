@@ -1,6 +1,7 @@
 import { adminPage } from './adminPage';
 import { ADMIN_SCRIPT } from './adminScript';
 import { ADMIN_STYLES } from './adminStyles';
+import { constantTimeEqual, createWorkerAuth, isUuid, sha256Hex } from './auth';
 import { createWorkerRouter } from './router';
 
 export interface Env {
@@ -3566,94 +3567,11 @@ async function verifyDeviceRequest(
   bodyText: string,
   requestId?: string
 ): Promise<string> {
-  if (!isUuid(userId) || !isUuid(deviceId)) throw new HttpError(400, 'invalid identity');
-  const timestamp = request.headers.get('x-youyu-timestamp')?.trim() ?? '';
-  const signature = request.headers.get('x-youyu-signature')?.trim() ?? '';
-  if (!timestamp || !signature) throw new HttpError(401, 'signature required');
-  if (!/^\d{10,16}$/.test(timestamp)) throw new HttpError(401, 'stale signature');
-  if (!/^[0-9a-f]{64}$/i.test(signature)) throw new HttpError(401, 'invalid signature');
-
-  const requestTime = Number(timestamp);
-  if (!Number.isFinite(requestTime) || Math.abs(Date.now() - requestTime) > 5 * 60 * 1000) {
-    throw new HttpError(401, 'stale signature');
-  }
-
-  const rateLimitKey = `device-auth:${getClientIp(request)}:${deviceId}`;
-  await consumeRateLimitAttempt(env, rateLimitKey, DEVICE_AUTH_FAILURE_LIMIT, DEVICE_AUTH_FAILURE_WINDOW_MS);
-  try {
-    const canonicalUserId = await resolveCanonicalUserId(env, userId);
-    const device = await env.DB.prepare(
-      'SELECT id, device_seed AS deviceSeed FROM devices WHERE id = ? AND user_id = ?'
-    )
-      .bind(deviceId, canonicalUserId)
-      .first<{ id: string; deviceSeed: string }>();
-    if (!device?.deviceSeed) throw new HttpError(403, 'unknown device');
-
-    const expected = await signDeviceRequest(
-      request.method,
-      new URL(request.url),
-      bodyText,
-      device.deviceSeed,
-      timestamp,
-      requestId
-    );
-    if (!constantTimeEqual(signature, expected)) throw new HttpError(401, 'invalid signature');
-    await clearRateLimit(env, rateLimitKey);
-    return canonicalUserId;
-  } catch (error) {
-    if (!(error instanceof HttpError) || (error.status !== 401 && error.status !== 403)) {
-      await clearRateLimit(env, rateLimitKey).catch(() => undefined);
-    }
-    throw error;
-  }
-}
-
-async function signDeviceRequest(
-  method: string,
-  url: URL,
-  bodyText: string,
-  secret: string,
-  timestamp: string,
-  requestId?: string
-): Promise<string> {
-  const canonicalParts = [method.toUpperCase(), `${url.pathname}${url.search}`, timestamp];
-  if (requestId) canonicalParts.push(requestId);
-  canonicalParts.push(await sha256Hex(bodyText));
-  const canonical = canonicalParts.join('\n');
-  return hmacSha256Hex(secret, canonical);
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return bytesToHex(new Uint8Array(digest));
-}
-
-async function hmacSha256Hex(secret: string, value: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, [
-    'sign'
-  ]);
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(value));
-  return bytesToHex(new Uint8Array(signature));
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return workerAuth.verifyDeviceRequest(request, env, userId, deviceId, bodyText, requestId);
 }
 
 async function requireAdmin(request: Request, env: Env): Promise<void> {
-  const expectedToken = env.ADMIN_TOKEN?.trim();
-  if (!expectedToken) throw new HttpError(403, 'admin disabled');
-  const token = request.headers
-    .get('authorization')
-    ?.replace(/^Bearer\s+/i, '')
-    .trim();
-  if (constantTimeEqual(token ?? '', expectedToken)) return;
-
-  const rateLimitKey = `admin:${getClientIp(request)}`;
-  await consumeRateLimitAttempt(env, rateLimitKey, 10, 15 * 60 * 1000);
-  throw new HttpError(403, 'forbidden');
+  return workerAuth.requireAdmin(request, env);
 }
 
 function parseAdminPagination(url: URL, defaultLimit: number): AdminPagination {
@@ -3929,10 +3847,6 @@ function hasControlCharacters(value: string): boolean {
     const codePoint = character.codePointAt(0) ?? 0;
     return codePoint <= 31 || (codePoint >= 127 && codePoint <= 159);
   });
-}
-
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function getClientIp(request: Request): string {
@@ -4262,15 +4176,6 @@ function cleanOptional(value: unknown): string | null {
   return text || null;
 }
 
-function constantTimeEqual(a: string, b: string): boolean {
-  const maxLength = Math.max(a.length, b.length);
-  let diff = a.length ^ b.length;
-  for (let index = 0; index < maxLength; index += 1) {
-    diff |= (a.charCodeAt(index) || 0) ^ (b.charCodeAt(index) || 0);
-  }
-  return diff === 0;
-}
-
 function isUniqueConstraintError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /unique|constraint/i.test(message);
@@ -4287,6 +4192,26 @@ class HttpError extends Error {
     this.code = errorCodeFor(status, message);
   }
 }
+
+const workerAuth = createWorkerAuth<Env>({
+  getAdminToken: (env) => env.ADMIN_TOKEN,
+  getClientIp,
+  consumeRateLimitAttempt,
+  clearRateLimit,
+  resolveCanonicalUserId,
+  async findDeviceSeed(env, deviceId, canonicalUserId) {
+    const device = await env.DB.prepare(
+      'SELECT id, device_seed AS deviceSeed FROM devices WHERE id = ? AND user_id = ?'
+    )
+      .bind(deviceId, canonicalUserId)
+      .first<{ id: string; deviceSeed: string }>();
+    return device?.deviceSeed;
+  },
+  createHttpError: (status, message) => new HttpError(status, message),
+  getHttpErrorStatus: (error) => (error instanceof HttpError ? error.status : undefined),
+  deviceFailureLimit: DEVICE_AUTH_FAILURE_LIMIT,
+  deviceFailureWindowMs: DEVICE_AUTH_FAILURE_WINDOW_MS
+});
 
 function errorCodeFor(status: number, message: string): string {
   const knownCodes: Record<string, string> = {
