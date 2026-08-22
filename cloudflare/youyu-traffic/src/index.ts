@@ -1,6 +1,7 @@
 import { adminPage } from './adminPage';
 import { ADMIN_SCRIPT } from './adminScript';
 import { ADMIN_STYLES } from './adminStyles';
+import { createAdminNoticeBoundary } from './adminNotice';
 import { constantTimeEqual, createWorkerAuth, isUuid, sha256Hex } from './auth';
 import { createWorkerRouter } from './router';
 
@@ -85,27 +86,6 @@ type ManagedConfigPermissionInput = {
 
 type UserProfileInput = {
   name?: unknown;
-  requestId?: unknown;
-};
-
-type UserNoticeInput = {
-  enabled?: unknown;
-  message?: unknown;
-  tone?: unknown;
-  durationMinutes?: unknown;
-  requestId?: unknown;
-};
-
-type UserNoticeBroadcastInput = {
-  userIds?: unknown;
-  message?: unknown;
-  tone?: unknown;
-  durationMinutes?: unknown;
-  requestId?: unknown;
-};
-
-type UserNoticeResetInput = {
-  userIds?: unknown;
   requestId?: unknown;
 };
 
@@ -270,15 +250,9 @@ const ADMIN_ANOMALIES_DEFAULT_PAGE_SIZE = 100;
 const JSON_REQUEST_MAX_BODY_BYTES = 16 * 1024;
 const ADMIN_CONFIG_MAX_BODY_BYTES = 64 * 1024;
 const ACTIVATION_MAX_NAME_LENGTH = 80;
-const USER_NOTICE_MAX_MESSAGE_LENGTH = 500;
 const ACTIVATION_MAX_DEVICE_NAME_LENGTH = 120;
 const ACTIVATION_MAX_PLATFORM_LENGTH = 32;
 const ACTIVATION_MAX_APP_VERSION_LENGTH = 64;
-const USER_NOTICE_DEFAULT_DURATION_MINUTES = 10;
-const USER_NOTICE_MIN_DURATION_MINUTES = 5;
-const USER_NOTICE_DURATION_STEP_MINUTES = 5;
-const USER_NOTICE_MAX_DURATION_MINUTES = 7 * 24 * 60;
-const USER_NOTICE_BROADCAST_MAX_USERS = 200;
 const DEVICE_REQUEST_NONCE_TTL_MS = 10 * 60 * 1000;
 const TRAFFIC_TIME_ZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
 const ANOMALY_THRESHOLD_BYTES = 1024 * 1024 * 1024;
@@ -1498,16 +1472,8 @@ async function getAdminUserNotice(env: Env, userId: string): Promise<Response> {
 }
 
 async function updateAdminUserNotice(request: Request, env: Env, userId: string): Promise<Response> {
-  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserNoticeInput;
-  assertOnlyFields(input, ['enabled', 'message', 'tone', 'durationMinutes', 'requestId'], 'unsupported notice field');
-  if (typeof input.enabled !== 'boolean') throw new HttpError(400, 'invalid notice enabled');
-  const applied = await applyAdminUserNotice(env, userId, {
-    enabled: input.enabled,
-    message: parseNoticeMessage(input.message),
-    tone: parseNoticeTone(input.tone),
-    durationMinutes: parseNoticeDurationMinutes(input.durationMinutes),
-    requestId: parseOptionalRequestId(input.requestId)
-  });
+  const command = adminNoticeBoundary.parseUpdate(await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES));
+  const applied = await applyAdminUserNotice(env, userId, command);
   return json({
     ok: true,
     alreadyApplied: applied.alreadyApplied,
@@ -1517,20 +1483,11 @@ async function updateAdminUserNotice(request: Request, env: Env, userId: string)
 }
 
 async function broadcastAdminUserNotices(request: Request, env: Env): Promise<Response> {
-  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserNoticeBroadcastInput;
-  assertOnlyFields(input, ['userIds', 'message', 'tone', 'durationMinutes', 'requestId'], 'unsupported notice field');
-  const userIds = parseNoticeUserIds(input.userIds);
-  const message = parseNoticeMessage(input.message);
-  const tone = parseNoticeTone(input.tone);
-  const durationMinutes = parseNoticeDurationMinutes(input.durationMinutes);
-  const requestId = parseOptionalRequestId(input.requestId);
-  const payloadHash = await hashAdminNoticeBatchPayload({
-    operation: 'broadcast',
-    userIds,
-    message,
-    tone,
-    durationMinutes
-  });
+  const command = adminNoticeBoundary.parseBroadcast(
+    await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)
+  );
+  const { userIds, message, tone, durationMinutes, requestId } = command;
+  const payloadHash = await adminNoticeBoundary.hashBatchPayload(command);
   await prepareAdminNoticeBatch(env, requestId, 'broadcast', payloadHash, userIds);
 
   const notices: Array<{
@@ -1554,7 +1511,7 @@ async function broadcastAdminUserNotices(request: Request, env: Env): Promise<Re
         message,
         tone,
         durationMinutes,
-        requestId: await deriveNoticeRequestId(requestId, userId)
+        requestId: await adminNoticeBoundary.deriveRequestId(requestId, userId)
       });
       notices.push({ userId, notice: applied.notice });
       await updateAdminNoticeBatchTarget(env, requestId, userId, 'sent', null, JSON.stringify(applied.notice));
@@ -1578,11 +1535,9 @@ async function broadcastAdminUserNotices(request: Request, env: Env): Promise<Re
 }
 
 async function resetAdminUserNotices(request: Request, env: Env): Promise<Response> {
-  const input = (await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES)) as UserNoticeResetInput;
-  assertOnlyFields(input, ['userIds', 'requestId'], 'unsupported notice field');
-  const userIds = parseNoticeUserIds(input.userIds);
-  const requestId = parseOptionalRequestId(input.requestId);
-  const payloadHash = await hashAdminNoticeBatchPayload({ operation: 'reset', userIds });
+  const command = adminNoticeBoundary.parseReset(await readJsonObjectWithLimit(request, ADMIN_CONFIG_MAX_BODY_BYTES));
+  const { userIds, requestId } = command;
+  const payloadHash = await adminNoticeBoundary.hashBatchPayload(command);
   await prepareAdminNoticeBatch(env, requestId, 'reset', payloadHash, userIds);
 
   const failed: Array<{ userId: string; error: string }> = [];
@@ -1617,16 +1572,6 @@ async function resetAdminUserNotices(request: Request, env: Env): Promise<Respon
     alreadyApplied,
     cleared
   });
-}
-
-async function hashAdminNoticeBatchPayload(input: {
-  operation: 'broadcast' | 'reset';
-  userIds: string[];
-  message?: string;
-  tone?: 'info' | 'warning';
-  durationMinutes?: number;
-}): Promise<string> {
-  return sha256Hex(JSON.stringify({ ...input, userIds: [...input.userIds].sort() }));
 }
 
 async function prepareAdminNoticeBatch(
@@ -1956,7 +1901,7 @@ function toAdminUserNotice(
     tone: row.tone === 'warning' ? 'warning' : 'info',
     expiresAt: row.expiresAt,
     updatedAt: row.updatedAt,
-    durationMinutes: normalizeStoredNoticeDurationMinutes(row.durationMinutes)
+    durationMinutes: adminNoticeBoundary.normalizeStoredDurationMinutes(row.durationMinutes)
   };
 }
 
@@ -2430,7 +2375,7 @@ async function acknowledgeUserNotice(request: Request, env: Env): Promise<Respon
   assertOnlyFields(input, ['userId', 'deviceId', 'revision'], 'unsupported notice acknowledgement field');
   const userId = typeof input.userId === 'string' ? input.userId.trim().toLowerCase() : '';
   const deviceId = typeof input.deviceId === 'string' ? input.deviceId.trim().toLowerCase() : '';
-  const revision = parseNoticeRevision(input.revision);
+  const revision = adminNoticeBoundary.parseRevision(input.revision);
   if (!userId || !deviceId) throw new HttpError(400, 'missing identity');
   if (!isUuid(userId) || !isUuid(deviceId)) throw new HttpError(400, 'invalid identity');
   const canonicalUserId = await verifyDeviceRequest(request, env, userId, deviceId, bodyText);
@@ -4072,82 +4017,6 @@ function parseNullableSubscriptionUrl(value: unknown): string | null {
   }
 }
 
-function parseNoticeMessage(value: unknown): string {
-  if (typeof value !== 'string') throw new HttpError(400, 'invalid notice message');
-  const message = value.trim();
-  if (!message || !isBoundedText(message, USER_NOTICE_MAX_MESSAGE_LENGTH)) {
-    throw new HttpError(400, 'invalid notice message');
-  }
-  return message;
-}
-
-function parseNoticeTone(value: unknown): 'info' | 'warning' {
-  if (value === 'info' || value === 'warning') return value;
-  throw new HttpError(400, 'invalid notice tone');
-}
-
-function parseNoticeDurationMinutes(value: unknown): number {
-  if (value === undefined) return USER_NOTICE_DEFAULT_DURATION_MINUTES;
-  if (
-    typeof value !== 'number' ||
-    !Number.isSafeInteger(value) ||
-    value < USER_NOTICE_MIN_DURATION_MINUTES ||
-    value > USER_NOTICE_MAX_DURATION_MINUTES ||
-    value % USER_NOTICE_DURATION_STEP_MINUTES !== 0
-  ) {
-    throw new HttpError(400, 'invalid notice duration');
-  }
-  return value;
-}
-
-function parseNoticeUserIds(value: unknown): string[] {
-  if (!Array.isArray(value)) throw new HttpError(400, 'invalid notice users');
-  const seen = new Set<string>();
-  const userIds: string[] = [];
-  for (const entry of value) {
-    const userId = typeof entry === 'string' ? entry.trim().toLowerCase() : '';
-    if (!userId || !isUuid(userId)) throw new HttpError(400, 'invalid notice users');
-    if (seen.has(userId)) continue;
-    seen.add(userId);
-    userIds.push(userId);
-  }
-  if (!userIds.length) throw new HttpError(400, 'invalid notice users');
-  if (userIds.length > USER_NOTICE_BROADCAST_MAX_USERS) throw new HttpError(400, 'too many notice users');
-  return userIds;
-}
-
-async function deriveNoticeRequestId(batchRequestId: string, userId: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${batchRequestId}:${userId}`));
-  const bytes = new Uint8Array(digest).slice(0, 16);
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-function normalizeStoredNoticeDurationMinutes(value: unknown): number {
-  return typeof value === 'number' &&
-    Number.isSafeInteger(value) &&
-    value >= USER_NOTICE_MIN_DURATION_MINUTES &&
-    value <= USER_NOTICE_MAX_DURATION_MINUTES &&
-    value % USER_NOTICE_DURATION_STEP_MINUTES === 0
-    ? value
-    : USER_NOTICE_DEFAULT_DURATION_MINUTES;
-}
-
-function parseOptionalRequestId(value: unknown): string {
-  const requestId = typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : crypto.randomUUID();
-  if (!isUuid(requestId)) throw new HttpError(400, 'invalid request id');
-  return requestId;
-}
-
-function parseNoticeRevision(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
-    throw new HttpError(400, 'invalid notice revision');
-  }
-  return value;
-}
-
 function safeParseJson(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -4192,6 +4061,14 @@ class HttpError extends Error {
     this.code = errorCodeFor(status, message);
   }
 }
+
+const adminNoticeBoundary = createAdminNoticeBoundary({
+  createHttpError: (status, message) => new HttpError(status, message),
+  assertOnlyFields,
+  isUuid,
+  randomUuid: () => crypto.randomUUID(),
+  sha256Hex
+});
 
 const workerAuth = createWorkerAuth<Env>({
   getAdminToken: (env) => env.ADMIN_TOKEN,
