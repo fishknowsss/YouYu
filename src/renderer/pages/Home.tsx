@@ -135,16 +135,21 @@ function EasyConnectionFeedback({ phase }: { phase: EasyConnectionPhase }) {
   return (
     <span className={`easy-connection-feedback is-${phase}`} role="status" aria-live="polite" aria-atomic="true">
       <span className="easy-connection-visual" aria-hidden="true">
-        <svg viewBox="0 0 36 36" focusable="false">
-          <circle className="easy-status-track" cx="18" cy="18" r="14" pathLength="100" />
-          <circle className="easy-status-ring" cx="18" cy="18" r="14" pathLength="100" />
-          <path className="easy-status-check" d="M11.5 18.5 16.2 23 25 13.5" pathLength="100" />
-          <path className="easy-status-alert" d="M18 10.5v10" pathLength="100" />
-          <circle className="easy-status-alert-dot" cx="18" cy="25" r="1.6" />
-          <circle className="easy-status-core" cx="18" cy="18" r="2.4" />
+        <svg viewBox="0 0 24 24" focusable="false">
+          <circle className="easy-status-loader" cx="12" cy="12" r="8.5" pathLength="100" />
+          <path className="easy-status-check" d="m5.5 12.5 4.25 4.25L18.5 7.5" pathLength="1" />
+          <g className="easy-status-power">
+            <path d="M12 2.75v8.5" />
+            <path d="M6.4 6.7a8 8 0 1 0 11.2 0" pathLength="1" />
+          </g>
+          <g className="easy-status-off">
+            <path d="M12 2.75v8.5" />
+            <path d="M6.4 6.7a8 8 0 1 0 11.2 0" />
+          </g>
+          <path className="easy-status-failure" d="m7 7 10 10M17 7 7 17" pathLength="1" />
         </svg>
       </span>
-      <span className="easy-connection-label">{easyConnectionLabels[phase]}</span>
+      <span className="easy-connection-announcement">{easyConnectionLabels[phase]}</span>
     </span>
   );
 }

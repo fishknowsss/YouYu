@@ -43,7 +43,7 @@ describe('spinner animation styles', () => {
     expect(petStyles).not.toContain('@keyframes startup-ring-spin {');
   });
 
-  it('gives the easy connection status distinct active, success, shutdown, off, and failure motion states', async () => {
+  it('uses a restrained icon-only connection status without an inner dot or success ring', async () => {
     const [homeStyles, petStyles, homeSource] = await Promise.all([
       readFile('src/renderer/styles/home.css', 'utf8'),
       readFile('src/renderer/styles/pet.css', 'utf8'),
@@ -52,15 +52,37 @@ describe('spinner animation styles', () => {
 
     expect(homeSource).toContain('<EasyConnectionFeedback phase={connectionPhase} />');
     expect(homeSource).not.toContain('startup-ring');
-    expect(homeStyles).toContain('.easy-connection-feedback.is-starting .easy-status-ring {');
-    expect(homeStyles).toContain('animation: easy-status-orbit 880ms linear infinite;');
+    expect(homeSource).toContain('className="easy-status-loader"');
+    expect(homeSource).toContain('className="easy-status-power"');
+    expect(homeSource).toContain('className="easy-status-off"');
+    expect(homeSource).not.toContain('easy-status-track');
+    expect(homeSource).not.toContain('easy-status-ring');
+    expect(homeSource).not.toContain('easy-status-core');
+    expect(homeSource).not.toContain('easy-status-alert-dot');
+    expect(homeStyles).toContain('.easy-connection-feedback.is-starting .easy-status-loader {');
+    expect(homeStyles).toContain('animation: easy-status-loader-spin 820ms linear infinite;');
+    const loaderStart = homeStyles.indexOf('.easy-connection-feedback.is-starting .easy-status-loader {');
+    const loaderEnd = homeStyles.indexOf('\n}', loaderStart);
+    const loaderRule = homeStyles.slice(loaderStart, loaderEnd);
+    expect(loaderRule).toContain('transform-origin: center;');
+    expect(loaderRule).not.toContain('transform-origin: 12px 12px;');
     expect(homeStyles).toContain('.easy-connection-feedback.is-running .easy-status-check {');
-    expect(homeStyles).toContain('animation: easy-status-check-in 300ms cubic-bezier(0.16, 1, 0.3, 1) 140ms both;');
-    expect(homeStyles).toContain('.easy-connection-feedback.is-stopping .easy-status-ring {');
-    expect(homeStyles).toContain('animation: easy-status-orbit-reverse 720ms linear infinite;');
-    expect(homeStyles).toContain('.easy-connection-feedback.is-stopped .easy-status-core {');
-    expect(homeStyles).toContain('animation: easy-status-power-down 360ms cubic-bezier(0.4, 0, 1, 1) both;');
-    expect(homeStyles).toContain('.easy-connection-feedback.is-failed .easy-status-alert,');
+    expect(homeStyles).toContain('color: var(--accent);');
+    expect(homeStyles).toContain('animation: easy-status-check-draw 280ms cubic-bezier(0.16, 1, 0.3, 1) both;');
+    expect(homeStyles).not.toContain('.easy-connection-feedback.is-running .easy-status-ring');
+    const runningFeedbackStart = homeStyles.indexOf('.easy-connection-feedback.is-running {');
+    const runningFeedbackEnd = homeStyles.indexOf('\n}', runningFeedbackStart);
+    const runningFeedbackRule = homeStyles.slice(runningFeedbackStart, runningFeedbackEnd);
+    expect(runningFeedbackRule).toContain('color: var(--accent);');
+    expect(runningFeedbackRule).not.toContain('var(--success)');
+    expect(homeStyles).toContain('.easy-connection-feedback.is-stopping .easy-status-power {');
+    expect(homeStyles).toContain(
+      'animation: easy-status-power-down 640ms cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;'
+    );
+    expect(homeStyles).toContain('.easy-connection-feedback.is-stopped .easy-status-off {');
+    expect(homeStyles).toContain('.easy-connection-feedback.is-failed .easy-status-failure {');
+    expect(homeStyles).toContain('.easy-connection-announcement {');
+    expect(homeStyles).toContain('clip-path: inset(50%);');
     expect(petStyles).not.toContain('.startup-ring {');
   });
 
@@ -77,6 +99,11 @@ describe('spinner animation styles', () => {
     expect(buttonRule).toContain('height: 226px;');
     expect(feedbackStart).toBeGreaterThanOrEqual(0);
     expect(feedbackRule).toContain('position: absolute;');
+    expect(feedbackRule).toContain('top: calc(50% + 90px);');
+    expect(feedbackRule).toContain('width: 36px;');
+    expect(feedbackRule).toContain('height: 36px;');
+    expect(feedbackRule).toContain('place-items: center;');
+    expect(feedbackRule).not.toContain('grid-template-columns');
     expect(feedbackRule).toContain('pointer-events: none;');
   });
 

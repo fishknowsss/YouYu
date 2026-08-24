@@ -806,6 +806,8 @@ describe('easy home connection feedback', () => {
     );
     expect(html).not.toContain('aria-busy');
     expect(html).toContain(label);
+    expect(html).toContain('class="easy-connection-announcement"');
+    expect(html).not.toContain('easy-connection-label');
     expect(html).toContain('class="easy-power-button');
     expect(html).toContain('startup-mark');
   });

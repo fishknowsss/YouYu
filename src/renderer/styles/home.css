@@ -287,14 +287,12 @@
 .easy-connection-feedback {
   position: absolute;
   left: 50%;
-  top: calc(50% + 112px);
+  top: calc(50% + 90px);
   z-index: 3;
-  min-width: 116px;
-  height: 38px;
-  display: inline-grid;
-  grid-template-columns: 36px auto;
-  align-items: center;
-  gap: 8px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
   color: var(--line-strong);
   transform: translateX(-50%);
   pointer-events: none;
@@ -302,308 +300,172 @@
 }
 
 .easy-connection-visual {
-  position: relative;
   width: 36px;
   height: 36px;
-  display: block;
+  display: grid;
+  place-items: center;
   color: inherit;
 }
 
-.easy-connection-visual::before {
-  position: absolute;
-  inset: 8px;
-  border-radius: 999px;
-  background: currentColor;
-  opacity: 0;
-  filter: blur(7px);
-  transform: scale(0.7);
-  content: '';
-  transition:
-    opacity 220ms ease,
-    transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
 .easy-connection-visual svg {
-  position: relative;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 2px;
+  width: 32px;
+  height: 32px;
   display: block;
   overflow: visible;
 }
 
-.easy-status-track,
-.easy-status-ring,
+.easy-status-loader,
 .easy-status-check,
-.easy-status-alert {
+.easy-status-power,
+.easy-status-off,
+.easy-status-failure {
   fill: none;
-  vector-effect: non-scaling-stroke;
-}
-
-.easy-status-track {
-  stroke: var(--line-strong);
-  stroke-width: 2.5;
-  opacity: 0.42;
-}
-
-.easy-status-ring {
   stroke: currentColor;
-  stroke-width: 3.25;
-  stroke-linecap: round;
-  stroke-dasharray: 100 0;
-  transform: rotate(-90deg);
-  transform-origin: 18px 18px;
-}
-
-.easy-status-check,
-.easy-status-alert {
-  stroke: currentColor;
-  stroke-width: 3;
+  stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
   opacity: 0;
   transform-box: fill-box;
   transform-origin: center;
 }
 
-.easy-status-alert-dot,
-.easy-status-core {
-  fill: currentColor;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.easy-status-alert-dot {
-  opacity: 0;
-}
-
-.easy-status-core {
-  opacity: 0.42;
-}
-
-.easy-connection-label {
-  color: var(--ink-soft);
-  font-size: var(--font-size-body-small);
-  font-weight: var(--font-weight-bold);
-  line-height: var(--line-height-body-small);
+.easy-connection-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
   white-space: nowrap;
-  transition: color 180ms ease;
+  border: 0;
 }
 
 .easy-connection-feedback.is-starting {
   color: var(--accent);
 }
 
-.easy-connection-feedback.is-starting .easy-status-track {
-  stroke: var(--accent-soft);
-  opacity: 0.92;
-}
-
-.easy-connection-feedback.is-starting .easy-status-ring {
-  stroke-dasharray: 28 72;
-  animation: easy-status-orbit 880ms linear infinite;
-}
-
-.easy-connection-feedback.is-starting .easy-status-core {
-  animation: easy-status-core-pulse 880ms ease-in-out infinite;
-}
-
-.easy-connection-feedback.is-starting .easy-connection-visual::before {
-  opacity: 0.14;
-  transform: scale(1);
+.easy-connection-feedback.is-starting .easy-status-loader {
+  stroke-dasharray: 26 74;
+  opacity: 1;
+  transform-origin: center;
+  animation: easy-status-loader-spin 820ms linear infinite;
 }
 
 .easy-connection-feedback.is-running {
-  color: var(--success);
-}
-
-.easy-connection-feedback.is-running .easy-connection-label {
-  color: var(--success);
-}
-
-.easy-connection-feedback.is-running .easy-status-track {
-  stroke: #cce7de;
-  opacity: 1;
-}
-
-.easy-connection-feedback.is-running .easy-status-ring {
-  animation: easy-status-ring-complete 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  color: var(--accent);
 }
 
 .easy-connection-feedback.is-running .easy-status-check {
-  stroke-dasharray: 100;
-  stroke-dashoffset: 100;
-  animation: easy-status-check-in 300ms cubic-bezier(0.16, 1, 0.3, 1) 140ms both;
-}
-
-.easy-connection-feedback.is-running .easy-status-core {
-  opacity: 0;
-}
-
-.easy-connection-feedback.is-running .easy-connection-visual::before {
-  opacity: 0.12;
-  transform: scale(1.1);
+  stroke-width: 2.25;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: easy-status-check-draw 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .easy-connection-feedback.is-stopping {
   color: var(--ink-soft);
 }
 
-.easy-connection-feedback.is-stopping .easy-status-track {
-  opacity: 0.34;
+.easy-connection-feedback.is-stopping .easy-status-power {
+  opacity: 0.82;
+  animation: easy-status-power-down 640ms cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
 }
 
-.easy-connection-feedback.is-stopping .easy-status-ring {
-  stroke-dasharray: 42 58;
-  animation: easy-status-orbit-reverse 720ms linear infinite;
-}
-
-.easy-connection-feedback.is-stopping .easy-status-core {
-  animation: easy-status-shutdown-pulse 720ms ease-in-out infinite;
-}
-
-.easy-connection-feedback.is-stopping .easy-connection-visual::before {
-  opacity: 0.08;
-  transform: scale(0.86);
+.easy-connection-feedback.is-stopping .easy-status-power path:last-child {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: easy-status-power-drain 640ms cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
 }
 
 .easy-connection-feedback.is-stopped {
   color: var(--line-strong);
 }
 
-.easy-connection-feedback.is-stopped .easy-status-ring {
-  opacity: 0.36;
-}
-
-.easy-connection-feedback.is-stopped .easy-status-core {
-  animation: easy-status-power-down 360ms cubic-bezier(0.4, 0, 1, 1) both;
+.easy-connection-feedback.is-stopped .easy-status-off {
+  opacity: 0.3;
+  transform: scale(0.84);
+  animation: easy-status-off-settle 240ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 .easy-connection-feedback.is-failed {
   color: var(--danger);
 }
 
-.easy-connection-feedback.is-failed .easy-connection-label {
-  color: var(--danger);
+.easy-connection-feedback.is-failed .easy-status-failure {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: easy-status-failure-draw 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.easy-connection-feedback.is-failed .easy-status-track {
-  stroke: var(--danger-soft);
-  opacity: 1;
-}
-
-.easy-connection-feedback.is-failed .easy-status-ring {
-  opacity: 0.72;
-  animation: easy-status-failure-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.easy-connection-feedback.is-failed .easy-status-alert,
-.easy-connection-feedback.is-failed .easy-status-alert-dot {
-  opacity: 1;
-  animation: easy-status-alert-in 240ms cubic-bezier(0.16, 1, 0.3, 1) 100ms both;
-}
-
-.easy-connection-feedback.is-failed .easy-status-core {
-  opacity: 0;
-}
-
-@keyframes easy-status-orbit {
+@keyframes easy-status-loader-spin {
   to {
-    transform: rotate(270deg);
+    transform: rotate(360deg);
   }
 }
 
-@keyframes easy-status-orbit-reverse {
-  to {
-    transform: rotate(-450deg);
-  }
-}
-
-@keyframes easy-status-core-pulse {
-  0%,
-  100% {
-    opacity: 0.28;
-    transform: scale(0.72);
-  }
-
-  50% {
-    opacity: 0.74;
-    transform: scale(1);
-  }
-}
-
-@keyframes easy-status-ring-complete {
+@keyframes easy-status-check-draw {
   from {
-    stroke-dasharray: 18 82;
-    stroke-dashoffset: 18;
-    opacity: 0.72;
-  }
-
-  to {
-    stroke-dasharray: 100 0;
-    stroke-dashoffset: 0;
-    opacity: 1;
-  }
-}
-
-@keyframes easy-status-check-in {
-  from {
-    stroke-dashoffset: 100;
+    stroke-dashoffset: 1;
     opacity: 0;
+    transform: scale(0.92);
   }
 
   to {
     stroke-dashoffset: 0;
     opacity: 1;
-  }
-}
-
-@keyframes easy-status-shutdown-pulse {
-  0%,
-  100% {
-    opacity: 0.58;
-    transform: scale(0.9);
-  }
-
-  50% {
-    opacity: 0.2;
-    transform: scale(0.58);
+    transform: scale(1);
   }
 }
 
 @keyframes easy-status-power-down {
   from {
-    opacity: 0.74;
-    transform: scale(1.45);
+    opacity: 0.82;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0.22;
+    transform: scale(0.82);
+  }
+}
+
+@keyframes easy-status-power-drain {
+  from {
+    stroke-dashoffset: 0;
+  }
+
+  to {
+    stroke-dashoffset: 0.46;
+  }
+}
+
+@keyframes easy-status-off-settle {
+  from {
+    opacity: 0.62;
+    transform: scale(0.96);
   }
 
   to {
     opacity: 0.3;
-    transform: scale(0.72);
+    transform: scale(0.84);
   }
 }
 
-@keyframes easy-status-failure-in {
+@keyframes easy-status-failure-draw {
   from {
-    stroke-dasharray: 34 66;
+    stroke-dashoffset: 1;
     opacity: 0;
-    transform: rotate(-120deg) scale(0.86);
+    transform: scale(0.9);
   }
 
   to {
-    stroke-dasharray: 100 0;
-    opacity: 0.72;
-    transform: rotate(-90deg) scale(1);
-  }
-}
-
-@keyframes easy-status-alert-in {
-  from {
-    opacity: 0;
-    transform: scale(0.74);
-  }
-
-  to {
-    opacity: 1;
+    stroke-dashoffset: 0;
+    opacity: 0.86;
     transform: scale(1);
   }
 }
