@@ -6,210 +6,295 @@
     <title>YouYu - Windows Mihomo 桌面客户端</title>
     <meta
       name="description"
-      content="YouYu 是面向 Windows x64 的 Mihomo 桌面客户端，支持代理启停、节点选择与测速、TUN、连通性测试、系统网络修复、自动更新、桌宠和轻量云端管理。"
+      content="YouYu 是 Windows x64 上的 Mihomo 桌面客户端。一键启停代理，管理节点、连通性测试与网络修复，可选标准版和无桌宠版。"
     />
-    <meta name="keywords" content="YouYu,Mihomo,Clash Meta,Windows,代理客户端,桌面客户端,Electron,TypeScript,TUN" />
     <meta name="robots" content="index, follow, max-image-preview:large" />
-    <meta name="theme-color" content="#8657d3" />
+    <meta name="theme-color" content="#f7f4fb" />
     <link rel="canonical" href="https://fishknowsss.github.io/YouYu/" />
-    <link
-      rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%237441bd'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-size='34' fill='white'%3E%E6%B8%B8%3C/text%3E%3C/svg%3E"
-    />
+    <link rel="icon" type="image/png" href="assets/youyu-icon.png" />
+    <link rel="apple-touch-icon" href="assets/youyu-icon.png" />
     <link rel="stylesheet" href="assets/site.css" />
-
+    <link rel="preload" as="image" href="screenshots/home-advanced.png" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="zh_CN" />
     <meta property="og:site_name" content="YouYu" />
     <meta property="og:title" content="YouYu - Windows Mihomo 桌面客户端" />
     <meta
       property="og:description"
-      content="管理代理、节点、测速、TUN、网络修复和轻量云端通知的 Windows x64 桌面客户端。"
+      content="一键启停代理，需要时看清节点、流量与连通性。下载 Windows x64 标准版或无桌宠版。"
     />
     <meta property="og:url" content="https://fishknowsss.github.io/YouYu/" />
     <meta property="og:image" content="https://fishknowsss.github.io/YouYu/screenshots/home-advanced.png" />
-    <meta property="og:image:alt" content="YouYu 专业模式控制台" />
+    <meta property="og:image:alt" content="YouYu 1.8.3 专业模式控制台" />
     <meta name="twitter:card" content="summary_large_image" />
-
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "YouYu",
-        "alternateName": "YouYu Windows Mihomo Client",
         "applicationCategory": "UtilitiesApplication",
-        "operatingSystem": "Windows x64",
-        "description": "面向 Windows x64 的 Mihomo 桌面客户端，支持代理管理、节点测速、TUN、网络修复、自动更新、桌宠和轻量云端管理。",
+        "operatingSystem": "Windows 10 / 11 x64",
+        "softwareVersion": "1.8.3",
+        "description": "面向 Windows x64 的 Mihomo 桌面客户端，支持代理管理、节点测速、TUN、网络修复、自动更新和桌宠。",
         "url": "https://fishknowsss.github.io/YouYu/",
         "downloadUrl": "https://github.com/fishknowsss/YouYu/releases/latest",
         "codeRepository": "https://github.com/fishknowsss/YouYu",
-        "programmingLanguage": ["TypeScript", "React", "Electron"],
+        "license": "https://github.com/fishknowsss/YouYu/blob/main/LICENSE",
         "isAccessibleForFree": true,
-        "author": {
-          "@type": "Person",
-          "name": "Fishknowsss",
-          "url": "https://github.com/fishknowsss"
-        }
+        "author": { "@type": "Organization", "name": "118 Studio" }
       }
     </script>
+    <script src="assets/site.js" defer></script>
   </head>
   <body>
-    <header class="site-header">
+    <a class="skip-link" href="#top">跳到正文</a>
+    <header class="site-header page-width">
       <a class="brand" href="#top" aria-label="YouYu 首页">
-        <span class="brand-mark" aria-hidden="true">游</span>
+        <img src="assets/youyu-icon.png" width="40" height="40" alt="" />
         <span>YouYu</span>
       </a>
       <nav aria-label="页面导航">
         <a href="#features">功能</a>
         <a href="#screenshots">界面</a>
         <a href="#faq">常见问题</a>
+        <a href="https://github.com/fishknowsss/YouYu">源码</a>
       </nav>
     </header>
 
     <main id="top">
-      <section class="hero" aria-labelledby="hero-title">
-        <div class="hero-copy">
-          <p class="eyebrow">Windows x64 · Mihomo</p>
-          <h1 id="hero-title">简单启停，也能看清网络状态</h1>
-          <p class="hero-summary">
-            YouYu 是一款 Windows Mihomo
-            桌面客户端。日常使用可以一键启停代理，需要时也能管理节点、测速、TUN、连通性测试、网络修复和已登记设备的轻量云端管理。
-          </p>
-          <p class="english-summary">
-            YouYu is a Mihomo desktop client for Windows x64, built with Electron and TypeScript.
-          </p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/fishknowsss/YouYu/releases/latest"> 下载 </a>
-            <a class="button button-secondary" href="https://github.com/fishknowsss/YouYu"> 查看源码 </a>
-          </div>
-          <p class="release-note">公开安装包不内置订阅，仅支持 Windows x64。</p>
+      <section class="hero page-width" aria-labelledby="hero-title">
+        <h1 id="hero-title" data-reveal="title">YouYu</h1>
+        <div class="hero-intro">
+          <p data-reveal="rise">Windows 上的 Mihomo 桌面客户端。<br />一键启停代理，需要时看清节点与网络状态。</p>
+          <a class="button" href="#download" data-reveal="rise">下载软件</a>
         </div>
-        <figure class="hero-visual">
-          <img
-            src="screenshots/home-advanced.png"
-            width="900"
-            height="600"
-            alt="YouYu 专业模式控制台，显示节点、代理模式、流量和诊断信息"
-          />
+        <figure class="hero-preview">
+          <div class="preview-toolbar" hidden>
+            <div class="mode-switch" role="group" aria-label="切换界面预览">
+              <button type="button" data-mode="easy" aria-pressed="false">小白模式</button>
+              <button type="button" data-mode="advanced" aria-pressed="true">专业模式</button>
+            </div>
+            <a id="preview-link" href="screenshots/home-advanced.png" target="_blank" rel="noopener">查看大图</a>
+          </div>
+          <a
+            id="hero-image-link"
+            href="screenshots/home-advanced.png"
+            target="_blank"
+            rel="noopener"
+            aria-label="查看当前界面大图"
+          >
+            <img
+              id="hero-image"
+              src="screenshots/home-advanced.png"
+              width="900"
+              height="600"
+              fetchpriority="high"
+              alt="YouYu 1.8.3 专业模式，显示当前节点、健康状态、流量和诊断"
+              data-reveal="picture"
+            />
+          </a>
+          <figcaption id="preview-caption">专业模式，把当前节点、流量和诊断放在一起。</figcaption>
+          <noscript
+            ><p>
+              <a href="screenshots/home-easy.png">查看小白模式</a> /
+              <a href="screenshots/home-advanced.png">查看专业模式</a>
+            </p></noscript
+          >
         </figure>
       </section>
 
-      <section class="section" id="features" aria-labelledby="features-title">
-        <div class="section-heading">
-          <p class="eyebrow">核心功能</p>
-          <h2 id="features-title">从启停代理到定位网络问题</h2>
+      <section class="section mode-guide page-width" id="features" aria-labelledby="features-title">
+        <div class="section-intro">
+          <h2 id="features-title" data-reveal="rise">两种模式，<br />按需使用</h2>
+          <p data-reveal="rise">日常只管启停。想调整节点或排查连接时，再展开专业模式。</p>
         </div>
-        <div class="feature-grid">
-          <article>
-            <h3>代理与节点</h3>
-            <p>支持规则、全局和直连模式，可手动选节点、单节点测速或全部测速。</p>
-          </article>
-          <article>
-            <h3>状态与诊断</h3>
-            <p>集中查看实时流量、节点健康、出口信息和常用服务的连通性。</p>
-          </article>
-          <article>
-            <h3>网络修复</h3>
-            <p>清理代理残留、WinHTTP 代理和 DNS 缓存，处理常见的断网状态。</p>
-          </article>
-          <article>
-            <h3>更新与通知</h3>
-            <p>三个安装通道独立更新；后台可向指定的已登记用户发送纯文本提示或警告。</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="section" id="screenshots" aria-labelledby="screenshots-title">
-        <div class="section-heading">
-          <p class="eyebrow">界面预览</p>
-          <h2 id="screenshots-title">按使用习惯选择模式</h2>
-        </div>
-        <div class="screenshot-grid">
-          <figure>
+        <div class="mode-proof-list">
+          <article class="mode-proof">
             <img
               src="screenshots/home-easy.png"
               width="900"
               height="600"
               loading="lazy"
-              alt="YouYu 小白模式，一键启停代理"
+              alt="小白模式只保留中央连接按钮和图形反馈"
+              data-reveal="picture"
             />
-            <figcaption>小白模式：保留主要操作和必要状态。</figcaption>
-          </figure>
-          <figure>
+            <div data-reveal="rise">
+              <h3>日常，一个入口</h3>
+              <p>启动、连接、关闭、停止和失败，用独立图形反馈。无需在多个页面之间切换。</p>
+            </div>
+          </article>
+          <article class="mode-proof">
             <img
-              src="screenshots/connectivity-test.png"
+              src="screenshots/home-advanced.png"
               width="900"
               height="600"
               loading="lazy"
-              alt="YouYu 连通性测试页面"
+              alt="专业模式展示代理状态、节点选择和流量"
+              data-reveal="picture"
             />
-            <figcaption>连通性测试：查看服务可用性、耗时和出口信息。</figcaption>
+            <div data-reveal="rise">
+              <h3>需要时，展开细节</h3>
+              <p>规则、全局与直连模式，自动选点与手动切换，常用节点和诊断都有各自的位置。</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section page-width" id="screenshots" aria-labelledby="screenshots-title">
+        <div class="section-heading">
+          <h2 id="screenshots-title" data-reveal="rise">常用操作，都在眼前</h2>
+          <p data-reveal="rise">从选择节点到定位问题，点开图片查看完整界面。</p>
+        </div>
+        <div class="screenshot-grid">
+          <figure>
+            <a href="screenshots/nodes.png" target="_blank" rel="noopener" aria-label="查看节点页面大图"
+              ><img
+                src="screenshots/nodes.png"
+                width="900"
+                height="600"
+                loading="lazy"
+                alt="YouYu 节点列表，支持测速、手动切换和订阅更新"
+                data-reveal="picture"
+            /></a>
+            <figcaption data-reveal="rise">
+              <h3>选一个合适的节点</h3>
+              <p>单节点或全部测速，按需切换；首页延迟同步更新，运行中持续检查健康状态。</p>
+            </figcaption>
+          </figure>
+          <figure>
+            <a href="screenshots/connectivity-test.png" target="_blank" rel="noopener" aria-label="查看连通性测试大图"
+              ><img
+                src="screenshots/connectivity-test.png"
+                width="900"
+                height="600"
+                loading="lazy"
+                alt="YouYu 连通性测试，集中展示 15 项服务的可用性与出口信息"
+                data-reveal="picture"
+            /></a>
+            <figcaption data-reveal="rise">
+              <h3>看看哪些服务可用</h3>
+              <p>Steam、AI 服务与常用站点共 15 项测试，汇总耗时、出口信息和实际策略链。</p>
+            </figcaption>
+          </figure>
+          <figure>
+            <a href="screenshots/settings.png" target="_blank" rel="noopener" aria-label="查看设置页面大图"
+              ><img
+                src="screenshots/settings.png"
+                width="900"
+                height="600"
+                loading="lazy"
+                alt="YouYu 设置页面，包含订阅、规则、TUN、诊断和更新操作"
+                data-reveal="picture"
+            /></a>
+            <figcaption data-reveal="rise">
+              <h3>配置，也能修复</h3>
+              <p>管理订阅、规则与 TUN；清理代理残留，导出脱敏诊断，检查和安装更新。</p>
+            </figcaption>
+          </figure>
+          <figure>
+            <a href="screenshots/pet-preview.png" target="_blank" rel="noopener" aria-label="查看桌宠预览大图"
+              ><img
+                src="screenshots/pet-preview.png"
+                width="900"
+                height="600"
+                loading="lazy"
+                alt="YouYu 桌宠预览，展示实际角色和状态选择"
+                data-reveal="picture"
+            /></a>
+            <figcaption data-reveal="rise">
+              <h3>桌面上的小伙伴</h3>
+              <p>拖拽、贴边、眨眼和睡眠，支持 24 种状态。偏好清爽桌面，也有无桌宠版。</p>
+            </figcaption>
           </figure>
         </div>
+        <p class="preview-note">界面使用安全演示数据，订阅、节点、流量与出口信息均为虚构示例。</p>
       </section>
 
-      <section class="section steps" aria-labelledby="steps-title">
+      <section class="section download-section page-width" id="download" aria-labelledby="download-title">
         <div class="section-heading">
-          <p class="eyebrow">开始使用</p>
-          <h2 id="steps-title">三步连接</h2>
+          <h2 id="download-title" data-reveal="rise">选择你的 YouYu</h2>
+          <p data-reveal="rise">当前版本 1.8.3，适用于 Windows 10 / 11 x64。公开安装包不内置订阅。</p>
         </div>
-        <ol>
-          <li>
-            <span>1</span><strong>下载安装</strong>
-            <p>从 GitHub Release 下载 Windows x64 安装包。</p>
-          </li>
-          <li>
-            <span>2</span><strong>填写订阅</strong>
-            <p>完成使用登记，在设置页保存订阅地址。</p>
-          </li>
-          <li>
-            <span>3</span><strong>启动代理</strong>
-            <p>一键启动；需要调整时进入专业模式。</p>
-          </li>
-        </ol>
-      </section>
-
-      <section class="section faq" id="faq" aria-labelledby="faq-title">
-        <div class="section-heading">
-          <p class="eyebrow">常见问题</p>
-          <h2 id="faq-title">下载前需要知道</h2>
+        <div class="download-fields">
+          <article class="download-option" data-reveal="rise">
+            <h3>标准版</h3>
+            <p>完整功能，包含桌宠。适合大多数用户。</p>
+            <a class="button" href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64.exe"
+              >下载标准版</a
+            >
+          </article>
+          <article class="download-option no-pet-option" data-reveal="rise">
+            <h3>无桌宠版</h3>
+            <p>保留代理、节点、测试与修复，使用独立更新通道。</p>
+            <a
+              class="button"
+              href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64-no.exe"
+              >下载无桌宠版</a
+            >
+          </article>
         </div>
-        <div class="faq-list">
-          <details>
-            <summary>YouYu 是什么？</summary>
-            <p>
-              YouYu 是面向 Windows x64 的 Mihomo
-              桌面客户端，提供代理管理、节点测速、连通性测试、网络修复、自动更新和桌宠。
-            </p>
-          </details>
-          <details>
-            <summary>从哪里下载？</summary>
-            <p>请从 <a href="https://github.com/fishknowsss/YouYu/releases/latest">GitHub Releases</a> 下载最新版。</p>
-          </details>
-          <details>
-            <summary>公开安装包带订阅吗？</summary>
-            <p>不带。公开 Release 中的安装包均使用空的默认订阅。</p>
-          </details>
-          <details>
-            <summary>可以不使用桌宠吗？</summary>
-            <p>可以。Release 同时提供无桌宠通道，文件名带有 <code>-no</code>。</p>
-          </details>
+        <div class="download-details">
+          <p>
+            另有含桌宠的<a href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64-in.exe"
+              >内部更新通道</a
+            >，公开包同样不携带私有订阅。
+          </p>
+          <p>
+            <a href="https://github.com/fishknowsss/YouYu/releases/tag/v1.8.3">更新说明与校验清单</a> /
+            <a href="https://github.com/fishknowsss/YouYu/blob/main/README.md">使用文档</a>
+          </p>
         </div>
       </section>
 
-      <section class="final-cta" aria-labelledby="download-title">
-        <div>
-          <p class="eyebrow">GitHub Release</p>
-          <h2 id="download-title">下载 YouYu</h2>
-          <p>选择标准版或无桌宠版，安装后填写自己的订阅。</p>
-        </div>
-        <a class="button button-primary" href="https://github.com/fishknowsss/YouYu/releases/latest"> 前往下载 </a>
+      <section class="section faq page-width" id="faq" aria-labelledby="faq-title">
+        <h2 id="faq-title" data-reveal="rise">常见问题</h2>
+        <dl>
+          <div data-reveal="rise">
+            <dt>安装后怎么开始？</dt>
+            <dd>
+              运行安装包并完成使用登记，在设置中保存自己的订阅，然后启动代理。安装需要管理员授权，日常运行使用普通用户权限。
+            </dd>
+          </div>
+          <div data-reveal="rise">
+            <dt>停止后仍无法联网？</dt>
+            <dd>
+              先在设置中执行“修复”，清理系统代理、WinHTTP 和 DNS 缓存。需要重建整个应用进程时，再使用托盘的“网络修复”。
+            </dd>
+          </div>
+          <div data-reveal="rise">
+            <dt>版本会自动更新吗？</dt>
+            <dd>
+              支持应用内检查、下载、校验与安装更新，三个通道各自更新。仍在使用 1.7.7 或 1.7.9
+              且应用内更新失败时，请手动下载安装包。
+            </dd>
+          </div>
+          <div data-reveal="rise">
+            <dt>如何贡献或报告问题？</dt>
+            <dd>
+              一般问题与改进建议可在
+              <a href="https://github.com/fishknowsss/YouYu/issues">GitHub Issues</a> 提交。安全问题请按<a
+                href="https://github.com/fishknowsss/YouYu/blob/main/SECURITY.md"
+                >安全策略</a
+              >私下报告，避免公开订阅和凭据。
+            </dd>
+          </div>
+        </dl>
       </section>
     </main>
 
-    <footer>
-      <span>YouYu · Windows Mihomo 桌面客户端</span>
-      <a href="https://github.com/fishknowsss/YouYu">GitHub</a>
+    <footer class="site-footer">
+      <div class="page-width">
+        <p class="footer-name" aria-hidden="true" data-reveal="title">YouYu</p>
+        <div class="footer-links">
+          <p>118 Studio<br />Windows Mihomo 桌面客户端</p>
+          <div>
+            <a href="https://github.com/fishknowsss/YouYu">GitHub</a
+            ><a href="https://github.com/fishknowsss/YouYu/blob/main/LICENSE">MIT 许可</a
+            ><a href="https://github.com/fishknowsss/YouYu/blob/main/SECURITY.md">安全策略</a
+            ><a href="#top">返回顶部</a>
+          </div>
+        </div>
+      </div>
     </footer>
   </body>
 </html>

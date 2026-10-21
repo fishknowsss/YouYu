@@ -8,60 +8,69 @@
 
 YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新、桌宠交互和轻量云端管理。
 
-当前源码版本为 `1.8.3`（维护中，尚未发布）。可安装版本与更新文件以 [最新稳定 Release](https://github.com/fishknowsss/YouYu/releases/latest) 为准，版本演进见 [CHANGELOG](CHANGELOG.md)。
+当前版本为 [`1.8.3`](https://github.com/fishknowsss/YouYu/releases/tag/v1.8.3)。[下载标准版](https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64.exe) · [下载无桌宠版](https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64-no.exe)。其他通道、更新文件和校验清单见 [最新稳定 Release](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)。
 
 ## 近期改进
 
 - 小白模式连接按钮使用启动、连接、关闭、停止和失败五态图形反馈，并支持系统减少动态效果设置。
 - 网络修复、异常恢复和端口变化后保持系统代理与实际运行状态一致；崩溃前未结算流量可从本地日志恢复。
 - 云端支持多人定向通知与已读进度、用户配置覆盖和订阅周期流量统计。
-- 1.8.3 正在更新依赖安全修复及开源许可、贡献说明，正式交付后会出现在上述下载入口。
+- 1.8.3 更新 Electron 43 系列和相关依赖的安全修复，补齐 MIT 许可与第三方声明，更新贡献说明和项目主页。
 
 ## 界面预览
 
 截图使用可重复的安全演示数据。常规界面按 `900×600` 窗口采集；通知卡片按实际 `336×188` 独立窗口采集。订阅使用 `example.com`，出口 IP 使用 RFC 文档保留地址，节点、流量、测速、策略链和诊断内容均为虚构演示数据。
 
-### 小白模式
-
-小白模式只保留中央启停入口，适合无需查看节点与诊断信息的日常使用。
-
-![YouYu 小白模式](docs/screenshots/home-easy.png)
-
-### 专业模式控制台
-
-控制台集中显示当前节点、实时健康状态、代理模式、今日与累计流量、常用节点、最长使用节点和最新诊断日志。
-
-![YouYu 专业模式控制台](docs/screenshots/home-advanced.png)
-
-### 节点
-
-节点页支持手动切换、单节点测速、全部测速和订阅更新。首页延迟会跟随当前节点测速结果更新，运行中也会周期性刷新节点健康状态。
-
-![YouYu 节点页](docs/screenshots/nodes.png)
-
-### 连通性测试
-
-测试页覆盖常用游戏平台、AI 服务、国际站点和验证服务，汇总可用性、出口数量、平均耗时、出口 IP、归属地与策略链。
-
-![YouYu 连通性测试](docs/screenshots/connectivity-test.png)
-
-### 桌宠预览
-
-标准版与内部通道版包含 24 种桌宠状态，可在预览页检查移动、贴边、眨眼、睡眠、落地、晕倒与生气等形态。
-
-![YouYu 桌宠预览](docs/screenshots/pet-preview.png)
-
-### 设置
-
-设置页使用六行连续网格组织订阅、规则来源、后台刷新、TUN、诊断日志与软件更新，并统一系统代理、DNS 增强、流量识别、同步、修复与导出操作的列线。
-
-![YouYu 设置页](docs/screenshots/settings.png)
-
-### 定向通知
-
-后台只可向已登记的指定用户发送纯文本提示或警告。标准版和无桌宠版将通知显示在主显示器工作区右下；桌宠版会跟随桌宠在底边上方或左右边的内侧出现。下图为实际通知窗口尺寸的安全演示，不包含真实用户或后台数据。
-
-![YouYu 定向通知](docs/screenshots/notice-primary-display.png)
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/home-easy.png"><img src="docs/screenshots/home-easy.png" alt="YouYu 1.8.3 小白模式" width="450" /></a>
+      <h3>小白模式</h3>
+      <p>一个入口启停代理，用五态图形反馈连接进度和结果。</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/home-advanced.png"><img src="docs/screenshots/home-advanced.png" alt="YouYu 1.8.3 专业模式控制台" width="450" /></a>
+      <h3>专业模式</h3>
+      <p>查看当前节点、健康状态、流量、常用节点与诊断日志。</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/nodes.png"><img src="docs/screenshots/nodes.png" alt="YouYu 1.8.3 节点管理" width="450" /></a>
+      <h3>节点管理</h3>
+      <p>手动切换、单节点测速、全部测速与订阅更新，延迟同步到首页。</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/connectivity-test.png"><img src="docs/screenshots/connectivity-test.png" alt="YouYu 1.8.3 连通性测试" width="450" /></a>
+      <h3>连通性测试</h3>
+      <p>集中查看 15 项服务的可用性、耗时、出口信息和策略链。</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/pet-preview.png"><img src="docs/screenshots/pet-preview.png" alt="YouYu 1.8.3 桌宠预览" width="450" /></a>
+      <h3>桌宠预览</h3>
+      <p>预览 24 种桌宠状态；也可选择完全不含桌宠的独立安装通道。</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="YouYu 1.8.3 设置页面" width="450" /></a>
+      <h3>设置与修复</h3>
+      <p>管理订阅、规则、TUN 与后台刷新，执行网络修复、诊断导出和软件更新。</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/notice-primary-display.png" alt="YouYu 定向通知卡片安全演示" width="336" />
+      <h3>定向通知</h3>
+      <p>向指定用户发送纯文本提示或警告，跟踪各设备的已读进度。</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>开始使用</h3>
+      <p>下载安装包，完成使用登记并保存自己的订阅，然后启动代理。公开安装包均不内置订阅。</p>
+      <p><a href="https://fishknowsss.github.io/YouYu/">查看项目主页</a> · <a href="https://github.com/fishknowsss/YouYu/releases/latest">下载最新版本</a></p>
+    </td>
+  </tr>
+</table>
 
 ## 核心能力
 

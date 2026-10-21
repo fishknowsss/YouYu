@@ -40,7 +40,9 @@
 
 审计另发现 Vite 开发服务器的编辑器启动漏洞及 `http-cache-semantics` 缓存问题，分别更新到 `7.3.7` 和 `4.3.0`。本次 `npm audit` 高危为 0；`npm audit --omit=dev` 为 0。Electron 实际随桌面安装包交付，已单独处理其安全公告，不按 npm 的开发依赖标签排除。
 
-`sprintf-js <=1.1.3` 的 [GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c) 尚无修复版。它来自 `electron-builder → app-builder-lib → @electron/get → global-agent → roarr` 的开发依赖链，不随桌面运行时交付。已检查 `global-agent` 的日志调用：格式字符串由库内固定文本提供，远端数据放在日志上下文对象中；触发公告中的资源耗尽需要攻击者控制格式字符串的精度参数。暂保留打包器版本，等待上游修复，不用自动审计建议的降级消除提示。
+`sprintf-js <=1.1.3` 的 [GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c) 尚无修复版。它来自 `electron-builder → app-builder-lib → @electron/get → global-agent → roarr` 的开发依赖链，不随桌面运行时交付。已检查 `global-agent` 的日志调用：格式字符串由库内固定文本提供，远端数据放在日志上下文对象中；触发公告中的拒绝服务需要攻击者控制格式字符串的精度参数，使原生数值格式化抛出未捕获的 RangeError。暂保留打包器版本，等待上游修复，不用自动审计建议的降级消除提示。
+
+已核对直接下载来源：npm 官方最新版本仍为 `1.1.3`，上游 [PR #241](https://github.com/alexei/sprintf.js/pull/241) 和 [PR #246](https://github.com/alexei/sprintf.js/pull/246) 提供修复源码但尚未合并。未采用未经上游发布的源码归档替代稳定包。另实测将旧下载器的可选 `global-agent` 限定替换为官方 `4.1.3`：虽可移除告警链，但在当前 Node 24 / HTTPS 代理组合下出现 `ERR_TLS_CERT_ALTNAME_INVALID`，已撤回该替换，保留 TLS 校验和当前已验证的下载路径。
 
 ### 日常要求
 
