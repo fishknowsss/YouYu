@@ -87,7 +87,7 @@ p {
   background: var(--ink);
   color: var(--surface);
   transform: translateY(-180%);
-  z-index: 2;
+  z-index: 20;
 }
 .skip-link:focus {
   transform: none;
