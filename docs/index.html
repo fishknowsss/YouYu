@@ -13,7 +13,7 @@
     <link rel="canonical" href="https://fishknowsss.github.io/YouYu/" />
     <link rel="icon" type="image/png" href="assets/youyu-icon.png" />
     <link rel="apple-touch-icon" href="assets/youyu-icon.png" />
-    <link rel="stylesheet" href="assets/site.css?v=625a2c2b02" />
+    <link rel="stylesheet" href="assets/site.css?v=e6e3289285" />
     <link rel="preload" as="image" href="screenshots/home-advanced.png" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="zh_CN" />
@@ -48,7 +48,7 @@
         "author": { "@type": "Organization", "name": "118 Studio" }
       }
     </script>
-    <script src="assets/site.js?v=b6702cca76" defer></script>
+    <script src="assets/site.js?v=2aa59a5378" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#top">跳到正文</a>
@@ -73,7 +73,7 @@
         <div class="hero-copy">
           <h1 id="hero-title" data-reveal="title">Windows 上的<br /><span>Mihomo 桌面客户端</span></h1>
           <p class="hero-summary" data-reveal="rise">
-            日常使用，一键启停就够了。需要更多掌控时，YouYu 的专业模式支持节点、规则与 TUN 管理，流量和连通性一处看清。
+            小白模式用一个按钮连接或停止代理。切换到专业模式，可以选择节点、调整规则与 TUN，查看流量和连接状态。
           </p>
           <div class="hero-actions" data-reveal="rise">
             <a class="button" href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64.exe"
@@ -96,16 +96,8 @@
               <button type="button" data-mode="easy" aria-pressed="false">小白模式</button>
               <button type="button" data-mode="advanced" aria-pressed="true">专业模式</button>
             </div>
-            <a id="preview-link" href="screenshots/home-advanced.png" target="_blank" rel="noopener">查看大图</a>
           </div>
-          <a
-            id="hero-image-link"
-            href="screenshots/home-advanced.png"
-            target="_blank"
-            rel="noopener"
-            aria-label="查看当前界面大图"
-            class="preview-stage"
-          >
+          <div id="hero-preview-stage" class="preview-stage">
             <img
               id="hero-image"
               src="screenshots/home-advanced.png"
@@ -115,32 +107,26 @@
               alt="YouYu 专业模式，显示当前节点、健康状态、流量和诊断"
               data-reveal="picture"
             />
-          </a>
+          </div>
           <figcaption id="preview-caption" aria-live="polite" aria-atomic="true">
-            专业模式，节点、流量与诊断一处看清。
+            专业模式：选择节点，查看流量和连接状态。
           </figcaption>
-          <noscript
-            ><p>
-              <a href="screenshots/home-easy.png">查看小白模式</a> /
-              <a href="screenshots/home-advanced.png">查看专业模式</a>
-            </p></noscript
-          >
         </figure>
       </section>
 
       <section class="section page-width" id="features" aria-labelledby="features-title">
         <div class="section-heading">
-          <h2 id="features-title" data-reveal="rise">日常简洁，需要时展开</h2>
-          <p data-reveal="rise">同一个客户端，按使用习惯选择操作方式。</p>
+          <h2 id="features-title" data-reveal="rise">简单上手，也能细致调整</h2>
+          <p data-reveal="rise">两种模式随时切换，按自己的习惯使用。</p>
         </div>
         <div class="mode-overview">
           <article data-reveal="rise">
             <h3>小白模式</h3>
-            <p>一个主按钮完成代理启停，减少日常操作。</p>
+            <p>日常连接和停止代理，在首页就能完成。</p>
             <ul>
               <li>启动、连接、停止等状态有明确反馈</li>
               <li>无需在多个页面之间切换</li>
-              <li>状态清晰反馈，不必先理解复杂参数</li>
+              <li>需要调整时，可以切换到专业模式</li>
             </ul>
           </article>
           <article data-reveal="rise">
@@ -157,50 +143,53 @@
 
       <section class="section page-width" id="screenshots" aria-labelledby="screenshots-title">
         <div class="section-heading">
-          <h2 id="screenshots-title" data-reveal="rise">从连接到排查，各有入口</h2>
-          <p data-reveal="rise">节点、测试、设置和桌宠分区清楚。点击图片可查看完整界面。</p>
+          <h2 id="screenshots-title" data-reveal="rise">看看平时会用到的功能</h2>
+          <p data-reveal="rise">选择节点、检查连接，或处理网络问题，都有对应的页面。</p>
         </div>
         <div class="screenshot-grid">
           <figure>
-            <a href="screenshots/nodes.png" target="_blank" rel="noopener" aria-label="查看节点页面大图"
-              ><img
+            <div class="screenshot-frame">
+              <img
                 src="screenshots/nodes.png"
                 width="900"
                 height="600"
                 loading="lazy"
                 alt="YouYu 节点列表，支持测速、手动切换和订阅更新"
                 data-reveal="picture"
-            /></a>
+              />
+            </div>
             <figcaption data-reveal="rise">
               <h3>节点管理</h3>
               <p>单节点或全部测速，按需切换；首页延迟同步更新，运行中持续检查健康状态。</p>
             </figcaption>
           </figure>
           <figure>
-            <a href="screenshots/connectivity-test.png" target="_blank" rel="noopener" aria-label="查看连通性测试大图"
-              ><img
+            <div class="screenshot-frame">
+              <img
                 src="screenshots/connectivity-test.png"
                 width="900"
                 height="600"
                 loading="lazy"
                 alt="YouYu 连通性测试，集中展示 15 项服务的可用性与出口信息"
                 data-reveal="picture"
-            /></a>
+              />
+            </div>
             <figcaption data-reveal="rise">
               <h3>连通性测试</h3>
               <p>Steam、AI 服务与常用站点共 15 项测试，汇总耗时、出口信息和实际策略链。</p>
             </figcaption>
           </figure>
           <figure>
-            <a href="screenshots/settings.png" target="_blank" rel="noopener" aria-label="查看设置页面大图"
-              ><img
+            <div class="screenshot-frame">
+              <img
                 src="screenshots/settings.png"
                 width="900"
                 height="600"
                 loading="lazy"
                 alt="YouYu 设置页面，包含订阅、规则、TUN、诊断和更新操作"
                 data-reveal="picture"
-            /></a>
+              />
+            </div>
             <figcaption data-reveal="rise">
               <h3>设置与网络修复</h3>
               <p>管理订阅、规则与 TUN；清理代理残留，导出脱敏诊断，检查和安装更新。</p>
@@ -221,14 +210,7 @@
             </div>
             <figcaption data-reveal="rise">
               <h3>可选的桌面伙伴</h3>
-              <p>
-                挥手、走动、贴边和睡眠，软件内支持 24 种状态。喜欢清爽桌面，也可选择无桌宠版。<a
-                  href="screenshots/pet-preview.png"
-                  target="_blank"
-                  rel="noopener"
-                  >查看完整预览</a
-                >
-              </p>
+              <p>桌宠会挥手、走动、贴边和睡觉，软件内支持 24 种状态。也可以下载无桌宠版。</p>
               <p class="pet-status" role="status" hidden></p>
             </figcaption>
           </figure>
@@ -263,11 +245,6 @@
           </article>
         </div>
         <div class="download-details">
-          <p>
-            另有含桌宠的<a href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64-in.exe"
-              >内部更新通道</a
-            >，公开包同样不携带私有订阅。
-          </p>
           <p>
             <a href="https://github.com/fishknowsss/YouYu/releases/tag/v1.8.3">更新说明与校验清单</a> /
             <a href="https://github.com/fishknowsss/YouYu/blob/main/README.md">使用文档</a>
@@ -316,8 +293,7 @@
           <div data-reveal="rise">
             <dt>版本会自动更新吗？</dt>
             <dd>
-              支持应用内检查、下载、校验与安装更新，三个通道各自更新。仍在使用 1.7.7 或 1.7.9
-              且应用内更新失败时，请手动下载安装包。
+              支持在应用内检查、下载、校验并安装更新，标准版和无桌宠版分别更新。旧版无法完成更新时，可从本页下载安装包覆盖安装。
             </dd>
           </div>
           <div data-reveal="rise">

@@ -3,16 +3,16 @@ const modes = {
   easy: {
     image: 'screenshots/home-easy.png',
     alt: 'YouYu 小白模式，中央按钮启停代理',
-    caption: '小白模式，一键启停，连接状态清楚反馈。'
+    caption: '小白模式：一个按钮，连接或停止代理。'
   },
   advanced: {
     image: 'screenshots/home-advanced.png',
     alt: 'YouYu 专业模式，显示当前节点、健康状态、流量和诊断',
-    caption: '专业模式，节点、流量与诊断一处看清。'
+    caption: '专业模式：选择节点，查看流量和连接状态。'
   }
 };
 const image = document.querySelector('#hero-image');
-const stage = document.querySelector('#hero-image-link');
+const stage = document.querySelector('#hero-preview-stage');
 const caption = document.querySelector('#preview-caption');
 const controls = [...document.querySelectorAll('[data-mode]')];
 const switcher = document.querySelector('.mode-switch');
@@ -70,8 +70,6 @@ async function showMode(name, animate) {
   image.src = mode.image;
   image.alt = mode.alt;
   caption.textContent = mode.caption;
-  document.querySelector('#preview-link').href = mode.image;
-  stage.href = mode.image;
   currentMode = name;
   switcher.dataset.instant = String(!animate || reducedMotion.matches);
   switcher.dataset.activeMode = name;
@@ -169,7 +167,7 @@ async function playPet(name, automatic = false, animate = true) {
     await loadImage('assets/pet-sprites.webp');
   } catch {
     petStatus.hidden = false;
-    petStatus.textContent = '桌宠动画暂时无法加载，可查看完整预览。';
+    petStatus.textContent = '桌宠动画暂时无法加载，请稍后重试。';
     return;
   }
   if (request !== petRequest || !petVisible || document.hidden) return;
