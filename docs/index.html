@@ -63,10 +63,23 @@
 
     <main id="top">
       <section class="hero page-width" aria-labelledby="hero-title">
-        <h1 id="hero-title" data-reveal="title">YouYu</h1>
-        <div class="hero-intro">
-          <p data-reveal="rise">Windows 上的 Mihomo 桌面客户端。<br />一键启停代理，需要时看清节点与网络状态。</p>
-          <a class="button" href="#download" data-reveal="rise">下载软件</a>
+        <div class="hero-copy">
+          <h1 id="hero-title" data-reveal="title">Windows 上的<br /><span>Mihomo 桌面客户端</span></h1>
+          <p class="hero-summary" data-reveal="rise">
+            YouYu 让日常代理启停更简单。需要时，展开专业模式，集中管理节点、流量和网络状态。
+          </p>
+          <div class="hero-actions" data-reveal="rise">
+            <a class="button" href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64.exe"
+              >下载标准版</a
+            >
+            <a
+              class="button button-secondary"
+              href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64-no.exe"
+              >无桌宠版</a
+            >
+          </div>
+          <p class="release-note" data-reveal="rise">v1.8.3 · Windows 10 / 11 x64 · MIT 开源</p>
+          <p class="subscription-note">公开安装包不内置订阅，请使用自己的订阅。</p>
         </div>
         <figure class="hero-preview">
           <div class="preview-toolbar" hidden>
@@ -103,47 +116,37 @@
         </figure>
       </section>
 
-      <section class="section mode-guide page-width" id="features" aria-labelledby="features-title">
-        <div class="section-intro">
-          <h2 id="features-title" data-reveal="rise">两种模式，<br />按需使用</h2>
-          <p data-reveal="rise">日常只管启停。想调整节点或排查连接时，再展开专业模式。</p>
+      <section class="section page-width" id="features" aria-labelledby="features-title">
+        <div class="section-heading">
+          <h2 id="features-title" data-reveal="rise">日常简洁，需要时展开</h2>
+          <p data-reveal="rise">同一个客户端，按使用习惯选择操作方式。</p>
         </div>
-        <div class="mode-proof-list">
-          <article class="mode-proof">
-            <img
-              src="screenshots/home-easy.png"
-              width="900"
-              height="600"
-              loading="lazy"
-              alt="小白模式只保留中央连接按钮和图形反馈"
-              data-reveal="picture"
-            />
-            <div data-reveal="rise">
-              <h3>日常，一个入口</h3>
-              <p>启动、连接、关闭、停止和失败，用独立图形反馈。无需在多个页面之间切换。</p>
-            </div>
+        <div class="mode-overview">
+          <article data-reveal="rise">
+            <h3>小白模式</h3>
+            <p>一个主按钮完成代理启停，减少日常操作。</p>
+            <ul>
+              <li>启动、连接、停止等状态有明确反馈</li>
+              <li>无需在多个页面之间切换</li>
+              <li>支持系统减少动态效果设置</li>
+            </ul>
           </article>
-          <article class="mode-proof">
-            <img
-              src="screenshots/home-advanced.png"
-              width="900"
-              height="600"
-              loading="lazy"
-              alt="专业模式展示代理状态、节点选择和流量"
-              data-reveal="picture"
-            />
-            <div data-reveal="rise">
-              <h3>需要时，展开细节</h3>
-              <p>规则、全局与直连模式，自动选点与手动切换，常用节点和诊断都有各自的位置。</p>
-            </div>
+          <article data-reveal="rise">
+            <h3>专业模式</h3>
+            <p>把节点选择、流量统计和连接诊断放在一起。</p>
+            <ul>
+              <li>规则、全局与直连模式，按需切换</li>
+              <li>支持自动选点、手动选择与测速</li>
+              <li>查看常用节点、连通性与诊断日志</li>
+            </ul>
           </article>
         </div>
       </section>
 
       <section class="section page-width" id="screenshots" aria-labelledby="screenshots-title">
         <div class="section-heading">
-          <h2 id="screenshots-title" data-reveal="rise">常用操作，都在眼前</h2>
-          <p data-reveal="rise">从选择节点到定位问题，点开图片查看完整界面。</p>
+          <h2 id="screenshots-title" data-reveal="rise">从连接到排查，各有入口</h2>
+          <p data-reveal="rise">节点、测试、设置和桌宠分区清楚。点击图片可查看完整界面。</p>
         </div>
         <div class="screenshot-grid">
           <figure>
@@ -157,7 +160,7 @@
                 data-reveal="picture"
             /></a>
             <figcaption data-reveal="rise">
-              <h3>选一个合适的节点</h3>
+              <h3>节点管理</h3>
               <p>单节点或全部测速，按需切换；首页延迟同步更新，运行中持续检查健康状态。</p>
             </figcaption>
           </figure>
@@ -172,7 +175,7 @@
                 data-reveal="picture"
             /></a>
             <figcaption data-reveal="rise">
-              <h3>看看哪些服务可用</h3>
+              <h3>连通性测试</h3>
               <p>Steam、AI 服务与常用站点共 15 项测试，汇总耗时、出口信息和实际策略链。</p>
             </figcaption>
           </figure>
@@ -187,7 +190,7 @@
                 data-reveal="picture"
             /></a>
             <figcaption data-reveal="rise">
-              <h3>配置，也能修复</h3>
+              <h3>设置与网络修复</h3>
               <p>管理订阅、规则与 TUN；清理代理残留，导出脱敏诊断，检查和安装更新。</p>
             </figcaption>
           </figure>
@@ -202,7 +205,7 @@
                 data-reveal="picture"
             /></a>
             <figcaption data-reveal="rise">
-              <h3>桌面上的小伙伴</h3>
+              <h3>可选的桌面伙伴</h3>
               <p>拖拽、贴边、眨眼和睡眠，支持 24 种状态。偏好清爽桌面，也有无桌宠版。</p>
             </figcaption>
           </figure>
@@ -212,7 +215,7 @@
 
       <section class="section download-section page-width" id="download" aria-labelledby="download-title">
         <div class="section-heading">
-          <h2 id="download-title" data-reveal="rise">选择你的 YouYu</h2>
+          <h2 id="download-title" data-reveal="rise">选择适合的版本</h2>
           <p data-reveal="rise">当前版本 1.8.3，适用于 Windows 10 / 11 x64。公开安装包不内置订阅。</p>
         </div>
         <div class="download-fields">
@@ -284,9 +287,8 @@
 
     <footer class="site-footer">
       <div class="page-width">
-        <p class="footer-name" aria-hidden="true" data-reveal="title">YouYu</p>
         <div class="footer-links">
-          <p>118 Studio<br />Windows Mihomo 桌面客户端</p>
+          <p><span class="footer-brand">YouYu</span> · 118 Studio<br />Windows Mihomo 桌面客户端</p>
           <div>
             <a href="https://github.com/fishknowsss/YouYu">GitHub</a
             ><a href="https://github.com/fishknowsss/YouYu/blob/main/LICENSE">MIT 许可</a

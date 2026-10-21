@@ -258,6 +258,8 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
 
 面向用户交付并需要客户端自动更新时，不要停在“已打包”。完成下面整套流程后再结束。
 
+用户授权发布后，提交、推送、等待 Actions、标签和 Release 是同一次交付的连续步骤。不要在推送完成后结束任务；发现 Actions 失败时主动读取失败日志、修复并推送新提交，再等待精确提交的验证。若推送事件没有创建 Validate，可在确认 `main` SHA 后通过现有工作流的手动入口运行同一组检查：`gh workflow run validate.yml --ref main`。仅在该 SHA 的 Validate 成功后继续标签和发布。
+
 1. 确认版本和改动范围。
 
    ```powershell
