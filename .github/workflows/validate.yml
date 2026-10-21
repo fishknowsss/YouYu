@@ -45,7 +45,8 @@ jobs:
 
       - name: Test
         # Avoid a PowerShell 7 module path while retaining the runner's prewarmed PS5 analysis cache.
-        # Spawn contracts and a lightweight real child prove production still scrubs both settings.
+        # Run real PS5 process-boundary files separately so cold startup and native compilation
+        # do not compete with the coverage suite or each other on a fresh runner.
         shell: cmd
         run: |
           if not defined PSModuleAnalysisCachePath (
@@ -61,7 +62,13 @@ jobs:
             exit /b 1
           )
           set "PSModulePath="
-          node node_modules\vitest\vitest.mjs run --coverage --exclude tests/main/updateInstallerLauncher.test.ts --exclude tests/main/manageInstalledProcessScript.test.ts --exclude tests/main/elevatedProcess.test.ts
+          node node_modules\vitest\vitest.mjs run --coverage --exclude tests/main/updateInstallerLauncher.test.ts --exclude tests/main/manageInstalledProcessScript.test.ts --exclude tests/main/elevatedProcess.test.ts --exclude tests/main/windowsPowerShell.test.ts --exclude tests/main/windowsJobProcess.test.ts --exclude tests/main/cleanupStartupTasksScript.test.ts
+          if errorlevel 1 exit /b 1
+          node node_modules\vitest\vitest.mjs run tests/main/windowsPowerShell.test.ts
+          if errorlevel 1 exit /b 1
+          node node_modules\vitest\vitest.mjs run tests/main/windowsJobProcess.test.ts
+          if errorlevel 1 exit /b 1
+          node node_modules\vitest\vitest.mjs run tests/main/cleanupStartupTasksScript.test.ts
           if errorlevel 1 exit /b 1
           node node_modules\vitest\vitest.mjs run tests/main/elevatedProcess.test.ts
           if errorlevel 1 exit /b 1
