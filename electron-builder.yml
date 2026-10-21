@@ -20,6 +20,10 @@ files:
   - '!**/node_modules/.cache/**'
   - '!**/release/**'
 extraResources:
+  - from: LICENSE
+    to: LICENSE.youyu.txt
+  - from: THIRD-PARTY-NOTICES.txt
+    to: THIRD-PARTY-NOTICES.txt
   - from: resources/mihomo
     to: mihomo
     filter:

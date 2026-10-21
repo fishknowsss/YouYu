@@ -19,6 +19,31 @@
 
 ## 仓库与发布要求
 
+### 当前依赖维护记录（2026-10-21）
+
+1.8.3 维护改动覆盖受影响的 Electron 43 系列、`js-yaml`、Vite、Vitest，以及构建与 Worker 工具链的依赖修复；用户可用版本仍以最新稳定 Release 为准。
+
+以下更新已在 1.8.3 维护源码中整合。部分 PR 的目标版本仍受后续公告影响，因此直接采用同系列修复版本；对应 Dependabot PR 由本次维护统一覆盖，无需分别合并。
+
+| Dependabot PR | 采用版本 |
+| --- | --- |
+| #5 `fast-uri` | `3.1.9`，替代仍有后续告警的 `3.1.7` |
+| #6 `@xmldom/xmldom` | `0.8.15` |
+| #7 `browserslist`、#9 `baseline-browser-mapping` | `4.29.4`、`2.11.30` |
+| #8 `vitest` | `4.1.11`，`@vitest/coverage-v8` 同步版本 |
+| #10 `sharp` / `wrangler` | `0.35.5` / `4.151.3`，覆盖后续 sharp 与 Undici 公告；Workers 类型同步到所需版本 |
+| #11 `js-yaml` | `4.3.2`，包含桌面运行依赖中的副本 |
+| #12 `electron` | `43.8.3`，保留 43 系列并同步官方 ZIP 校验清单 |
+| #13 `undici` | node-gyp 链为 `6.29.1`；其他开发工具链为 `7.29.1` |
+| #14 `brace-expansion` | 按原依赖范围分别更新为 `1.1.21`、`2.1.7`、`5.0.12` |
+| #15 `source-map-js` | `1.2.2` |
+
+审计另发现 Vite 开发服务器的编辑器启动漏洞及 `http-cache-semantics` 缓存问题，分别更新到 `7.3.7` 和 `4.3.0`。本次 `npm audit` 高危为 0；`npm audit --omit=dev` 为 0。Electron 实际随桌面安装包交付，已单独处理其安全公告，不按 npm 的开发依赖标签排除。
+
+`sprintf-js <=1.1.3` 的 [GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c) 尚无修复版。它来自 `electron-builder → app-builder-lib → @electron/get → global-agent → roarr` 的开发依赖链，不随桌面运行时交付。已检查 `global-agent` 的日志调用：格式字符串由库内固定文本提供，远端数据放在日志上下文对象中；触发公告中的资源耗尽需要攻击者控制格式字符串的精度参数。暂保留打包器版本，等待上游修复，不用自动审计建议的降级消除提示。
+
+### 日常要求
+
 - `resources/default-subscription.txt` 必须为空。
 - `resources/default-subscription.in.txt`、`.dev.vars*`、`.wrangler/`、`release/`、`release-archive/`、`team-builds/`、遗留的 `local-subscription-builds/` 和 `resources/generated/` 不得提交。
 - 公共三通道资产必须由 `npm run dist:win:release` 生成，并通过空内置订阅校验。

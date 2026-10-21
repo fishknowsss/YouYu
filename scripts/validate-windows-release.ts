@@ -43,6 +43,16 @@ const packagedAppAsarPath = join(releaseDir, 'win-unpacked', 'resources', 'app.a
 await access(expectedInstallerPath);
 await access(expectedBlockmapPath);
 await access(expectedUpdateMetadataPath);
+for (const [source, packaged] of [
+  ['LICENSE', 'LICENSE.youyu.txt'],
+  ['THIRD-PARTY-NOTICES.txt', 'THIRD-PARTY-NOTICES.txt']
+]) {
+  const original = await readFile(join(root, source));
+  const copy = await readFile(join(releaseDir, 'win-unpacked', 'resources', packaged));
+  if (!original.equals(copy)) throw new Error(`Packaged license notice does not match ${source}`);
+}
+await access(join(releaseDir, 'win-unpacked', 'LICENSE.electron.txt'));
+await access(join(releaseDir, 'win-unpacked', 'LICENSES.chromium.html'));
 await assertPathMissing(electronDefaultAppPath, 'Packaged app must not retain Electron default_app.asar');
 await assertPathMissing(electronVersionMarkerPath, 'Packaged app must not retain Electron version marker');
 

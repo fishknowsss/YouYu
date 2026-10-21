@@ -8,13 +8,14 @@
 
 YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新、桌宠交互和轻量云端管理。
 
-当前源码版本为 [`1.7.13`](https://github.com/fishknowsss/YouYu/releases/tag/v1.7.13)。公开安装包与更新文件见 [GitHub Releases](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)。
+当前源码版本为 `1.8.3`（维护中，尚未发布）。可安装版本与更新文件以 [最新稳定 Release](https://github.com/fishknowsss/YouYu/releases/latest) 为准，版本演进见 [CHANGELOG](CHANGELOG.md)。
 
-## 1.7.13 更新重点
+## 近期改进
 
-- 代理起来后小白按钮立即进入已连接，不再在按钮下方继续转圈。
-- 软件内更新成功后，不会因为窗口确认稍晚就提示「安装未完成」。
-- 1.7.11 起应用内更新已修好提权交接。若当前还是 1.7.7 或 1.7.9，软件内更新装不上，需要手动运行安装包。
+- 小白模式连接按钮使用启动、连接、关闭、停止和失败五态图形反馈，并支持系统减少动态效果设置。
+- 网络修复、异常恢复和端口变化后保持系统代理与实际运行状态一致；崩溃前未结算流量可从本地日志恢复。
+- 云端支持多人定向通知与已读进度、用户配置覆盖和订阅周期流量统计。
+- 1.8.3 正在更新依赖安全修复及开源许可、贡献说明，正式交付后会出现在上述下载入口。
 
 ## 界面预览
 
@@ -213,7 +214,7 @@ npm run dev:ui
 
 ## 验证
 
-提交应用代码前至少执行：
+按改动范围运行相关测试与检查；应用与依赖变更可使用以下已有命令，正式发布以[发布检查清单](docs/release-packaging.md)为准：
 
 ```powershell
 npm run validate:repo
@@ -255,6 +256,20 @@ npm run smoke
 完整版本递增、打包、归档、提交、标签、Release 上传和远端更新元数据检查流程见 [docs/release-packaging.md](docs/release-packaging.md)。
 
 仓库敏感历史清理、凭据处置和后续防回归流程见 [docs/security-history-cleanup.md](docs/security-history-cleanup.md)。
+
+## 参与贡献
+
+- 提交 Issue 时说明版本、Windows 版本、复现步骤和预期行为，附上脱敏后的必要信息。安全漏洞请使用 [SECURITY.md](SECURITY.md) 中的私下报告入口。
+- 一个 PR 处理一个明确问题，保持现有 UI、更新通道和配置兼容；较大的行为调整请先通过 Issue 说明方案。
+- 使用 `npm ci` 安装 lockfile 中的依赖，按改动影响运行相关测试、类型检查和 lint；PR 中写明实际验证结果。不要只为本地通过而放宽测试、增加重试或修改 CI。
+- 不提交订阅、密钥、本机配置或生成产物；打包、版本号与发布操作遵循 [docs/release-packaging.md](docs/release-packaging.md)。
+- 提交贡献表示你有权提供这些内容，并同意按本项目 MIT 许可证分发；引入第三方代码、字体或图像时须保留来源和原有许可。
+
+## 许可证与第三方组件
+
+YouYu 自身代码和文档采用 [MIT License](LICENSE)。第三方组件保留各自的版权和许可证，详见 [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt)。
+
+Mihomo 作为独立程序通过本地 API 与 YouYu 通信，按 GPL-3.0-only 分发；安装包保留其 [GPL 全文](resources/mihomo/win-x64/LICENSE-GPL-3.0.txt)和[来源说明](resources/mihomo/win-x64/SOURCE.md)，公开 Release 另附对应版本源码归档。Electron 的 `LICENSE.electron.txt`、`LICENSES.chromium.html` 以及应用依赖的版权声明随安装包保留；YouYu 的 MIT 许可与第三方汇总位于安装目录的 `resources/` 下。
 
 ## 项目结构
 

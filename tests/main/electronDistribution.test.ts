@@ -22,14 +22,14 @@ describe('Electron Windows distribution', () => {
     expect(manifest).toEqual({
       schemaVersion: 1,
       project: 'electron/electron',
-      version: '43.2.0',
+      version: '43.8.3',
       platform: 'win32',
       arch: 'x64',
-      assetName: 'electron-v43.2.0-win32-x64.zip',
-      assetUrl: 'https://github.com/electron/electron/releases/download/v43.2.0/electron-v43.2.0-win32-x64.zip',
-      shasumsUrl: 'https://github.com/electron/electron/releases/download/v43.2.0/SHASUMS256.txt',
-      size: 144_326_439,
-      sha256: 'eba5f5088af40ecb364fe258809c79a5234c6ece5a75c64722772eba01b02786'
+      assetName: 'electron-v43.8.3-win32-x64.zip',
+      assetUrl: 'https://github.com/electron/electron/releases/download/v43.8.3/electron-v43.8.3-win32-x64.zip',
+      shasumsUrl: 'https://github.com/electron/electron/releases/download/v43.8.3/SHASUMS256.txt',
+      size: 151_457_540,
+      sha256: '98efbd2d1c7bd44150c0aa800cd9ac5fefcefd2d44fd94958a95d6744d86c6de'
     });
     expect(packageJson.devDependencies?.electron).toBe(manifest.version);
   });

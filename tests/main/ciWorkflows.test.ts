@@ -53,7 +53,7 @@ describe('critical CI workflows', () => {
     const thresholds = asRecord(coverage.thresholds, 'Vitest coverage thresholds');
 
     expect(packageJson.scripts?.['test:coverage']).toBe('vitest run --coverage');
-    expect(packageJson.devDependencies?.['@vitest/coverage-v8']).toBe('4.1.5');
+    expect(packageJson.devDependencies?.['@vitest/coverage-v8']).toBe(packageJson.devDependencies?.vitest);
     expect(coverage.provider).toBe('v8');
     expect(coverage.reportsDirectory).toBe('coverage/critical');
     expect(coverage.reporter).toEqual(expect.arrayContaining(['text', 'json-summary', 'lcov']));
