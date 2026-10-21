@@ -7,7 +7,9 @@
   --muted: #554864;
   --accent: #7441bd;
   --accent-hover: #572b99;
-  font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  font-family:
+    'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', system-ui, sans-serif;
   font-synthesis: none;
 }
 * {
@@ -15,7 +17,7 @@
 }
 html {
   scroll-behavior: smooth;
-  scroll-padding-top: 24px;
+  scroll-padding-top: 104px;
 }
 body {
   margin: 0;
@@ -97,6 +99,18 @@ p {
   min-height: 80px;
   gap: 24px;
 }
+.header-shell {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+}
+.brand img {
+  transition: transform 240ms var(--ease-out);
+}
+.brand:hover img {
+  transform: rotate(-7deg);
+}
 .brand {
   display: inline-flex;
   align-items: center;
@@ -119,6 +133,17 @@ nav a {
   align-items: center;
   min-height: 44px;
   text-decoration: none;
+  transition: color 180ms ease;
+}
+nav .nav-download {
+  padding-inline: 18px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+nav .nav-download:hover {
+  background: var(--accent-hover);
 }
 .hero {
   display: grid;
@@ -171,7 +196,7 @@ h1 span {
   transform: translateY(-2px);
 }
 .button:active {
-  transform: translateY(0);
+  transform: translateY(0) scale(0.97);
 }
 .button-secondary {
   background: var(--field);
@@ -194,6 +219,7 @@ h1 span {
   background: var(--surface);
   border-radius: 12px;
   padding: 16px;
+  transition: transform 320ms var(--ease-out);
 }
 .preview-toolbar {
   display: flex;
@@ -206,11 +232,32 @@ h1 span {
   display: none !important;
 }
 .mode-switch {
-  display: flex;
-  gap: 4px;
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0;
   background: var(--bg);
   border-radius: 8px;
-  padding: 3px;
+  padding: 4px;
+}
+.mode-switch::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: 4px;
+  left: 4px;
+  bottom: 4px;
+  width: calc((100% - 8px) / 2);
+  background: var(--field);
+  border-radius: 6px;
+  transition: transform 300ms var(--ease-out);
+}
+.mode-switch[data-active-mode='advanced']::before {
+  transform: translateX(100%);
+}
+.mode-switch[data-instant='true']::before {
+  transition: none;
 }
 .mode-switch button {
   min-height: 40px;
@@ -219,18 +266,16 @@ h1 span {
   border-radius: 6px;
   color: var(--muted);
   background: transparent;
+  font-weight: 600;
   transition:
     color 160ms ease,
     background-color 160ms ease;
 }
 .mode-switch button[aria-pressed='true'] {
-  background: var(--field);
   color: var(--accent);
-  font-weight: 600;
 }
 .mode-switch button:hover {
   color: var(--accent-hover);
-  background: var(--field);
 }
 .hero-preview > a {
   display: block;
@@ -239,9 +284,27 @@ h1 span {
   width: 100%;
   border-radius: 6px;
 }
+.preview-stage {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
+  border-radius: 7px;
+  background: var(--bg);
+}
+.preview-stage img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.preview-stage .preview-outgoing {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
 .hero-preview figcaption {
   margin-top: 12px;
   color: var(--muted);
+  min-height: 1.7em;
 }
 .section {
   margin-top: 88px;
@@ -263,6 +326,7 @@ h1 span {
   padding: 28px 32px;
   background: var(--field);
   border-radius: 12px;
+  transition: transform 240ms var(--ease-out);
 }
 .mode-overview article:last-child {
   background: var(--surface);
@@ -286,7 +350,7 @@ h1 span {
 .screenshot-grid figure {
   min-width: 0;
 }
-.screenshot-grid a {
+.screenshot-grid figure > a {
   display: block;
   border-radius: 10px;
   overflow: hidden;
@@ -294,13 +358,20 @@ h1 span {
 }
 .screenshot-grid img {
   width: 100%;
-  transition: transform 300ms ease;
+  transition: transform 400ms var(--ease-out);
 }
-.screenshot-grid a:hover img {
+.screenshot-grid figure > a:hover img {
   transform: scale(1.012);
 }
 .screenshot-grid figcaption {
   padding-top: 18px;
+}
+.screenshot-grid figcaption h3 {
+  letter-spacing: -0.02em;
+}
+.screenshot-grid figcaption a {
+  color: var(--accent);
+  white-space: nowrap;
 }
 .screenshot-grid p {
   margin-top: 9px;
@@ -327,6 +398,7 @@ h1 span {
   padding: 26px;
   background: var(--surface);
   border-radius: 10px;
+  transition: transform 240ms var(--ease-out);
 }
 .download-option p {
   margin-top: 12px;
@@ -352,6 +424,112 @@ h1 span {
 }
 .download-details p {
   max-width: 34em;
+}
+.install-guide {
+  margin-top: 32px;
+  padding-top: 12px;
+}
+.install-guide h3 {
+  font-size: 18px;
+}
+.install-guide ol {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 28px;
+  padding-left: 20px;
+  margin: 18px 0 0;
+}
+.install-guide li {
+  padding-left: 4px;
+}
+.install-guide li::marker {
+  color: var(--accent);
+  font-weight: 600;
+}
+.install-guide li > span {
+  font-weight: 600;
+}
+.install-guide p {
+  color: var(--muted);
+  margin-top: 6px;
+}
+.pet-stage {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  place-items: center;
+  aspect-ratio: 3 / 2;
+  padding: 20px;
+  border-radius: 10px;
+  background: var(--field);
+  overflow: hidden;
+}
+.pet-character {
+  align-self: center;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 50%;
+  touch-action: manipulation;
+}
+.pet-character:disabled {
+  cursor: default;
+}
+.pet-sprite {
+  display: block;
+  position: relative;
+  width: 160px;
+  aspect-ratio: 192 / 208;
+  background-size: 800% 900%;
+  background-repeat: no-repeat;
+  transform-origin: center bottom;
+}
+.pet-poster {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+}
+.pet-stage[data-loaded='true'] .pet-poster {
+  visibility: hidden;
+}
+.pet-controls {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+}
+.pet-controls button {
+  min-height: 40px;
+  padding: 7px 18px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+  transition:
+    color 180ms ease,
+    transform 180ms var(--ease-out);
+}
+.pet-controls button:hover,
+.pet-controls button.is-active {
+  color: var(--accent);
+}
+.pet-controls button:active {
+  transform: scale(0.96);
+}
+.pet-status {
+  color: var(--muted);
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .mode-overview article:hover,
+  .download-option:hover {
+    transform: translateY(-3px);
+  }
+  .hero-preview:hover {
+    transform: translateY(-2px);
+  }
+  .screenshot-grid figure > a:hover {
+    box-shadow: 0 12px 28px rgba(50, 26, 79, 0.08); /* taste-skill-ignore: hover only, absent at rest */
+  }
 }
 .faq {
   display: grid;
@@ -469,8 +647,16 @@ h1 span {
   nav {
     gap: 16px;
   }
-  nav a:last-child {
+  nav .nav-source,
+  nav .nav-faq {
     display: none;
+  }
+  nav {
+    gap: 14px;
+  }
+  nav .nav-download {
+    padding-inline: 14px;
+    min-height: 40px;
   }
   .hero {
     padding-top: 28px;
@@ -493,6 +679,9 @@ h1 span {
   }
   .hero-preview {
     padding: 10px;
+  }
+  .hero-preview figcaption {
+    min-height: 3.4em;
   }
   .preview-toolbar {
     flex-wrap: wrap;
@@ -540,13 +729,24 @@ h1 span {
   .site-footer {
     margin-top: 56px;
   }
+  .pet-stage {
+    padding: 14px;
+  }
+  .pet-sprite {
+    width: 128px;
+  }
+  .pet-controls button {
+    min-height: 40px;
+    padding: 6px 16px;
+  }
+  .install-guide ol {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
 }
 @media (max-width: 380px) {
   nav {
     gap: 12px;
-  }
-  .brand span {
-    display: none;
   }
   h1 {
     font-size: 29px;
@@ -554,8 +754,8 @@ h1 span {
 }
 @keyframes arrive {
   from {
-    opacity: 0.7;
-    transform: translateY(12px);
+    opacity: 0.55;
+    transform: translateY(16px);
   }
   to {
     opacity: 1;
@@ -574,10 +774,12 @@ h1 span {
 }
 @media (prefers-reduced-motion: no-preference) {
   .has-arrived {
-    animation: arrive 500ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: arrive 600ms var(--ease-out) backwards;
+    animation-delay: var(--reveal-delay, 0ms);
   }
   [data-reveal='picture'].has-arrived {
-    animation: picture-arrive 650ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: picture-arrive 700ms var(--ease-out) backwards;
+    animation-delay: var(--reveal-delay, 0ms);
   }
 }
 @media (prefers-reduced-motion: reduce) {

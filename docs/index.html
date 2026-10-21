@@ -13,7 +13,7 @@
     <link rel="canonical" href="https://fishknowsss.github.io/YouYu/" />
     <link rel="icon" type="image/png" href="assets/youyu-icon.png" />
     <link rel="apple-touch-icon" href="assets/youyu-icon.png" />
-    <link rel="stylesheet" href="assets/site.css" />
+    <link rel="stylesheet" href="assets/site.css?v=8772bfc9ac" />
     <link rel="preload" as="image" href="screenshots/home-advanced.png" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="zh_CN" />
@@ -24,9 +24,13 @@
       content="一键启停代理，需要时看清节点、流量与连通性。下载 Windows x64 标准版或无桌宠版。"
     />
     <meta property="og:url" content="https://fishknowsss.github.io/YouYu/" />
-    <meta property="og:image" content="https://fishknowsss.github.io/YouYu/screenshots/home-advanced.png" />
-    <meta property="og:image:alt" content="YouYu 1.8.3 专业模式控制台" />
+    <meta property="og:image" content="https://fishknowsss.github.io/YouYu/assets/social-cover.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="YouYu：日常一键启停，专业全面掌控" />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://fishknowsss.github.io/YouYu/assets/social-cover.png" />
+    <meta name="twitter:image:alt" content="YouYu Windows Mihomo 桌面客户端与真实专业模式界面" />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -44,29 +48,32 @@
         "author": { "@type": "Organization", "name": "118 Studio" }
       }
     </script>
-    <script src="assets/site.js" defer></script>
+    <script src="assets/site.js?v=b6702cca76" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#top">跳到正文</a>
-    <header class="site-header page-width">
-      <a class="brand" href="#top" aria-label="YouYu 首页">
-        <img src="assets/youyu-icon.png" width="40" height="40" alt="" />
-        <span>YouYu</span>
-      </a>
-      <nav aria-label="页面导航">
-        <a href="#features">功能</a>
-        <a href="#screenshots">界面</a>
-        <a href="#faq">常见问题</a>
-        <a href="https://github.com/fishknowsss/YouYu">源码</a>
-      </nav>
-    </header>
+    <div class="header-shell">
+      <header class="site-header page-width">
+        <a class="brand" href="#top" aria-label="YouYu 首页">
+          <img src="assets/youyu-icon.png" width="40" height="40" alt="" />
+          <span>YouYu</span>
+        </a>
+        <nav aria-label="页面导航">
+          <a href="#features">功能</a>
+          <a href="#screenshots">界面</a>
+          <a class="nav-faq" href="#faq">常见问题</a>
+          <a class="nav-source" href="https://github.com/fishknowsss/YouYu">源码</a>
+          <a class="nav-download" href="#download">下载</a>
+        </nav>
+      </header>
+    </div>
 
     <main id="top">
       <section class="hero page-width" aria-labelledby="hero-title">
         <div class="hero-copy">
           <h1 id="hero-title" data-reveal="title">Windows 上的<br /><span>Mihomo 桌面客户端</span></h1>
           <p class="hero-summary" data-reveal="rise">
-            YouYu 让日常代理启停更简单。需要时，展开专业模式，集中管理节点、流量和网络状态。
+            日常使用，一键启停就够了。需要更多掌控时，YouYu 的专业模式支持节点、规则与 TUN 管理，流量和连通性一处看清。
           </p>
           <div class="hero-actions" data-reveal="rise">
             <a class="button" href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64.exe"
@@ -78,12 +85,14 @@
               >无桌宠版</a
             >
           </div>
-          <p class="release-note" data-reveal="rise">v1.8.3 · Windows 10 / 11 x64 · MIT 开源</p>
+          <p class="release-note" data-reveal="rise">
+            v<span data-release-version>1.8.3</span> · Windows 10 / 11 x64 · MIT 开源
+          </p>
           <p class="subscription-note">公开安装包不内置订阅，请使用自己的订阅。</p>
         </div>
         <figure class="hero-preview">
           <div class="preview-toolbar" hidden>
-            <div class="mode-switch" role="group" aria-label="切换界面预览">
+            <div class="mode-switch" role="group" aria-label="切换界面预览" data-active-mode="advanced">
               <button type="button" data-mode="easy" aria-pressed="false">小白模式</button>
               <button type="button" data-mode="advanced" aria-pressed="true">专业模式</button>
             </div>
@@ -95,6 +104,7 @@
             target="_blank"
             rel="noopener"
             aria-label="查看当前界面大图"
+            class="preview-stage"
           >
             <img
               id="hero-image"
@@ -102,11 +112,13 @@
               width="900"
               height="600"
               fetchpriority="high"
-              alt="YouYu 1.8.3 专业模式，显示当前节点、健康状态、流量和诊断"
+              alt="YouYu 专业模式，显示当前节点、健康状态、流量和诊断"
               data-reveal="picture"
             />
           </a>
-          <figcaption id="preview-caption">专业模式，把当前节点、流量和诊断放在一起。</figcaption>
+          <figcaption id="preview-caption" aria-live="polite" aria-atomic="true">
+            专业模式，节点、流量与诊断一处看清。
+          </figcaption>
           <noscript
             ><p>
               <a href="screenshots/home-easy.png">查看小白模式</a> /
@@ -128,14 +140,14 @@
             <ul>
               <li>启动、连接、停止等状态有明确反馈</li>
               <li>无需在多个页面之间切换</li>
-              <li>支持系统减少动态效果设置</li>
+              <li>状态清晰反馈，不必先理解复杂参数</li>
             </ul>
           </article>
           <article data-reveal="rise">
             <h3>专业模式</h3>
             <p>把节点选择、流量统计和连接诊断放在一起。</p>
             <ul>
-              <li>规则、全局与直连模式，按需切换</li>
+              <li>规则、全局、直连与 TUN，按需设置</li>
               <li>支持自动选点、手动选择与测速</li>
               <li>查看常用节点、连通性与诊断日志</li>
             </ul>
@@ -194,19 +206,30 @@
               <p>管理订阅、规则与 TUN；清理代理残留，导出脱敏诊断，检查和安装更新。</p>
             </figcaption>
           </figure>
-          <figure>
-            <a href="screenshots/pet-preview.png" target="_blank" rel="noopener" aria-label="查看桌宠预览大图"
-              ><img
-                src="screenshots/pet-preview.png"
-                width="900"
-                height="600"
-                loading="lazy"
-                alt="YouYu 桌宠预览，展示实际角色和状态选择"
-                data-reveal="picture"
-            /></a>
+          <figure class="pet-showcase">
+            <div class="pet-stage" data-reveal="picture" aria-label="桌宠动作演示">
+              <button class="pet-character" type="button" aria-label="让 YouYu 桌宠挥手" disabled>
+                <span class="pet-sprite" aria-hidden="true"
+                  ><img class="pet-poster" src="assets/youyu-icon.png" width="160" height="160" alt="" loading="lazy"
+                /></span>
+              </button>
+              <div class="pet-controls" role="group" aria-label="预览桌宠动作" hidden>
+                <button type="button" data-pet-action="wave">挥手</button>
+                <button type="button" data-pet-action="walk">走走</button>
+                <button type="button" data-pet-action="sleep">睡觉</button>
+              </div>
+            </div>
             <figcaption data-reveal="rise">
               <h3>可选的桌面伙伴</h3>
-              <p>拖拽、贴边、眨眼和睡眠，支持 24 种状态。偏好清爽桌面，也有无桌宠版。</p>
+              <p>
+                挥手、走动、贴边和睡眠，软件内支持 24 种状态。喜欢清爽桌面，也可选择无桌宠版。<a
+                  href="screenshots/pet-preview.png"
+                  target="_blank"
+                  rel="noopener"
+                  >查看完整预览</a
+                >
+              </p>
+              <p class="pet-status" role="status" hidden></p>
             </figcaption>
           </figure>
         </div>
@@ -216,19 +239,22 @@
       <section class="section download-section page-width" id="download" aria-labelledby="download-title">
         <div class="section-heading">
           <h2 id="download-title" data-reveal="rise">选择适合的版本</h2>
-          <p data-reveal="rise">当前版本 1.8.3，适用于 Windows 10 / 11 x64。公开安装包不内置订阅。</p>
+          <p data-reveal="rise">
+            当前版本 <span data-release-version>1.8.3</span>，适用于 Windows 10 / 11
+            x64。两种版本都支持小白与专业模式，公开安装包不内置订阅。
+          </p>
         </div>
         <div class="download-fields">
           <article class="download-option" data-reveal="rise">
             <h3>标准版</h3>
-            <p>完整功能，包含桌宠。适合大多数用户。</p>
+            <p>代理、节点、测试与修复功能齐全，附带可互动的桌宠。首次使用可选这一版。</p>
             <a class="button" href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64.exe"
               >下载标准版</a
             >
           </article>
           <article class="download-option no-pet-option" data-reveal="rise">
             <h3>无桌宠版</h3>
-            <p>保留代理、节点、测试与修复，使用独立更新通道。</p>
+            <p>保留相同的网络功能，不包含桌宠素材与窗口。使用独立更新通道。</p>
             <a
               class="button"
               href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64-no.exe"
@@ -247,11 +273,34 @@
             <a href="https://github.com/fishknowsss/YouYu/blob/main/README.md">使用文档</a>
           </p>
         </div>
+        <div class="install-guide" data-reveal="rise">
+          <h3>安装后，三步开始</h3>
+          <ol>
+            <li>
+              <span>安装软件</span>
+              <p>运行安装包，完成管理员授权。</p>
+            </li>
+            <li>
+              <span>登记与订阅</span>
+              <p>完成使用登记，在设置中保存自己的订阅。</p>
+            </li>
+            <li>
+              <span>启动代理</span>
+              <p>日常用小白模式启停，需要时进入专业模式调整。</p>
+            </li>
+          </ol>
+        </div>
       </section>
 
       <section class="section faq page-width" id="faq" aria-labelledby="faq-title">
         <h2 id="faq-title" data-reveal="rise">常见问题</h2>
         <dl>
+          <div data-reveal="rise">
+            <dt>小白模式和专业模式要分别下载吗？</dt>
+            <dd>
+              不用。标准版和无桌宠版都包含这两种模式，区别只在于是否包含桌宠。小白模式保留启停和状态反馈，专业模式提供节点、规则、TUN、测试与诊断等完整功能。
+            </dd>
+          </div>
           <div data-reveal="rise">
             <dt>安装后怎么开始？</dt>
             <dd>
@@ -269,6 +318,13 @@
             <dd>
               支持应用内检查、下载、校验与安装更新，三个通道各自更新。仍在使用 1.7.7 或 1.7.9
               且应用内更新失败时，请手动下载安装包。
+            </dd>
+          </div>
+          <div data-reveal="rise">
+            <dt>安装时遇到 Windows 提示怎么办？</dt>
+            <dd>
+              当前安装包尚未配置生产代码签名。请从本页链接的官方 GitHub Release 下载，并核对发布者仓库和 SHA256
+              清单；确认来源后再按 Windows 提示操作。
             </dd>
           </div>
           <div data-reveal="rise">

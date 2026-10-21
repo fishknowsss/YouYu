@@ -221,6 +221,12 @@ npm run dev:ui
 
 浏览器访问 `http://127.0.0.1:5173`。前端预览使用 `src/renderer/devApi.ts` 中的虚拟节点和测试结果，不连接真实 Mihomo 或流量后台。
 
+### 官网维护
+
+官网位于 `docs/`，保持原生 HTML、CSS 和 JavaScript。版本以根 `package.json` 为准；修改官网样式、脚本或版本后运行 `npm run site:sync`，同步静态下载链接、版本文字与资源缓存标记，`npm run site:check` 可单独检查。现有仓库校验会检查同步结果，无 JavaScript 时下载入口仍可用。纯官网改动随 `main` 推送到 GitHub Pages，不需要重打桌面安装包。
+
+分享封面为 `docs/assets/social-cover.png`（1200×630），可编辑源文件为同目录的 `social-cover.svg`，使用真实软件图标与安全演示截图；修改后按原尺寸重新导出 PNG。桌宠演示直接复用应用的 WebP 帧图，只在可见时短暂播放，支持减少动态效果设置。
+
 ## 验证
 
 按改动范围运行相关测试与检查；应用与依赖变更可使用以下已有命令，正式发布以[发布检查清单](docs/release-packaging.md)为准：
