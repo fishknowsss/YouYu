@@ -73,7 +73,9 @@ jobs:
             exit /b 1
           )
           set "PSModulePath="
-          node node_modules\vitest\vitest.mjs run --exclude tests/main/updateInstallerLauncher.test.ts --exclude tests/main/manageInstalledProcessScript.test.ts
+          node node_modules\vitest\vitest.mjs run --exclude tests/main/updateInstallerLauncher.test.ts --exclude tests/main/manageInstalledProcessScript.test.ts --exclude tests/main/elevatedProcess.test.ts
+          if errorlevel 1 exit /b 1
+          node node_modules\vitest\vitest.mjs run tests/main/elevatedProcess.test.ts
           if errorlevel 1 exit /b 1
           node node_modules\vitest\vitest.mjs run tests/main/manageInstalledProcessScript.test.ts
           if errorlevel 1 exit /b 1
