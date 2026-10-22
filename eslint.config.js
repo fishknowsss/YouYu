@@ -15,6 +15,7 @@ export default tseslint.config(
       '**/.wrangler/**',
       '.cache/**',
       'coverage/**',
+      'docs/demo/**',
       '.playwright-cli/**',
       'output/**',
       'resources/generated/**',

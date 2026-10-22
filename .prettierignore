@@ -12,3 +12,4 @@ output
 src/renderer/assets/pet
 package-lock.json
 *.md
+docs/demo/

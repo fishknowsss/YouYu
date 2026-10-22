@@ -13,7 +13,7 @@
     <link rel="canonical" href="https://fishknowsss.github.io/YouYu/" />
     <link rel="icon" type="image/png" href="assets/youyu-icon.png" />
     <link rel="apple-touch-icon" href="assets/youyu-icon.png" />
-    <link rel="stylesheet" href="assets/site.css?v=e6e3289285" />
+    <link rel="stylesheet" href="assets/site.css?v=b67ac3e155" />
     <link rel="preload" as="image" href="screenshots/home-advanced.png" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="zh_CN" />
@@ -48,7 +48,8 @@
         "author": { "@type": "Organization", "name": "118 Studio" }
       }
     </script>
-    <script src="assets/site.js?v=2aa59a5378" defer></script>
+    <script src="assets/site.js?v=67e595fd9a" defer></script>
+    <script type="module" src="assets/showcase.js?v=83249e9fc5"></script>
   </head>
   <body>
     <a class="skip-link" href="#top">跳到正文</a>
@@ -90,12 +91,16 @@
           </p>
           <p class="subscription-note">公开安装包不内置订阅，请使用自己的订阅。</p>
         </div>
-        <figure class="hero-preview">
+        <figure class="hero-preview" data-pet-src="demo/assets/pet-CB7lY9nH.js">
           <div class="preview-toolbar" hidden>
             <div class="mode-switch" role="group" aria-label="切换界面预览" data-active-mode="advanced">
               <button type="button" data-mode="easy" aria-pressed="false">小白模式</button>
               <button type="button" data-mode="advanced" aria-pressed="true">专业模式</button>
             </div>
+            <button class="text-action" id="demo-start" data-demo-src="demo/index.html?v=8e8d1d0027" type="button">
+              试用界面
+            </button>
+            <button class="text-action" id="demo-exit" type="button" hidden>退出演示</button>
           </div>
           <div id="hero-preview-stage" class="preview-stage">
             <img
@@ -119,6 +124,50 @@
           <h2 id="features-title" data-reveal="rise">简单上手，也能细致调整</h2>
           <p data-reveal="rise">两种模式随时切换，按自己的习惯使用。</p>
         </div>
+        <details class="exploded-showcase">
+          <summary>展开界面</summary>
+          <div class="exploded-layout">
+            <div class="exploded-scene" aria-label="专业模式功能分层示意">
+              <div class="exploded-base" aria-hidden="true"></div>
+              <button
+                type="button"
+                class="exploded-layer layer-nav"
+                data-layer="nav"
+                aria-label="导航与模式"
+                aria-pressed="true"
+              >
+                <img src="screenshots/home-advanced.png" width="900" height="600" loading="lazy" alt="" />
+              </button>
+              <button
+                type="button"
+                class="exploded-layer layer-control"
+                data-layer="control"
+                aria-label="节点与代理控制"
+                aria-pressed="false"
+              >
+                <img src="screenshots/home-advanced.png" width="900" height="600" loading="lazy" alt="" />
+              </button>
+              <button
+                type="button"
+                class="exploded-layer layer-data"
+                data-layer="data"
+                aria-label="流量与诊断"
+                aria-pressed="false"
+              >
+                <img src="screenshots/home-advanced.png" width="900" height="600" loading="lazy" alt="" />
+              </button>
+            </div>
+            <div class="exploded-copy">
+              <h3>从连接到查看状态</h3>
+              <div class="layer-choices" role="group" aria-label="选择功能分层">
+                <button type="button" data-layer="nav" aria-pressed="true">导航与模式</button>
+                <button type="button" data-layer="control" aria-pressed="false">节点与代理</button>
+                <button type="button" data-layer="data" aria-pressed="false">流量与诊断</button>
+              </div>
+              <p id="layer-description" aria-live="polite">小白模式保留日常启停；专业模式提供节点、测试和设置入口。</p>
+            </div>
+          </div>
+        </details>
         <div class="mode-overview">
           <article data-reveal="rise">
             <h3>小白模式</h3>
@@ -196,7 +245,12 @@
             </figcaption>
           </figure>
           <figure class="pet-showcase">
-            <div class="pet-stage" data-reveal="picture" aria-label="桌宠动作演示">
+            <div
+              class="pet-stage"
+              data-sprite-src="demo/assets/main-spritesheet-BsdxAAmx.webp"
+              data-reveal="picture"
+              aria-label="桌宠动作演示"
+            >
               <button class="pet-character" type="button" aria-label="让 YouYu 桌宠挥手" disabled>
                 <span class="pet-sprite" aria-hidden="true"
                   ><img class="pet-poster" src="assets/youyu-icon.png" width="160" height="160" alt="" loading="lazy"
@@ -211,6 +265,7 @@
             <figcaption data-reveal="rise">
               <h3>可选的桌面伙伴</h3>
               <p>桌宠会挥手、走动、贴边和睡觉，软件内支持 24 种状态。也可以下载无桌宠版。</p>
+              <button class="text-action" type="button" data-release-pet hidden>放出桌宠</button>
               <p class="pet-status" role="status" hidden></p>
             </figcaption>
           </figure>

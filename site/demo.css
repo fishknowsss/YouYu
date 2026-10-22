@@ -1,0 +1,333 @@
+html,
+body,
+#root {
+  min-width: 0;
+  min-height: 0;
+}
+body {
+  -webkit-app-region: no-drag;
+}
+.demo-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.demo-bar {
+  height: 30px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  background: var(--surface-raised);
+}
+.demo-root .app-shell {
+  flex: 1;
+  min-height: 0;
+  padding-top: 0;
+  height: auto;
+  --sidebar-width: 104px;
+  --sidebar-block-padding: 12px;
+}
+.demo-root .sidebar,
+.demo-root .main-surface {
+  height: 100%;
+}
+.demo-root .sidebar {
+  grid-template-rows: 48px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px 8px;
+}
+.demo-root .brand-lockup {
+  gap: 4px;
+}
+.demo-root .brand-mark-sm {
+  width: 28px;
+  height: 28px;
+}
+.demo-root .brand-text span {
+  font-size: 14px;
+}
+.demo-root .brand-text strong {
+  font-size: 11px;
+}
+.demo-root .nav-list {
+  gap: 4px;
+}
+.demo-root .nav-list button {
+  padding: 0 10px;
+}
+.demo-root .main-surface {
+  padding: 12px;
+  overflow: auto;
+}
+.demo-root .workspace {
+  min-height: 100%;
+  height: auto;
+}
+.demo-root .advanced-workspace {
+  display: flex;
+  flex-direction: column;
+}
+.demo-root .workspace-header {
+  flex: none;
+  gap: 8px;
+}
+.demo-root .workspace-header h1 {
+  font-size: 21px;
+}
+.demo-root .workspace-header p {
+  font-size: 12px;
+}
+.demo-root .workspace-header-actions {
+  gap: 6px;
+}
+.demo-root .advanced-board {
+  flex: 1;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto minmax(190px, 1fr);
+  gap: 8px;
+}
+.demo-root .connection-card {
+  grid-column: 1 / -1;
+  grid-template-columns: 1fr;
+  padding: 12px;
+  gap: 10px;
+}
+.demo-root .connection-identity h2 {
+  font-size: 21px;
+}
+.demo-root .connection-actions {
+  grid-template-columns: minmax(0, 1fr) 90px 100px;
+  gap: 6px;
+}
+.demo-root .mode-panel {
+  grid-column: 1 / -1;
+}
+.demo-root .node-mode-toggle {
+  height: 40px;
+}
+.demo-root .runtime-panel,
+.demo-root .diagnostics-panel {
+  min-height: 190px;
+}
+.demo-root .dashboard-panel {
+  padding: 10px;
+}
+.demo-root .runtime-metric-grid {
+  gap: 6px;
+}
+.demo-root .runtime-metric {
+  padding: 6px;
+}
+.demo-root .runtime-metric strong {
+  font-size: 16px;
+}
+.demo-root .runtime-metric small {
+  font-size: 11px;
+}
+.demo-root .diagnostics-log {
+  max-height: 160px;
+}
+.demo-root .easy-workspace {
+  display: grid;
+  height: 100%;
+}
+.demo-root .easy-workspace .launch-panel {
+  transform: none;
+}
+.demo-root .easy-shell .main-surface {
+  padding: 18px;
+}
+.demo-root .version-chip {
+  margin-bottom: 0;
+  width: 80px;
+  font-size: 12px;
+  pointer-events: none;
+}
+.demo-root .advanced-unlock-hotspot {
+  display: none;
+}
+.demo-root .list-panel {
+  min-height: 180px;
+}
+.demo-root .fill-space {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.demo-root .list-panel {
+  flex: 1;
+}
+.demo-root .node {
+  min-height: 54px;
+}
+.demo-setting-panel {
+  padding: 18px;
+  display: grid;
+  gap: 24px;
+}
+.demo-setting-panel label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.demo-setting-panel label span span {
+  display: block;
+  margin-top: 8px;
+  font-size: 14px;
+}
+.demo-setting-panel input {
+  width: 28px;
+  height: 44px;
+  flex: none;
+  accent-color: var(--accent);
+}
+.demo-setting-panel p {
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+.demo-pet-release {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+.demo-pet-panel {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+.demo-pet-panel h1 {
+  margin: 0;
+  font-size: 22px;
+}
+.demo-pet-panel > div {
+  display: flex;
+  gap: 8px;
+}
+.demo-pet-panel button {
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 8px;
+}
+.demo-loading {
+  padding: 32px;
+}
+@media (max-width: 460px) {
+  .demo-bar {
+    height: 42px;
+    font-size: 12px;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding-block: 3px;
+  }
+  .demo-root .app-shell {
+    display: flex;
+    flex-direction: column;
+  }
+  .demo-root .sidebar {
+    height: auto;
+    display: block;
+    padding: 6px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .demo-root .brand-lockup,
+  .demo-root .version-chip {
+    display: none;
+  }
+  .demo-root .nav-list {
+    display: flex;
+    gap: 2px;
+  }
+  .demo-root .nav-list button {
+    min-height: 44px;
+    height: auto;
+    padding: 0 6px;
+    font-size: 13px;
+    text-align: center;
+  }
+  .demo-root .main-surface {
+    flex: 1;
+    min-height: 0;
+    padding: 10px;
+  }
+  .demo-root button {
+    min-height: 44px;
+  }
+  .demo-root .workspace-header {
+    flex-wrap: wrap;
+    height: auto;
+  }
+  .demo-root .advanced-board {
+    display: flex;
+    flex-direction: column;
+  }
+  .demo-root .connection-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+  .demo-root .connection-health {
+    grid-column: 1 / -1;
+  }
+  .demo-root .runtime-panel,
+  .demo-root .diagnostics-panel {
+    display: none;
+  }
+  .demo-root .easy-power-button {
+    width: 160px;
+    height: 160px;
+  }
+  .demo-root .startup-mark {
+    width: 140px;
+    height: 140px;
+  }
+  .demo-root .brand-mark-lg {
+    width: 120px;
+    height: 120px;
+  }
+  .demo-root .node-main {
+    padding-inline: 8px;
+  }
+  .demo-root .node-name {
+    font-size: 14px;
+  }
+  .demo-root .node-current-mark {
+    display: none;
+  }
+  .demo-root .route-test-head-row {
+    display: none;
+  }
+  .demo-root .route-test-row {
+    grid-template-columns: minmax(70px, 1fr) 60px 48px 44px;
+    min-height: 48px;
+  }
+  .demo-root .route-test-row > :nth-child(2),
+  .demo-root .route-test-row > :nth-child(4),
+  .demo-root .route-test-row > :nth-child(5),
+  .demo-root .route-test-row > :nth-child(7) {
+    display: none;
+  }
+  .demo-root .test-detail-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

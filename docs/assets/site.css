@@ -304,7 +304,158 @@ h1 span {
 .hero-preview figcaption {
   margin-top: 12px;
   color: var(--muted);
-  min-height: 1.7em;
+  min-height: 3.4em;
+}
+.text-action {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--field);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color 160ms ease;
+}
+.text-action:hover {
+  color: var(--accent-hover);
+  background: #e5d9f3;
+}
+.text-action:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+.preview-stage.is-interactive > img {
+  visibility: hidden;
+}
+.demo-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
+  transform-origin: top left;
+}
+#pet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+.pet-showcase .text-action {
+  margin-top: 14px;
+}
+.exploded-showcase {
+  margin-bottom: 28px;
+}
+.exploded-showcase > summary {
+  display: list-item;
+  width: fit-content;
+  padding: 10px 16px;
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--field);
+  cursor: pointer;
+  min-height: 44px;
+  font-weight: 600;
+}
+.exploded-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 48px;
+  align-items: center;
+  padding: 40px 32px;
+  margin-top: 24px;
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.exploded-scene {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  perspective: 1000px;
+  margin: 20px;
+}
+.exploded-base {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  border-radius: 8px;
+}
+.exploded-layer {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  transform: var(--layer-transform);
+  transition:
+    transform 400ms var(--ease-out),
+    opacity 180ms ease;
+}
+.exploded-layer img {
+  width: 100%;
+  height: 100%;
+}
+.layer-nav {
+  clip-path: inset(0 82% 0 0 round 6px);
+  --layer-transform: translate3d(-20px, -12px, 0) rotateY(-7deg);
+}
+.layer-control {
+  clip-path: inset(0 0 62% 18% round 6px);
+  --layer-transform: translate3d(12px, -24px, 26px) rotateY(-7deg);
+}
+.layer-data {
+  clip-path: inset(40% 0 0 18% round 6px);
+  --layer-transform: translate3d(22px, 22px, 48px) rotateY(-7deg);
+}
+.exploded-layer[aria-pressed='false'] {
+  opacity: 0.8;
+}
+.exploded-layer:focus-visible {
+  filter: drop-shadow(0 0 2px var(--accent));
+}
+.layer-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block: 20px;
+}
+.layer-choices button {
+  padding: 8px 12px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+}
+.layer-choices button[aria-pressed='true'] {
+  background: var(--field);
+  color: var(--accent);
+}
+.exploded-copy p {
+  min-height: 5.1em;
+  color: var(--muted);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .exploded-showcase[open] .exploded-layer {
+    animation: unfold-layer 450ms var(--ease-out) both;
+  }
+  .exploded-showcase[open] .layer-control {
+    animation-delay: 40ms;
+  }
+  .exploded-showcase[open] .layer-data {
+    animation-delay: 80ms;
+  }
+  @keyframes unfold-layer {
+    from {
+      transform: none;
+    }
+    to {
+      transform: var(--layer-transform);
+    }
+  }
 }
 .section {
   margin-top: 88px;
@@ -588,11 +739,21 @@ h1 span {
     padding-block: 24px;
   }
   .hero-preview {
-    width: min(100%, max(360px, calc(150svh - 360px)));
+    width: min(100%, max(360px, calc(150svh - 405px)));
     justify-self: end;
   }
 }
 @media (max-width: 900px) {
+  .exploded-layout {
+    grid-template-columns: 1fr;
+    gap: 28px;
+    padding: 28px;
+  }
+  .exploded-scene {
+    max-width: 560px;
+    width: calc(100% - 40px);
+    margin-inline: auto;
+  }
   .hero {
     grid-template-columns: 1fr;
     padding-block: 36px 12px;
@@ -681,6 +842,27 @@ h1 span {
   }
   .hero-preview figcaption {
     min-height: 3.4em;
+  }
+  .preview-stage.is-interactive {
+    aspect-ratio: auto;
+    height: 420px;
+  }
+  .preview-toolbar .text-action {
+    padding-inline: 10px;
+    font-size: 14px;
+  }
+  .exploded-layout {
+    padding: 24px 12px;
+  }
+  .exploded-copy {
+    padding-inline: 8px;
+  }
+  .layer-choices {
+    gap: 4px;
+  }
+  .layer-choices button {
+    padding-inline: 8px;
+    font-size: 14px;
   }
   .preview-toolbar {
     flex-wrap: wrap;

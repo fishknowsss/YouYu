@@ -201,7 +201,7 @@ release/YouYu-<version>-x64-no.exe
 
 打包前先确认 `package.json` 的 `version`。
 
-版本变更后运行 `npm run site:sync`，将官网版本文字、三个通道下载链接与结构化数据同步到同一版本；`validate:repo` 会检查同步结果。
+版本变更后运行 `npm run site:build`，更新官网交互演示，并将官网版本文字、公开下载链接与结构化数据同步到同一版本；`validate:repo` 会检查同步结果。
 
 - 小修小改递增 patch，例如 `0.7.7` -> `0.7.8`。
 - 较大功能或行为变化递增 minor，例如 `0.7.x` -> `0.8.0`。

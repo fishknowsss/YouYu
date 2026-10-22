@@ -45,6 +45,7 @@ async function showMode(name, animate) {
   if (name === currentMode) {
     stage.removeAttribute('aria-busy');
     caption.textContent = modes[name].caption;
+    document.dispatchEvent(new CustomEvent('youyu:preview-mode', { detail: { mode: name } }));
     return;
   }
   const mode = modes[name];
@@ -74,6 +75,7 @@ async function showMode(name, animate) {
   switcher.dataset.instant = String(!animate || reducedMotion.matches);
   switcher.dataset.activeMode = name;
   controls.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.mode === name)));
+  document.dispatchEvent(new CustomEvent('youyu:preview-mode', { detail: { mode: name } }));
   stage.removeAttribute('aria-busy');
   if (!animate || reducedMotion.matches || document.hidden) return;
   stage.append(outgoing);
@@ -135,6 +137,7 @@ if ('IntersectionObserver' in window) {
 }
 
 const petStage = document.querySelector('.pet-stage');
+const petAtlas = petStage.dataset.spriteSrc;
 const pet = document.querySelector('.pet-character');
 const sprite = document.querySelector('.pet-sprite');
 const petControls = [...document.querySelectorAll('[data-pet-action]')];
@@ -164,7 +167,7 @@ async function playPet(name, automatic = false, animate = true) {
   stopPet();
   const request = petRequest;
   try {
-    await loadImage('assets/pet-sprites.webp');
+    await loadImage(petAtlas);
   } catch {
     petStatus.hidden = false;
     petStatus.textContent = '桌宠动画暂时无法加载，请稍后重试。';
@@ -173,7 +176,7 @@ async function playPet(name, automatic = false, animate = true) {
   if (request !== petRequest || !petVisible || document.hidden) return;
   petLoaded = true;
   petStage.dataset.loaded = 'true';
-  sprite.style.backgroundImage = 'url("assets/pet-sprites.webp")';
+  sprite.style.backgroundImage = `url("${petAtlas}")`;
   petStatus.hidden = true;
   const action = petActions[name];
   petControls.forEach((button) => button.classList.toggle('is-active', button.dataset.petAction === name));

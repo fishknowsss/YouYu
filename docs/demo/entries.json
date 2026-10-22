@@ -1,0 +1,67 @@
+{
+  "../src/renderer/assets/pet/youyu/extra-spritesheet.webp": {
+    "file": "assets/extra-spritesheet-BsDP_gbH.webp",
+    "src": "../src/renderer/assets/pet/youyu/extra-spritesheet.webp"
+  },
+  "../src/renderer/assets/pet/youyu/main-spritesheet.webp": {
+    "file": "assets/main-spritesheet-BsdxAAmx.webp",
+    "src": "../src/renderer/assets/pet/youyu/main-spritesheet.webp"
+  },
+  "../src/renderer/assets/youyu-icon.png": {
+    "file": "assets/youyu-icon-Bj1kyXHr.png",
+    "src": "../src/renderer/assets/youyu-icon.png"
+  },
+  "_pet-sprite-DyaKuwet.js": {
+    "file": "assets/pet-sprite-DyaKuwet.js",
+    "name": "pet-sprite",
+    "imports": [
+      "_react-Ccx6zi3W.js"
+    ],
+    "assets": [
+      "assets/main-spritesheet-BsdxAAmx.webp",
+      "assets/extra-spritesheet-BsDP_gbH.webp"
+    ]
+  },
+  "_react-Ccx6zi3W.js": {
+    "file": "assets/react-Ccx6zi3W.js",
+    "name": "react"
+  },
+  "index.html": {
+    "file": "assets/demo-CTMKwlmV.js",
+    "name": "demo",
+    "src": "index.html",
+    "isEntry": true,
+    "imports": [
+      "_react-Ccx6zi3W.js"
+    ],
+    "dynamicImports": [
+      "pet-panel.tsx"
+    ],
+    "css": [
+      "assets/demo-CmYjph3e.css"
+    ],
+    "assets": [
+      "assets/youyu-icon-Bj1kyXHr.png"
+    ]
+  },
+  "pet-panel.tsx": {
+    "file": "assets/pet-panel-Dd6_JHgH.js",
+    "name": "pet-panel",
+    "src": "pet-panel.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_react-Ccx6zi3W.js",
+      "_pet-sprite-DyaKuwet.js"
+    ]
+  },
+  "pet.tsx": {
+    "file": "assets/pet-CB7lY9nH.js",
+    "name": "pet",
+    "src": "pet.tsx",
+    "isEntry": true,
+    "imports": [
+      "_react-Ccx6zi3W.js",
+      "_pet-sprite-DyaKuwet.js"
+    ]
+  }
+}
