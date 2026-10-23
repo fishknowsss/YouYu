@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { renderSitePages } from './site-pages.mjs';
 
 const root = new URL('../', import.meta.url);
 const { version } = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
@@ -18,7 +19,7 @@ updated = updated
     `/releases/download/v${version}/YouYu-${version}-x64`
   )
   .replace(/\/releases\/tag\/v\d+\.\d+\.\d+/g, `/releases/tag/v${version}`);
-for (const asset of ['site.css', 'site.js', 'showcase.js']) {
+for (const asset of ['site.css', 'site.js', 'showcase.js', 'pages.js']) {
   const content = (await readFile(new URL(`docs/assets/${asset}`, root), 'utf8')).replace(/\r\n/g, '\n');
   const digest = createHash('sha256').update(content).digest('hex').slice(0, 10);
   const escaped = asset.replace('.', '\\.');
@@ -35,8 +36,21 @@ updated = updated
   .replace(/data-sprite-src="[^"]+"/, `data-sprite-src="demo/${petAtlas}"`)
   .replace(/data-pet-src="[^"]+"/, `data-pet-src="demo/${petEntry}"`)
   .replace(/data-demo-src="[^"]+"/, `data-demo-src="demo/index.html?v=${demoDigest}"`);
+const pages = await renderSitePages(updated, version);
+let pagesStale = false;
+for (const [file, content] of pages) {
+  const path = new URL(`docs/${file}`, root);
+  const existing = await readFile(path, 'utf8').catch((error) => {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  });
+  if (existing !== content) {
+    pagesStale = true;
+    if (!process.argv.includes('--check')) await writeFile(path, content);
+  }
+}
 if (process.argv.includes('--check')) {
-  if (updated !== original) {
+  if (updated !== original || pagesStale) {
     console.error('Website release information or asset revisions are stale. Run npm run site:sync.');
     process.exitCode = 1;
   } else console.log(`Website release v${version} and asset revisions are current.`);

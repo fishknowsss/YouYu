@@ -11,57 +11,67 @@
     "file": "assets/youyu-icon-Bj1kyXHr.png",
     "src": "../src/renderer/assets/youyu-icon.png"
   },
-  "_pet-sprite-DyaKuwet.js": {
-    "file": "assets/pet-sprite-DyaKuwet.js",
+  "../src/renderer/pages/PetPreviewPage.tsx": {
+    "file": "assets/PetPreviewPage-4X-0UEZN.js",
+    "name": "PetPreviewPage",
+    "src": "../src/renderer/pages/PetPreviewPage.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_react-CMY55oh2.js",
+      "_pet-sprite--79Mbtcy.js",
+      "_index-DCyqUwFT.js",
+      "_devApi-9mFUdplA.js"
+    ]
+  },
+  "_devApi-9mFUdplA.js": {
+    "file": "assets/devApi-9mFUdplA.js",
+    "name": "devApi"
+  },
+  "_index-CDjrf-bA.css": {
+    "file": "assets/index-CDjrf-bA.css",
+    "src": "_index-CDjrf-bA.css"
+  },
+  "_index-DCyqUwFT.js": {
+    "file": "assets/index-DCyqUwFT.js",
+    "name": "index",
+    "imports": [
+      "_react-CMY55oh2.js",
+      "_devApi-9mFUdplA.js"
+    ],
+    "dynamicImports": [
+      "../src/renderer/pages/PetPreviewPage.tsx"
+    ],
+    "css": [
+      "assets/index-CDjrf-bA.css"
+    ],
+    "assets": [
+      "assets/youyu-icon-Bj1kyXHr.png"
+    ]
+  },
+  "_pet-sprite--79Mbtcy.js": {
+    "file": "assets/pet-sprite--79Mbtcy.js",
     "name": "pet-sprite",
     "imports": [
-      "_react-Ccx6zi3W.js"
+      "_react-CMY55oh2.js"
     ],
     "assets": [
       "assets/main-spritesheet-BsdxAAmx.webp",
       "assets/extra-spritesheet-BsDP_gbH.webp"
     ]
   },
-  "_react-Ccx6zi3W.js": {
-    "file": "assets/react-Ccx6zi3W.js",
+  "_react-CMY55oh2.js": {
+    "file": "assets/react-CMY55oh2.js",
     "name": "react"
   },
-  "index.html": {
-    "file": "assets/demo-CTMKwlmV.js",
-    "name": "demo",
-    "src": "index.html",
-    "isEntry": true,
-    "imports": [
-      "_react-Ccx6zi3W.js"
-    ],
-    "dynamicImports": [
-      "pet-panel.tsx"
-    ],
-    "css": [
-      "assets/demo-CmYjph3e.css"
-    ],
-    "assets": [
-      "assets/youyu-icon-Bj1kyXHr.png"
-    ]
-  },
-  "pet-panel.tsx": {
-    "file": "assets/pet-panel-Dd6_JHgH.js",
-    "name": "pet-panel",
-    "src": "pet-panel.tsx",
-    "isDynamicEntry": true,
-    "imports": [
-      "_react-Ccx6zi3W.js",
-      "_pet-sprite-DyaKuwet.js"
-    ]
-  },
   "pet.tsx": {
-    "file": "assets/pet-CB7lY9nH.js",
+    "file": "assets/pet-BbdvoT0E.js",
     "name": "pet",
     "src": "pet.tsx",
     "isEntry": true,
     "imports": [
-      "_react-Ccx6zi3W.js",
-      "_pet-sprite-DyaKuwet.js"
+      "_react-CMY55oh2.js",
+      "_pet-sprite--79Mbtcy.js",
+      "_devApi-9mFUdplA.js"
     ]
   }
 }

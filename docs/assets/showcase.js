@@ -1,48 +1,126 @@
 const preview = document.querySelector('.hero-preview');
-const stage = document.querySelector('#hero-preview-stage');
+const stage = document.querySelector('#demo-stage');
 const start = document.querySelector('#demo-start');
 const exit = document.querySelector('#demo-exit');
-const caption = document.querySelector('#preview-caption');
-const modeButtons = [...document.querySelectorAll('[data-mode]')];
-const descriptions = {
-  easy: '日常连接和停止代理，用一个按钮就能完成。',
-  advanced: '选择节点、调整代理模式，同时查看流量和连接状态。',
-  connect: '一键连接会完成内核启动和代理设置，状态随操作更新。',
-  stop: '停止后退出代理状态，保留你的节点和模式选择。',
-  nodes: '选一个节点试试，当前选择也会同步回首页。',
-  select: '手动选择后，当前节点与延迟会同步回首页。',
-  speed: '先查看延迟，再决定用哪个节点。这里显示固定的演示结果。',
-  auto: '自动选择会按策略挑选节点，也可以随时改为手动选择。',
-  rule: '规则模式按访问目标分流，适合日常使用。',
-  global: '全局模式让代理流量统一经过选定节点。',
-  direct: '直连模式让流量直接访问目标。',
-  test: '按服务检查连接结果，查看耗时、出口信息和实际策略链。',
-  settings: '在这里尝试 TUN 开关；安装版还提供订阅、修复和诊断。',
-  tun: 'TUN 可以接管部分不遵循系统代理的应用流量。此处只切换演示状态。',
-  repair: '安装版的网络修复会清理代理残留等设置。此处演示停止连接后的状态。',
-  subscription: '更新订阅后，节点列表会按订阅内容刷新。',
-  petPreview: '先试试桌宠的动作，也可以把它放到网页里拖动。'
+const image = document.querySelector('#tour-image');
+const title = document.querySelector('#tour-title');
+const description = document.querySelector('#tour-description');
+const prompt = document.querySelector('#tour-prompt');
+const scenes = {
+  easy: [
+    '日常，只需一个按钮',
+    '打开后连接，用完后停止。小白模式把日常需要的操作留在首页。',
+    '点击中央按钮，体验连接和停止。',
+    'home-easy.png',
+    'easy',
+    'home'
+  ],
+  advanced: [
+    '需要调整时，看得更清楚',
+    '当前节点、延迟、代理模式、流量和诊断，都在同一个控制台里。',
+    '试试手动选点，或切换规则、全局与直连。',
+    'home-advanced.png',
+    'advanced',
+    'home'
+  ],
+  nodes: [
+    '先看延迟，再选节点',
+    '单独测速、全部测速、手动切换或自动选择，按当前网络情况决定。',
+    '选择一个节点，再返回首页查看变化。',
+    'nodes.png',
+    'advanced',
+    'nodes'
+  ],
+  test: [
+    '哪里连不上，逐项看结果',
+    '常用服务集中测试，查看耗时、出口和实际策略链，排查更有依据。',
+    '点击测试，展开一项结果看看。',
+    'connectivity-test.png',
+    'advanced',
+    'test'
+  ],
+  settings: [
+    '让设置适合你的用法',
+    '订阅、规则、TUN 与局域网访问集中管理；网络修复、诊断和更新也在这里。',
+    '调整设置后保存，或试试网络修复。',
+    'settings.png',
+    'advanced',
+    'settings'
+  ]
 };
+const operations = {
+  connect: ['连接已启动', '当前节点、流量和连接状态会随启动结果更新。'],
+  stop: ['代理已停止', '日常用完即可停止；节点与模式选择会保留。'],
+  select: ['当前节点已切换', '首页会同步所选节点与延迟，运行数据也可以在那里查看。'],
+  speed: ['看看节点的延迟', '这里使用固定示例结果。安装版会通过实际网络测速。'],
+  auto: ['交给自动选择', '可以按策略自动选点，也可以随时回到手动选择。'],
+  rule: ['按访问目标分流', '规则模式根据规则决定代理或直连，适合日常使用。'],
+  global: ['统一使用代理', '全局模式让流量经过选定的代理节点。'],
+  direct: ['直接访问目标', '直连模式不经过代理节点。'],
+  repair: ['清理网络设置', '安装版会停止代理并清理相关残留，帮助恢复网络。'],
+  subscription: ['刷新订阅与节点', '安装版会根据订阅内容更新节点，演示使用示例节点。'],
+  diagnostics: ['导出诊断，方便排查', '安装版会保存脱敏诊断文件；网页只演示操作反馈。'],
+  update: ['在软件内检查更新', '安装版支持检查和安装更新，网页只演示检查结果。'],
+  petPreview: ['看看它的每一种状态', '这里和软件共用 24 种状态的预览。向下到桌宠展示区，还可以请它出来。']
+};
+let current = 'easy';
 let frame;
 let ready = false;
 let timeout;
-let petModule;
-let disposePet;
-let petLoading = false;
-let releaseButton;
-const selectedMode = () => document.querySelector('[data-mode][aria-pressed="true"]').dataset.mode;
+let running = true;
+function describe(headline, copy, next = '') {
+  const changed = title.textContent !== headline;
+  title.textContent = headline;
+  description.textContent = copy;
+  prompt.textContent = next;
+  if (changed && !matchMedia('(prefers-reduced-motion: reduce)').matches && !document.hidden) {
+    document
+      .querySelector('.tour-description')
+      .getAnimations()
+      .forEach((animation) => animation.cancel());
+    document.querySelector('.tour-description').animate(
+      [
+        { opacity: 0.4, transform: 'translateY(4px)' },
+        { opacity: 1, transform: 'none' }
+      ],
+      { duration: 220, easing: 'cubic-bezier(.22,1,.36,1)' }
+    );
+  }
+}
+function markScene(key) {
+  current = key;
+  document
+    .querySelectorAll('[data-scene]')
+    .forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.scene === key)));
+  const scene = scenes[key];
+  image.src = `screenshots/${scene[3]}`;
+  image.alt = `YouYu ${document.querySelector(`[data-scene="${key}"]`).textContent}实际界面`;
+  describe(...scene.slice(0, 3));
+}
 function fitDemo() {
   if (!frame) return;
-  const mobile = matchMedia('(max-width: 600px)').matches;
-  const scale = stage.clientWidth / 900;
-  frame.style.width = mobile ? '100%' : '900px';
-  frame.style.height = mobile ? '100%' : '600px';
-  frame.style.transform = mobile ? 'none' : `scale(${scale})`;
+  frame.style.transform = `scale(${stage.clientWidth / 900})`;
 }
 new ResizeObserver(fitDemo).observe(stage);
-function sendMode() {
-  frame?.contentWindow.postMessage({ source: 'youyu-site', type: 'mode', mode: selectedMode() }, location.origin);
+function selectScene(key) {
+  markScene(key);
+  if (ready)
+    frame.contentWindow.postMessage(
+      { source: 'youyu-site', type: 'scene', mode: scenes[key][4], page: scenes[key][5] },
+      location.origin
+    );
 }
+document.querySelectorAll('[data-scene]').forEach((button) => {
+  button.addEventListener('click', () => selectScene(button.dataset.scene));
+});
+document
+  .querySelectorAll('[data-open-scene]')
+  .forEach((link) => link.addEventListener('click', () => selectScene(link.dataset.openScene)));
+document.querySelector('.tour-scenes').hidden = false;
+start.hidden = false;
+document.querySelector('.preview-link').addEventListener('click', () => {
+  selectScene(document.querySelector('[data-mode][aria-pressed="true"]').dataset.mode);
+});
 function closeDemo() {
   clearTimeout(timeout);
   frame?.remove();
@@ -52,9 +130,8 @@ function closeDemo() {
   stage.removeAttribute('aria-busy');
   start.hidden = false;
   start.disabled = false;
-  start.textContent = '试用界面';
+  start.textContent = '开始体验';
   exit.hidden = true;
-  modeButtons.find((button) => button.dataset.mode === selectedMode()).click();
 }
 start.addEventListener('click', () => {
   start.disabled = true;
@@ -65,7 +142,8 @@ start.addEventListener('click', () => {
   frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
   frame.referrerPolicy = 'no-referrer';
   const url = new URL(start.dataset.demoSrc, location.href);
-  url.searchParams.set('mode', selectedMode());
+  url.searchParams.set('mode', scenes[current][4]);
+  url.searchParams.set('page', scenes[current][5]);
   frame.src = url.href;
   frame.className = 'demo-frame';
   frame.hidden = true;
@@ -74,17 +152,13 @@ start.addEventListener('click', () => {
   timeout = setTimeout(() => {
     if (ready) return;
     closeDemo();
-    caption.textContent = '演示暂时无法加载，可稍后再试。';
+    describe('演示暂时无法加载', '可以稍后重试，也可以继续浏览界面与下载。');
   }, 12000);
 });
 exit.addEventListener('click', () => {
   closeDemo();
-  caption.textContent = descriptions[selectedMode()];
+  markScene(current);
   start.focus();
-});
-document.addEventListener('youyu:preview-mode', (event) => {
-  if (frame && ready)
-    frame.contentWindow.postMessage({ source: 'youyu-site', type: 'mode', mode: event.detail.mode }, location.origin);
 });
 window.addEventListener('message', (event) => {
   if (
@@ -92,10 +166,15 @@ window.addEventListener('message', (event) => {
     event.source !== frame.contentWindow ||
     event.origin !== location.origin ||
     event.data?.source !== 'youyu-demo' ||
-    event.data.type !== 'feature'
+    !['feature', 'runtime'].includes(event.data.type)
   )
     return;
-  const { key, mode } = event.data;
+  if (event.data.type === 'runtime') {
+    running = event.data.running;
+    disposePet?.setRunning(running);
+    return;
+  }
+  const { key } = event.data;
   if (key === 'ready') {
     ready = true;
     clearTimeout(timeout);
@@ -104,85 +183,66 @@ window.addEventListener('message', (event) => {
     stage.removeAttribute('aria-busy');
     start.hidden = true;
     exit.hidden = false;
-    sendMode();
-  } else if (key === 'release-pet') {
-    void releasePet(exit);
-  } else if (Object.hasOwn(descriptions, key)) {
-    caption.textContent = descriptions[key];
-    if (mode === 'easy' || mode === 'advanced') {
-      document.querySelector('.mode-switch').dataset.activeMode = mode;
-      modeButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.mode === mode)));
-    }
-  }
+    // A scene may have been selected while the bundle was loading.
+    selectScene(current);
+  } else if (Object.hasOwn(scenes, key)) markScene(key);
+  else if (Object.hasOwn(operations, key)) describe(...operations[key]);
 });
-async function releasePet(button) {
-  if (disposePet || petLoading) return;
+
+let petModule;
+let disposePet;
+let petLoading = false;
+const petButton = document.querySelector('[data-release-pet]');
+const petStatus = document.querySelector('.pet-status');
+function returnPet() {
+  disposePet?.();
+  disposePet = undefined;
+  petButton.textContent = '请它出来';
+  petButton.setAttribute('aria-pressed', 'false');
+  petButton.focus({ preventScroll: true });
+  petStatus.textContent = '桌宠已回到展示区。';
+  petStatus.hidden = false;
+  document.querySelector('.pet-stage').classList.remove('pet-away');
+}
+async function releasePet() {
+  if (disposePet) {
+    returnPet();
+    return;
+  }
+  if (petLoading) return;
   petLoading = true;
-  const rect = (button.closest('.pet-showcase')?.querySelector('.pet-stage') ?? preview).getBoundingClientRect();
-  releaseButton = button;
-  button.disabled = true;
+  petButton.disabled = true;
   let host;
   try {
     petModule ??= await import(new URL(preview.dataset.petSrc, location.href).href);
+    const rect = document.querySelector('.pet-character').getBoundingClientRect();
     host = document.createElement('div');
     host.id = 'pet-layer';
     document.body.append(host);
     disposePet = petModule.mountPet(host, {
-      origin: {
-        x: Math.min(innerWidth - 124, rect.right - 100),
-        y: Math.max(100, Math.min(innerHeight - 178, rect.bottom - 120))
-      },
-      onReturn: () => {
-        disposePet();
-        disposePet = undefined;
-        releaseButton.disabled = false;
-        (releaseButton.hidden ? start : releaseButton).focus({ preventScroll: true });
-        caption.textContent = '桌宠已收回，可以继续试用软件界面。';
-        if (releaseButton.matches('[data-release-pet]')) {
-          document.querySelector('.pet-status').hidden = false;
-          document.querySelector('.pet-status').textContent = '桌宠已收回。';
-        }
+      running,
+      origin: { x: rect.left - 12, y: rect.top - 12 },
+      onReturn: returnPet,
+      onShowMain: () => {
+        document
+          .querySelector('#features')
+          .scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
       }
     });
-    caption.textContent = '桌宠已放出：拖动移动，点击挥手；可通过动作菜单收回。';
-    if (button.matches('[data-release-pet]')) {
-      document.querySelector('.pet-status').hidden = false;
-      document.querySelector('.pet-status').textContent = '桌宠已放出，可以在网页内拖动。';
-    }
+    petButton.textContent = '收回桌宠';
+    petButton.setAttribute('aria-pressed', 'true');
+    petStatus.hidden = false;
+    petStatus.textContent = '点一下挥手，双击跳跃；也可以拖到网页边缘。';
+    document.querySelector('.pet-stage').classList.add('pet-away');
   } catch {
     host?.remove();
-    caption.textContent = '桌宠暂时无法加载，请稍后重试。';
+    petStatus.hidden = false;
+    petStatus.textContent = '桌宠暂时无法加载，请稍后重试。';
     petModule = undefined;
-    if (button.matches('[data-release-pet]')) {
-      document.querySelector('.pet-status').hidden = false;
-      document.querySelector('.pet-status').textContent = caption.textContent;
-    }
   } finally {
     petLoading = false;
-    button.disabled = false;
+    petButton.disabled = false;
   }
 }
-document.querySelectorAll('[data-release-pet]').forEach((button) => {
-  button.hidden = false;
-  button.addEventListener('click', () => void releasePet(button));
-});
-const layers = {
-  nav: '小白模式保留日常启停；专业模式提供节点、测试和设置入口。',
-  control: '选择手动或自动节点，再按需要切换规则、全局或直连模式。',
-  data: '运行数据与诊断放在同一个首页，便于查看连接状态和排查问题。'
-};
-document.querySelectorAll('[data-layer]').forEach((button) => {
-  const select = (event) => {
-    if (event.type === 'pointermove' && !event.movementX && !event.movementY) return;
-    if (button.getAttribute('aria-pressed') === 'true') return;
-    document
-      .querySelectorAll('[data-layer]')
-      .forEach((item) => item.setAttribute('aria-pressed', String(item.dataset.layer === button.dataset.layer)));
-    document.querySelector('#layer-description').textContent = layers[button.dataset.layer];
-  };
-  for (const event of ['click', 'focus', 'pointermove']) button.addEventListener(event, select);
-});
-const exploded = document.querySelector('.exploded-showcase');
-exploded.addEventListener('toggle', () => {
-  exploded.querySelector('summary').textContent = exploded.open ? '收起界面' : '展开界面';
-});
+petButton.hidden = false;
+petButton.addEventListener('click', () => void releasePet());

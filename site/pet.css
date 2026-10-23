@@ -1,83 +1,67 @@
 :host {
   font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
   color: #21182e;
+  --accent-strong: #7441bd;
+  --font-weight-bold: 700;
 }
 * {
   box-sizing: border-box;
 }
-.companion {
+.pet-browser-window {
   position: fixed;
   top: 0;
   left: 0;
-  width: 108px;
+  width: 184px;
+  height: 194px;
+  pointer-events: none;
+}
+.pet-root {
+  width: 184px;
+  height: 194px;
+  pointer-events: none;
+  overflow: visible;
+}
+.pet-hit-target {
   pointer-events: auto;
-}
-button {
-  font: inherit;
-  cursor: pointer;
-  border: 0;
-}
-button:focus-visible {
-  outline: 3px solid #7441bd;
-  outline-offset: 3px;
-}
-.character {
-  width: 108px;
-  height: 118px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  background: transparent;
-  touch-action: none;
-  user-select: none;
   cursor: grab;
-  border-radius: 16px;
 }
-.character:active {
+.pet-hit-target:active {
   cursor: grabbing;
-}
-.pet-tools {
-  display: flex;
-  gap: 4px;
-}
-.pet-tools button {
-  min-height: 44px;
-  flex: 1;
-  padding: 4px;
-  border-radius: 8px;
-  background: #fdfcff;
-  color: #572b99;
-  box-shadow: 0 2px 10px #21182e12;
-  font-size: 13px;
-}
-.pet-tools button:hover,
-.actions button:hover {
-  background: #eee7f7;
-}
-.actions {
-  position: absolute;
-  bottom: 48px;
-  left: calc(0px - var(--menu-shift, 0px));
-  width: 264px;
-  display: flex;
-  gap: 4px;
-  padding: 6px;
-  border-radius: 12px;
-  background: #fdfcff;
-  box-shadow: 0 4px 24px #21182e18;
-}
-.actions button {
-  flex: 1;
-  min-height: 44px;
-  border-radius: 8px;
-  color: #572b99;
-  background: #f7f4fb;
-  font-size: 14px;
 }
 .pet-sprite {
   will-change: auto;
 }
+.pet-menu {
+  position: absolute;
+  bottom: 100%;
+  width: 152px;
+  padding: 6px;
+  border-radius: 10px;
+  background: #fdfcff;
+  box-shadow: 0 4px 24px #21182e24;
+  pointer-events: auto;
+}
+.pet-menu button {
+  font: inherit;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #572b99;
+  cursor: pointer;
+}
+.pet-menu button:hover {
+  background: #eee7f7;
+}
+.pet-menu button:focus-visible {
+  outline: 2px solid #7441bd;
+}
 @media (prefers-reduced-motion: reduce) {
+  .pet-sprite {
+    background-position: 0 var(--pet-row-y) !important;
+  }
   *,
   *::before,
   *::after {

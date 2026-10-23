@@ -223,9 +223,11 @@ npm run dev:ui
 
 ### 官网维护
 
-官网主体位于 `docs/`，保持原生 HTML、CSS 和 JavaScript。`site/` 是按需加载的 React 演示入口，复用真实首页、节点、测试界面与桌宠帧序列，使用内存示例数据，不连接 Mihomo 或流量后台。演示通过 iframe 隔离样式，网页桌宠使用独立 Shadow DOM，均不改变桌面客户端入口。
+官网主体位于 `docs/`，保持原生 HTML、CSS 和 JavaScript。主页提供产品展示，另有独立的[下载页](https://fishknowsss.github.io/YouYu/download.html)、[使用指南](https://fishknowsss.github.io/YouYu/guide.html)和[更新记录](https://fishknowsss.github.io/YouYu/changelog.html)。子页由 `scripts/site-pages.mjs` 复用主页的导航、页脚和品牌样式生成；指南正文维护在 `site/pages/guide.html`，更新记录直接读取 `CHANGELOG.md`，不重复维护版本内容。
 
-版本以根 `package.json` 为准。修改 `site/`、演示引用的组件或版本后，运行 `npm run site:build`，将静态产物更新到 `docs/demo/` 并一同提交；仅修改官网主体样式、脚本时运行 `npm run site:sync`。两者都会同步下载链接、版本文字与资源缓存标记，`npm run site:check` 可单独检查。现有仓库校验会检查同步结果，无 JavaScript 时下载入口仍可用。纯官网改动随 `main` 推送到 GitHub Pages，不需要重打桌面安装包。
+`site/` 是按需加载的 React 演示入口，直接复用完整 `App`、控制器、设置页及真实样式，用现有内存 API 替代桌面接口。演示通过 iframe 隔离样式，不连接 Mihomo 或流量后台。网页桌宠在独立 Shadow DOM 中复用 `PetApp` 的手势与动作序列，仅将系统窗口移动适配为网页内移动；均不改变桌面客户端入口。
+
+版本以根 `package.json` 为准。修改演示组件或版本后，运行 `npm run site:build`，将静态产物更新到 `docs/demo/` 并一同提交；修改官网样式、脚本、指南或 `CHANGELOG.md` 后运行 `npm run site:sync`。两者都会生成子页并同步下载链接、版本文字和资源缓存标记，`npm run site:check` 可检查。现有仓库校验会检查同步结果，无 JavaScript 时下载入口仍可用。纯官网改动随 `main` 推送到 GitHub Pages，不需要重打桌面安装包。
 
 分享封面为 `docs/assets/social-cover.png`（1200×630），可编辑源文件为同目录的 `social-cover.svg`，使用真实软件图标与安全演示截图；修改后按原尺寸重新导出 PNG。桌宠演示直接复用应用的 WebP 帧图，只在可见时短暂播放，支持减少动态效果设置。
 

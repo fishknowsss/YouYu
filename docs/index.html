@@ -13,7 +13,7 @@
     <link rel="canonical" href="https://fishknowsss.github.io/YouYu/" />
     <link rel="icon" type="image/png" href="assets/youyu-icon.png" />
     <link rel="apple-touch-icon" href="assets/youyu-icon.png" />
-    <link rel="stylesheet" href="assets/site.css?v=b67ac3e155" />
+    <link rel="stylesheet" href="assets/site.css?v=bfad69f2cf" />
     <link rel="preload" as="image" href="screenshots/home-advanced.png" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="zh_CN" />
@@ -49,22 +49,24 @@
       }
     </script>
     <script src="assets/site.js?v=67e595fd9a" defer></script>
-    <script type="module" src="assets/showcase.js?v=83249e9fc5"></script>
+    <script type="module" src="assets/showcase.js?v=c7ed294692"></script>
+    <script src="assets/pages.js?v=cbc8e2c0b9" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#top">跳到正文</a>
     <div class="header-shell">
       <header class="site-header page-width">
-        <a class="brand" href="#top" aria-label="YouYu 首页">
+        <a class="brand" href="index.html" aria-label="YouYu 首页">
           <img src="assets/youyu-icon.png" width="40" height="40" alt="" />
           <span>YouYu</span>
         </a>
-        <nav aria-label="页面导航">
-          <a href="#features">功能</a>
-          <a href="#screenshots">界面</a>
-          <a class="nav-faq" href="#faq">常见问题</a>
+        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" hidden>菜单</button>
+        <nav id="site-nav" aria-label="页面导航">
+          <a href="index.html#features">产品体验</a>
+          <a href="guide.html">使用指南</a>
+          <a class="nav-updates" href="changelog.html">更新记录</a>
           <a class="nav-source" href="https://github.com/fishknowsss/YouYu">源码</a>
-          <a class="nav-download" href="#download">下载</a>
+          <a class="nav-download" href="download.html">下载</a>
         </nav>
       </header>
     </div>
@@ -72,9 +74,9 @@
     <main id="top">
       <section class="hero page-width" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <h1 id="hero-title" data-reveal="title">Windows 上的<br /><span>Mihomo 桌面客户端</span></h1>
+          <h1 id="hero-title" data-reveal="title">日常一键连接<br /><span>需要时，细致调整</span></h1>
           <p class="hero-summary" data-reveal="rise">
-            小白模式用一个按钮连接或停止代理。切换到专业模式，可以选择节点、调整规则与 TUN，查看流量和连接状态。
+            YouYu 是 Windows 上的 Mihomo 桌面客户端。小白模式轻松启停，专业模式管理节点、规则、TUN、流量和连通性。
           </p>
           <div class="hero-actions" data-reveal="rise">
             <a class="button" href="https://github.com/fishknowsss/YouYu/releases/download/v1.8.3/YouYu-1.8.3-x64.exe"
@@ -91,16 +93,13 @@
           </p>
           <p class="subscription-note">公开安装包不内置订阅，请使用自己的订阅。</p>
         </div>
-        <figure class="hero-preview" data-pet-src="demo/assets/pet-CB7lY9nH.js">
+        <figure class="hero-preview" data-pet-src="demo/assets/pet-BbdvoT0E.js">
           <div class="preview-toolbar" hidden>
             <div class="mode-switch" role="group" aria-label="切换界面预览" data-active-mode="advanced">
               <button type="button" data-mode="easy" aria-pressed="false">小白模式</button>
               <button type="button" data-mode="advanced" aria-pressed="true">专业模式</button>
             </div>
-            <button class="text-action" id="demo-start" data-demo-src="demo/index.html?v=8e8d1d0027" type="button">
-              试用界面
-            </button>
-            <button class="text-action" id="demo-exit" type="button" hidden>退出演示</button>
+            <a class="preview-link" href="#features">交互体验 <span aria-hidden="true">↗</span></a>
           </div>
           <div id="hero-preview-stage" class="preview-stage">
             <img
@@ -121,81 +120,86 @@
 
       <section class="section page-width" id="features" aria-labelledby="features-title">
         <div class="section-heading">
-          <h2 id="features-title" data-reveal="rise">简单上手，也能细致调整</h2>
-          <p data-reveal="rise">两种模式随时切换，按自己的习惯使用。</p>
+          <h2 id="features-title" data-reveal="rise">先用起来，再按需要调整</h2>
+          <p data-reveal="rise">从日常启停，到节点、测试和设置，试试 YouYu 的实际操作。</p>
         </div>
-        <details class="exploded-showcase">
-          <summary>展开界面</summary>
-          <div class="exploded-layout">
-            <div class="exploded-scene" aria-label="专业模式功能分层示意">
-              <div class="exploded-base" aria-hidden="true"></div>
-              <button
-                type="button"
-                class="exploded-layer layer-nav"
-                data-layer="nav"
-                aria-label="导航与模式"
-                aria-pressed="true"
+        <div class="product-tour" data-reveal="picture">
+          <div class="tour-window">
+            <div class="tour-windowbar">
+              <span
+                ><img src="assets/youyu-icon.png" width="22" height="22" alt="" />YouYu
+                <span class="tour-label">交互体验</span></span
               >
-                <img src="screenshots/home-advanced.png" width="900" height="600" loading="lazy" alt="" />
-              </button>
-              <button
-                type="button"
-                class="exploded-layer layer-control"
-                data-layer="control"
-                aria-label="节点与代理控制"
-                aria-pressed="false"
-              >
-                <img src="screenshots/home-advanced.png" width="900" height="600" loading="lazy" alt="" />
-              </button>
-              <button
-                type="button"
-                class="exploded-layer layer-data"
-                data-layer="data"
-                aria-label="流量与诊断"
-                aria-pressed="false"
-              >
-                <img src="screenshots/home-advanced.png" width="900" height="600" loading="lazy" alt="" />
-              </button>
-            </div>
-            <div class="exploded-copy">
-              <h3>从连接到查看状态</h3>
-              <div class="layer-choices" role="group" aria-label="选择功能分层">
-                <button type="button" data-layer="nav" aria-pressed="true">导航与模式</button>
-                <button type="button" data-layer="control" aria-pressed="false">节点与代理</button>
-                <button type="button" data-layer="data" aria-pressed="false">流量与诊断</button>
+              <div>
+                <button
+                  class="text-action"
+                  id="demo-start"
+                  data-demo-src="demo/index.html?v=7554d24558"
+                  type="button"
+                  hidden
+                >
+                  开始体验
+                </button>
+                <button class="text-action" id="demo-exit" type="button" hidden>退出演示</button>
               </div>
-              <p id="layer-description" aria-live="polite">小白模式保留日常启停；专业模式提供节点、测试和设置入口。</p>
+            </div>
+            <div class="tour-viewport">
+              <div id="demo-stage" class="tour-stage">
+                <img
+                  id="tour-image"
+                  src="screenshots/home-easy.png"
+                  width="900"
+                  height="600"
+                  loading="lazy"
+                  alt="YouYu 小白模式，中央按钮启停代理"
+                />
+              </div>
+            </div>
+            <div class="tour-footnote">
+              使用示例数据，不会修改系统网络。<span class="tour-mobile-hint">界面可左右滑动。</span>
             </div>
           </div>
-        </details>
-        <div class="mode-overview">
-          <article data-reveal="rise">
-            <h3>小白模式</h3>
-            <p>日常连接和停止代理，在首页就能完成。</p>
-            <ul>
-              <li>启动、连接、停止等状态有明确反馈</li>
-              <li>无需在多个页面之间切换</li>
-              <li>需要调整时，可以切换到专业模式</li>
-            </ul>
-          </article>
-          <article data-reveal="rise">
-            <h3>专业模式</h3>
-            <p>把节点选择、流量统计和连接诊断放在一起。</p>
-            <ul>
-              <li>规则、全局、直连与 TUN，按需设置</li>
-              <li>支持自动选点、手动选择与测速</li>
-              <li>查看常用节点、连通性与诊断日志</li>
-            </ul>
-          </article>
+          <aside class="tour-guide" aria-label="功能导览">
+            <div class="tour-scenes" role="group" aria-label="选择体验场景" hidden>
+              <button type="button" data-scene="easy" aria-pressed="true">日常连接</button>
+              <button type="button" data-scene="advanced" aria-pressed="false">专业控制</button>
+              <button type="button" data-scene="nodes" aria-pressed="false">选择节点</button>
+              <button type="button" data-scene="test" aria-pressed="false">检查连接</button>
+              <button type="button" data-scene="settings" aria-pressed="false">按需设置</button>
+            </div>
+            <div class="tour-description" aria-live="polite" aria-atomic="true">
+              <h3 id="tour-title">日常，只需一个按钮</h3>
+              <p id="tour-description">打开后连接，用完后停止。小白模式把日常需要的操作留在首页。</p>
+              <p class="tour-prompt" id="tour-prompt">开始体验后，点击中央按钮试试。</p>
+            </div>
+          </aside>
+        </div>
+        <div class="capability-strip" aria-label="主要功能">
+          <div data-reveal="rise">
+            <h3>两种模式</h3>
+            <p>日常简洁，需要时展开</p>
+          </div>
+          <div data-reveal="rise">
+            <h3>Mihomo 内核</h3>
+            <p>规则、全局与直连</p>
+          </div>
+          <div data-reveal="rise">
+            <h3>TUN 接管</h3>
+            <p>照顾更多应用的流量</p>
+          </div>
+          <div data-reveal="rise">
+            <h3>网络修复</h3>
+            <p>停止代理，清理残留</p>
+          </div>
         </div>
       </section>
 
       <section class="section page-width" id="screenshots" aria-labelledby="screenshots-title">
         <div class="section-heading">
-          <h2 id="screenshots-title" data-reveal="rise">看看平时会用到的功能</h2>
-          <p data-reveal="rise">选择节点、检查连接，或处理网络问题，都有对应的页面。</p>
+          <h2 id="screenshots-title" data-reveal="rise">从选择节点，到找到问题</h2>
+          <p data-reveal="rise">需要的信息放在一起，下一步做什么也更清楚。</p>
         </div>
-        <div class="screenshot-grid">
+        <div class="product-stories">
           <figure>
             <div class="screenshot-frame">
               <img
@@ -208,8 +212,11 @@
               />
             </div>
             <figcaption data-reveal="rise">
-              <h3>节点管理</h3>
-              <p>单节点或全部测速，按需切换；首页延迟同步更新，运行中持续检查健康状态。</p>
+              <h3>节点怎么选，心里有数</h3>
+              <p>查看延迟再决定用哪个，也可以交给自动选择。单节点和全部测速都支持，切换后首页同步更新。</p>
+              <a class="story-link" href="#features" data-open-scene="nodes"
+                >试试节点管理 <span aria-hidden="true">↗</span></a
+              >
             </figcaption>
           </figure>
           <figure>
@@ -224,8 +231,11 @@
               />
             </div>
             <figcaption data-reveal="rise">
-              <h3>连通性测试</h3>
-              <p>Steam、AI 服务与常用站点共 15 项测试，汇总耗时、出口信息和实际策略链。</p>
+              <h3>逐项检查连接结果</h3>
+              <p>Steam、AI 服务与常用站点共 15 项测试。展开结果，可以看到耗时、出口信息与实际策略链。</p>
+              <a class="story-link" href="#features" data-open-scene="test"
+                >看看测试结果 <span aria-hidden="true">↗</span></a
+              >
             </figcaption>
           </figure>
           <figure>
@@ -240,42 +250,53 @@
               />
             </div>
             <figcaption data-reveal="rise">
-              <h3>设置与网络修复</h3>
-              <p>管理订阅、规则与 TUN；清理代理残留，导出脱敏诊断，检查和安装更新。</p>
-            </figcaption>
-          </figure>
-          <figure class="pet-showcase">
-            <div
-              class="pet-stage"
-              data-sprite-src="demo/assets/main-spritesheet-BsdxAAmx.webp"
-              data-reveal="picture"
-              aria-label="桌宠动作演示"
-            >
-              <button class="pet-character" type="button" aria-label="让 YouYu 桌宠挥手" disabled>
-                <span class="pet-sprite" aria-hidden="true"
-                  ><img class="pet-poster" src="assets/youyu-icon.png" width="160" height="160" alt="" loading="lazy"
-                /></span>
-              </button>
-              <div class="pet-controls" role="group" aria-label="预览桌宠动作" hidden>
-                <button type="button" data-pet-action="wave">挥手</button>
-                <button type="button" data-pet-action="walk">走走</button>
-                <button type="button" data-pet-action="sleep">睡觉</button>
-              </div>
-            </div>
-            <figcaption data-reveal="rise">
-              <h3>可选的桌面伙伴</h3>
-              <p>桌宠会挥手、走动、贴边和睡觉，软件内支持 24 种状态。也可以下载无桌宠版。</p>
-              <button class="text-action" type="button" data-release-pet hidden>放出桌宠</button>
-              <p class="pet-status" role="status" hidden></p>
+              <h3>常用设置，集中处理</h3>
+              <p>管理订阅、规则与 TUN。遇到问题，先尝试网络修复；需要继续排查时，可以导出脱敏诊断。</p>
+              <a class="story-link" href="#features" data-open-scene="settings"
+                >打开设置看看 <span aria-hidden="true">↗</span></a
+              >
             </figcaption>
           </figure>
         </div>
-        <p class="preview-note">界面使用安全演示数据，订阅、节点、流量与出口信息均为虚构示例。</p>
+        <p class="preview-note">界面使用示例数据，订阅、节点、流量与出口信息均为虚构示例。</p>
+      </section>
+
+      <section class="section pet-section page-width" id="companion" aria-labelledby="pet-title">
+        <figure class="pet-showcase">
+          <figcaption data-reveal="rise">
+            <h2 id="pet-title">桌面上，多一个小伙伴</h2>
+            <p>点一下挥手，双击跳跃，拖动时会跟随方向变化。贴在边缘，也会探头和休息。</p>
+            <p>它用动作回应连接状态。想让桌面清静些，也可以选无桌宠版。</p>
+            <button class="text-action" type="button" data-release-pet hidden>请它出来</button>
+            <p class="pet-instructions">拖动移动 · 右键或长按打开菜单 · Esc 收回</p>
+            <p class="pet-status" role="status" hidden></p>
+          </figcaption>
+          <div
+            class="pet-stage"
+            data-sprite-src="demo/assets/main-spritesheet-BsdxAAmx.webp"
+            data-reveal="picture"
+            aria-label="桌宠动作演示"
+          >
+            <div class="pet-desktop-window" aria-hidden="true">
+              <img src="screenshots/home-advanced.png" width="900" height="600" loading="lazy" alt="" />
+            </div>
+            <button class="pet-character" type="button" aria-label="让 YouYu 桌宠挥手" disabled>
+              <span class="pet-sprite" aria-hidden="true"
+                ><img class="pet-poster" src="assets/youyu-icon.png" width="160" height="160" alt="" loading="lazy"
+              /></span>
+            </button>
+            <div class="pet-controls" role="group" aria-label="预览桌宠动作" hidden>
+              <button type="button" data-pet-action="wave">挥手</button>
+              <button type="button" data-pet-action="walk">走走</button>
+              <button type="button" data-pet-action="sleep">睡觉</button>
+            </div>
+          </div>
+        </figure>
       </section>
 
       <section class="section download-section page-width" id="download" aria-labelledby="download-title">
         <div class="section-heading">
-          <h2 id="download-title" data-reveal="rise">选择适合的版本</h2>
+          <h2 id="download-title" data-reveal="rise">从这里开始使用 YouYu</h2>
           <p data-reveal="rise">
             当前版本 <span data-release-version>1.8.3</span>，适用于 Windows 10 / 11
             x64。两种版本都支持小白与专业模式，公开安装包不内置订阅。
@@ -302,7 +323,7 @@
         <div class="download-details">
           <p>
             <a href="https://github.com/fishknowsss/YouYu/releases/tag/v1.8.3">更新说明与校验清单</a> /
-            <a href="https://github.com/fishknowsss/YouYu/blob/main/README.md">使用文档</a>
+            <a href="guide.html">安装与使用指南</a> / <a href="download.html">完整下载说明</a>
           </p>
         </div>
         <div class="install-guide" data-reveal="rise">
@@ -377,7 +398,8 @@
         <div class="footer-links">
           <p><span class="footer-brand">YouYu</span> · 118 Studio<br />Windows Mihomo 桌面客户端</p>
           <div>
-            <a href="https://github.com/fishknowsss/YouYu">GitHub</a
+            <a href="guide.html">使用指南</a><a href="changelog.html">更新记录</a
+            ><a href="https://github.com/fishknowsss/YouYu">GitHub</a
             ><a href="https://github.com/fishknowsss/YouYu/blob/main/LICENSE">MIT 许可</a
             ><a href="https://github.com/fishknowsss/YouYu/blob/main/SECURITY.md">安全策略</a
             ><a href="#top">返回顶部</a>
