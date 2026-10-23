@@ -251,3 +251,46 @@ async function releasePet() {
 }
 petButton.hidden = false;
 petButton.addEventListener('click', () => void releasePet());
+const petCharacter = document.querySelector('.pet-character');
+let activationTimer;
+let activationPointer;
+let suppressClickUntil = 0;
+function cancelActivation() {
+  clearTimeout(activationTimer);
+  activationPointer = undefined;
+}
+function activatePet() {
+  if (!disposePet && !petLoading) void releasePet();
+}
+petCharacter.addEventListener('dblclick', (event) => {
+  event.preventDefault();
+  cancelActivation();
+  activatePet();
+});
+petCharacter.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
+  cancelActivation();
+  activationPointer = { x: event.clientX, y: event.clientY };
+  activationTimer = setTimeout(() => {
+    suppressClickUntil = performance.now() + 1000;
+    cancelActivation();
+    activatePet();
+  }, 600);
+});
+petCharacter.addEventListener('pointermove', (event) => {
+  if (activationPointer && Math.hypot(event.clientX - activationPointer.x, event.clientY - activationPointer.y) > 7)
+    cancelActivation();
+});
+for (const type of ['pointerup', 'pointercancel', 'pointerleave'])
+  petCharacter.addEventListener(type, cancelActivation);
+petCharacter.addEventListener('contextmenu', (event) => event.preventDefault());
+petCharacter.addEventListener(
+  'click',
+  (event) => {
+    if (performance.now() < suppressClickUntil) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  },
+  true
+);

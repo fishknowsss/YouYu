@@ -38,7 +38,8 @@ export function mountPet(host: HTMLElement, { origin, running, onReturn }: Optio
 
   function bounds() {
     return {
-      top: document.querySelector('.header-shell')!.getBoundingClientRect().bottom,
+      // Include the transparent sprite padding so docking sits close to the viewport edge.
+      top: -12,
       right: innerWidth - 184,
       bottom: innerHeight - 194
     };

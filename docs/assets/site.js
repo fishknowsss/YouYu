@@ -139,8 +139,9 @@ if ('IntersectionObserver' in window) {
 const petStage = document.querySelector('.pet-stage');
 const petAtlas = petStage.dataset.spriteSrc;
 const pet = document.querySelector('.pet-character');
-const sprite = document.querySelector('.pet-sprite');
+const sprite = pet.querySelector('.pet-sprite');
 const petControls = [...document.querySelectorAll('[data-pet-action]')];
+const sleepButton = document.querySelector('[data-pet-action="sleep"]');
 const petStatus = document.querySelector('.pet-status');
 const petActions = {
   idle: { row: 0, frames: [0], fps: 1 },
@@ -153,6 +154,7 @@ let petMove;
 let petRequest = 0;
 let petVisible = false;
 let petLoaded = false;
+let sleeping = false;
 function paintPet(action, frame) {
   sprite.style.backgroundPosition = `${(frame / 7) * 100}% ${(action.row / 8) * 100}%`;
 }
@@ -161,9 +163,11 @@ function stopPet() {
   clearTimeout(petTimer);
   petMove?.cancel();
   petControls.forEach((button) => button.classList.remove('is-active'));
-  if (petLoaded) paintPet(petActions.idle, 0);
+  sleepButton.setAttribute('aria-pressed', String(sleeping));
+  if (petLoaded) paintPet(sleeping ? petActions.sleep : petActions.idle, sleeping ? petActions.sleep.frames.at(-1) : 0);
 }
 async function playPet(name, automatic = false, animate = true) {
+  sleeping = name === 'sleep';
   stopPet();
   const request = petRequest;
   try {
@@ -202,7 +206,9 @@ pet.disabled = false;
 document.querySelector('.pet-controls').hidden = false;
 pet.addEventListener('click', (event) => playPet('wave', false, event.detail > 0));
 petControls.forEach((button) =>
-  button.addEventListener('click', (event) => playPet(button.dataset.petAction, false, event.detail > 0))
+  button.addEventListener('click', (event) =>
+    playPet(button === sleepButton && sleeping ? 'idle' : button.dataset.petAction, false, event.detail > 0)
+  )
 );
 if ('IntersectionObserver' in window) {
   let introduced = false;
@@ -213,10 +219,10 @@ if ('IntersectionObserver' in window) {
         stopPet();
         return;
       }
-      if (!introduced && !reducedMotion.matches && !navigator.connection?.saveData) {
-        introduced = true;
-        playPet('wave', true);
-      }
+      const introduce = !introduced && !reducedMotion.matches && !navigator.connection?.saveData;
+      introduced = true;
+      // Re-entering must finish a load interrupted by scrolling, including reduced-motion visits.
+      playPet(sleeping ? 'sleep' : introduce ? 'wave' : 'idle', introduce, introduce);
     },
     { threshold: 0.25 }
   );
