@@ -67,7 +67,7 @@ import { RemoteConfigClient, type ActiveRemoteConfigSnapshot } from './remoteCon
 import { syncRequiredBoundRemoteConfig } from './remoteConfigAuthority';
 import { createRemoteSubscriptionCoordinator } from './remoteSubscription';
 import { createSubscriptionCoordinator, type SubscriptionRefreshSource } from './subscriptionCoordinator';
-import { calculateMainWindowMetrics } from './windowSizing';
+import { createMainWindow } from './mainWindow';
 import {
   closeMihomoConnections,
   saveSubscriptionSettings,
@@ -3209,38 +3209,11 @@ function createTray() {
 }
 
 async function createWindow() {
-  const display = screen.getPrimaryDisplay();
-  const mainWindowMetrics = calculateMainWindowMetrics(display.size, display.workAreaSize);
-  const win = new BrowserWindow({
-    width: mainWindowMetrics.width,
-    height: mainWindowMetrics.height,
-    minWidth: mainWindowMetrics.minWidth,
-    minHeight: mainWindowMetrics.minHeight,
-    useContentSize: true,
-    title: 'YouYu',
-    icon: windowIconPath,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#f5f0fb',
-      symbolColor: '#4c3f5d',
-      height: 30
-    },
-    show: false,
-    skipTaskbar: false,
-    autoHideMenuBar: true,
-    backgroundColor: '#f5f0fb',
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.cjs'),
-      additionalArguments: ['--youyu-window-role=main'],
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      sandbox: true
-    }
+  const win = createMainWindow(screen.getPrimaryDisplay(), {
+    preload: join(__dirname, '../preload/index.cjs'),
+    icon: windowIconPath
   });
   mainWindow = win;
-  win.webContents.setZoomFactor(mainWindowMetrics.zoomFactor);
   secureRendererNavigation(win);
 
   win.webContents.on('preload-error', (_event, preloadPath, error) => {

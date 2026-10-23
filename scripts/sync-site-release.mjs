@@ -5,6 +5,10 @@ import { renderSitePages } from './site-pages.mjs';
 
 const root = new URL('../', import.meta.url);
 const { version } = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
+const readmePath = new URL('README.md', root);
+const readme = await readFile(readmePath, 'utf8');
+if (!/^当前版本为 .+$/m.test(readme)) throw new Error('README current release paragraph is missing.');
+const updatedReadme = readme.replace(/^当前版本为 .+$/m, (paragraph) => paragraph.replace(/\d+\.\d+\.\d+/g, version));
 const indexPath = new URL('docs/index.html', root);
 const original = await readFile(indexPath, 'utf8');
 let updated = original.replace(
@@ -50,11 +54,12 @@ for (const [file, content] of pages) {
   }
 }
 if (process.argv.includes('--check')) {
-  if (updated !== original || pagesStale) {
-    console.error('Website release information or asset revisions are stale. Run npm run site:sync.');
+  if (updated !== original || pagesStale || updatedReadme !== readme) {
+    console.error('README or website release information or asset revisions are stale. Run npm run site:sync.');
     process.exitCode = 1;
-  } else console.log(`Website release v${version} and asset revisions are current.`);
+  } else console.log(`README and website release v${version} and asset revisions are current.`);
 } else {
+  if (updatedReadme !== readme) await writeFile(readmePath, updatedReadme);
   if (updated !== original) await writeFile(indexPath, updated);
   console.log(`Synced ${fileURLToPath(indexPath)} to v${version}.`);
 }

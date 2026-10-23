@@ -43,6 +43,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify real Electron startup layout
+        run: npm run test:window
+
       - name: Test
         # Avoid a PowerShell 7 module path while retaining the runner's prewarmed PS5 analysis cache.
         # Run real PS5 process-boundary files separately so cold startup and native compilation

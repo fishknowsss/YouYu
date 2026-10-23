@@ -94,6 +94,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify real Electron startup layout
+        run: npm run test:window
+
       - name: Verify release tag
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh

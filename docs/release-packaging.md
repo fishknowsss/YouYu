@@ -201,7 +201,7 @@ release/YouYu-<version>-x64-no.exe
 
 打包前先确认 `package.json` 的 `version`。
 
-版本变更后运行 `npm run site:build`，更新官网交互演示，并将官网版本文字、公开下载链接与结构化数据同步到同一版本；`validate:repo` 会检查同步结果。
+每次发布新版本必须同时更新 README 与介绍网页 `https://fishknowsss.github.io/YouYu/`。先写入 `CHANGELOG.md` 的当前版本说明和 README「近期改进」，再运行 `npm run site:build`：该命令会同步 README 当前版本及下载链接、官网版本文字、下载入口、结构化数据、更新记录和交互演示。`validate:repo` 会检查同步结果；发布后等待 GitHub Pages 部署完成，核对线上主页、下载页和更新记录均为本次版本。
 
 - 小修小改递增 patch，例如 `0.7.7` -> `0.7.8`。
 - 较大功能或行为变化递增 minor，例如 `0.7.x` -> `0.8.0`。
@@ -278,6 +278,7 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    npm run validate:repo
    npm run validate:mihomo
    npm run typecheck
+   npm run test:window
    npm test
    npm run test:worker
    npm run typecheck:worker
@@ -382,6 +383,8 @@ npm run dist:win:no 生成的 release/YouYu-<version>-x64-no.exe
    git ls-remote --heads origin main
    git ls-remote --tags origin "refs/tags/v$version"
    ```
+
+   公开资产来自标签对应的 Build Windows runner，本机构建与 runner 的 EXE 哈希可能不同。先使用 `scripts/publish-github-release.mjs` 导出的 `downloadVerifiedRunArtifact({ runId, tag, version, directory })`，将该次构建资产下载到一个全新空目录；该函数会校验标签提交、workflow、artifact provenance、十项 SHA256 和三个更新通道。验证通过后，把清单内十项资产和原始 `SHA256SUMS.txt` 同步到本机 `release/`，再通过 `archiveWindowsRelease` 原子刷新当前版本公开归档。私有 `team-builds/` 保持独立。不得通过重写校验清单来消除差异。
 
    然后运行统一的远端校验器；不要用手工下载片段替代：
 

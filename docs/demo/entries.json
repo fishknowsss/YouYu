@@ -12,31 +12,31 @@
     "src": "../src/renderer/assets/youyu-icon.png"
   },
   "../src/renderer/pages/PetPreviewPage.tsx": {
-    "file": "assets/PetPreviewPage-4X-0UEZN.js",
+    "file": "assets/PetPreviewPage-Dh8ZVo9Z.js",
     "name": "PetPreviewPage",
     "src": "../src/renderer/pages/PetPreviewPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_react-CMY55oh2.js",
       "_pet-sprite--79Mbtcy.js",
-      "_index-DCyqUwFT.js",
-      "_devApi-9mFUdplA.js"
+      "_index-ROtfj4XC.js",
+      "_devApi-Dc0dFtyP.js"
     ]
   },
-  "_devApi-9mFUdplA.js": {
-    "file": "assets/devApi-9mFUdplA.js",
+  "_devApi-Dc0dFtyP.js": {
+    "file": "assets/devApi-Dc0dFtyP.js",
     "name": "devApi"
   },
   "_index-CDjrf-bA.css": {
     "file": "assets/index-CDjrf-bA.css",
     "src": "_index-CDjrf-bA.css"
   },
-  "_index-DCyqUwFT.js": {
-    "file": "assets/index-DCyqUwFT.js",
+  "_index-ROtfj4XC.js": {
+    "file": "assets/index-ROtfj4XC.js",
     "name": "index",
     "imports": [
       "_react-CMY55oh2.js",
-      "_devApi-9mFUdplA.js"
+      "_devApi-Dc0dFtyP.js"
     ],
     "dynamicImports": [
       "../src/renderer/pages/PetPreviewPage.tsx"
@@ -64,14 +64,14 @@
     "name": "react"
   },
   "pet.tsx": {
-    "file": "assets/pet-CXBcz78Q.js",
+    "file": "assets/pet-Bz9u7kOx.js",
     "name": "pet",
     "src": "pet.tsx",
     "isEntry": true,
     "imports": [
       "_react-CMY55oh2.js",
       "_pet-sprite--79Mbtcy.js",
-      "_devApi-9mFUdplA.js"
+      "_devApi-Dc0dFtyP.js"
     ]
   }
 }

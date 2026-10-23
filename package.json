@@ -1,6 +1,6 @@
 {
   "name": "youyu",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "private": true,
   "author": "118 Studio",
   "license": "MIT",
@@ -20,6 +20,7 @@
     "site:check": "node scripts/sync-site-release.mjs --check",
     "site:build": "node scripts/build-site.mjs",
     "test": "vitest run",
+    "test:window": "node scripts/check-window-startup.mjs",
     "measure:phase06": "tsx scripts/measure-phase06-performance.ts",
     "test:coverage": "vitest run --coverage",
     "test:worker": "node --import tsx --test cloudflare/youyu-traffic/test/*.test.mjs",
