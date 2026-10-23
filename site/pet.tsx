@@ -7,7 +7,7 @@ import spriteStyles from '../src/renderer/styles/pet.css?inline';
 import styles from './pet.css?inline';
 
 type Point = { x: number; y: number };
-type Options = { origin: Point; running: boolean; onReturn: () => void; onShowMain: () => void };
+type Options = { origin: Point; running: boolean; onReturn: () => void };
 
 function FocusedPet({ container }: { container: HTMLElement }) {
   useEffect(() => {
@@ -16,7 +16,7 @@ function FocusedPet({ container }: { container: HTMLElement }) {
   return <PetApp />;
 }
 
-export function mountPet(host: HTMLElement, { origin, running, onReturn, onShowMain }: Options) {
+export function mountPet(host: HTMLElement, { origin, running, onReturn }: Options) {
   const shadow = host.attachShadow({ mode: 'open' });
   const style = document.createElement('style');
   style.textContent = spriteStyles + styles;
@@ -118,9 +118,8 @@ export function mountPet(host: HTMLElement, { origin, running, onReturn, onShowM
       return settle(moved);
     },
     async wavePet() {},
-    async showMainWindow() {
-      onShowMain();
-    }
+    // PetApp still jumps on double-click; the browser has no native window to restore.
+    async showMainWindow() {}
   };
   function down(event: PointerEvent) {
     if (event.button !== 0 || !(event.target instanceof HTMLElement) || !event.target.closest('.pet-hit-target'))

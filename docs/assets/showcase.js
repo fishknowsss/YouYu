@@ -1,7 +1,8 @@
 const preview = document.querySelector('.hero-preview');
 const stage = document.querySelector('#demo-stage');
+const viewport = document.querySelector('.tour-viewport');
 const start = document.querySelector('#demo-start');
-const exit = document.querySelector('#demo-exit');
+const status = document.querySelector('#demo-status');
 const image = document.querySelector('#tour-image');
 const title = document.querySelector('#tour-title');
 const description = document.querySelector('#tour-description');
@@ -96,10 +97,12 @@ function markScene(key) {
   image.src = `screenshots/${scene[3]}`;
   image.alt = `YouYu ${document.querySelector(`[data-scene="${key}"]`).textContent}实际界面`;
   describe(...scene.slice(0, 3));
+  if (ready) fitDemo();
 }
 function fitDemo() {
   if (!frame) return;
   frame.style.transform = `scale(${stage.clientWidth / 900})`;
+  if (ready) viewport.scrollLeft = current === 'easy' ? Math.max(0, (stage.clientWidth - viewport.clientWidth) / 2) : 0;
 }
 new ResizeObserver(fitDemo).observe(stage);
 function selectScene(key) {
@@ -109,33 +112,32 @@ function selectScene(key) {
       { source: 'youyu-site', type: 'scene', mode: scenes[key][4], page: scenes[key][5] },
       location.origin
     );
+  else loadDemo();
 }
 document.querySelectorAll('[data-scene]').forEach((button) => {
   button.addEventListener('click', () => selectScene(button.dataset.scene));
 });
-document
-  .querySelectorAll('[data-open-scene]')
-  .forEach((link) => link.addEventListener('click', () => selectScene(link.dataset.openScene)));
 document.querySelector('.tour-scenes').hidden = false;
-start.hidden = false;
 document.querySelector('.preview-link').addEventListener('click', () => {
   selectScene(document.querySelector('[data-mode][aria-pressed="true"]').dataset.mode);
 });
-function closeDemo() {
+function resetDemo() {
   clearTimeout(timeout);
   frame?.remove();
   frame = undefined;
   ready = false;
-  stage.classList.remove('is-interactive');
+  stage.classList.remove('is-interactive', 'is-loading');
   stage.removeAttribute('aria-busy');
   start.hidden = false;
   start.disabled = false;
-  start.textContent = '开始体验';
-  exit.hidden = true;
+  status.hidden = true;
 }
-start.addEventListener('click', () => {
+function loadDemo() {
+  if (frame) return;
+  start.hidden = true;
   start.disabled = true;
-  start.textContent = '准备中';
+  status.hidden = false;
+  stage.classList.add('is-loading');
   stage.setAttribute('aria-busy', 'true');
   frame = document.createElement('iframe');
   frame.title = 'YouYu 软件交互演示';
@@ -151,15 +153,22 @@ start.addEventListener('click', () => {
   fitDemo();
   timeout = setTimeout(() => {
     if (ready) return;
-    closeDemo();
+    resetDemo();
     describe('演示暂时无法加载', '可以稍后重试，也可以继续浏览界面与下载。');
   }, 12000);
-});
-exit.addEventListener('click', () => {
-  closeDemo();
-  markScene(current);
-  start.focus();
-});
+}
+start.addEventListener('click', loadDemo);
+if ('IntersectionObserver' in window) {
+  const observer = new IntersectionObserver(
+    ([entry]) => {
+      if (!entry.isIntersecting) return;
+      observer.disconnect();
+      loadDemo();
+    },
+    { rootMargin: '200px 0px' }
+  );
+  observer.observe(document.querySelector('.tour-window'));
+} else loadDemo();
 window.addEventListener('message', (event) => {
   if (
     !frame ||
@@ -180,9 +189,10 @@ window.addEventListener('message', (event) => {
     clearTimeout(timeout);
     frame.hidden = false;
     stage.classList.add('is-interactive');
+    stage.classList.remove('is-loading');
     stage.removeAttribute('aria-busy');
     start.hidden = true;
-    exit.hidden = false;
+    status.hidden = true;
     // A scene may have been selected while the bundle was loading.
     selectScene(current);
   } else if (Object.hasOwn(scenes, key)) markScene(key);
@@ -222,12 +232,7 @@ async function releasePet() {
     disposePet = petModule.mountPet(host, {
       running,
       origin: { x: rect.left - 12, y: rect.top - 12 },
-      onReturn: returnPet,
-      onShowMain: () => {
-        document
-          .querySelector('#features')
-          .scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
-      }
+      onReturn: returnPet
     });
     petButton.textContent = '收回桌宠';
     petButton.setAttribute('aria-pressed', 'true');

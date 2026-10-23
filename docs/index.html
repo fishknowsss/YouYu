@@ -13,7 +13,7 @@
     <link rel="canonical" href="https://fishknowsss.github.io/YouYu/" />
     <link rel="icon" type="image/png" href="assets/youyu-icon.png" />
     <link rel="apple-touch-icon" href="assets/youyu-icon.png" />
-    <link rel="stylesheet" href="assets/site.css?v=bfad69f2cf" />
+    <link rel="stylesheet" href="assets/site.css?v=c7cb030151" />
     <link rel="preload" as="image" href="screenshots/home-advanced.png" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="zh_CN" />
@@ -49,7 +49,7 @@
       }
     </script>
     <script src="assets/site.js?v=67e595fd9a" defer></script>
-    <script type="module" src="assets/showcase.js?v=c7ed294692"></script>
+    <script type="module" src="assets/showcase.js?v=9a71fbaf65"></script>
     <script src="assets/pages.js?v=cbc8e2c0b9" defer></script>
   </head>
   <body>
@@ -93,7 +93,7 @@
           </p>
           <p class="subscription-note">公开安装包不内置订阅，请使用自己的订阅。</p>
         </div>
-        <figure class="hero-preview" data-pet-src="demo/assets/pet-BaB27KN1.js">
+        <figure class="hero-preview" data-pet-src="demo/assets/pet-CH-R53_y.js">
           <div class="preview-toolbar" hidden>
             <div class="mode-switch" role="group" aria-label="切换界面预览" data-active-mode="advanced">
               <button type="button" data-mode="easy" aria-pressed="false">小白模式</button>
@@ -138,9 +138,10 @@
                   type="button"
                   hidden
                 >
-                  开始体验
+                  重试
                 </button>
-                <button class="text-action" id="demo-exit" type="button" hidden>退出演示</button>
+                <span class="tour-load-status" id="demo-status" role="status" hidden>正在加载</span>
+                <span class="tour-mobile-hint">左右滑动</span>
               </div>
             </div>
             <div class="tour-viewport">
@@ -155,9 +156,7 @@
                 />
               </div>
             </div>
-            <div class="tour-footnote">
-              使用示例数据，不会修改系统网络。<span class="tour-mobile-hint">界面可左右滑动。</span>
-            </div>
+            <div class="tour-footnote">使用示例数据，不会修改系统网络。</div>
           </div>
           <aside class="tour-guide" aria-label="功能导览">
             <div class="tour-scenes" role="group" aria-label="选择体验场景" hidden>
@@ -170,95 +169,10 @@
             <div class="tour-description" aria-live="polite" aria-atomic="true">
               <h3 id="tour-title">日常，只需一个按钮</h3>
               <p id="tour-description">打开后连接，用完后停止。小白模式把日常需要的操作留在首页。</p>
-              <p class="tour-prompt" id="tour-prompt">开始体验后，点击中央按钮试试。</p>
+              <p class="tour-prompt" id="tour-prompt">点击中央按钮，体验连接和停止。</p>
             </div>
           </aside>
         </div>
-        <div class="capability-strip" aria-label="主要功能">
-          <div data-reveal="rise">
-            <h3>两种模式</h3>
-            <p>日常简洁，需要时展开</p>
-          </div>
-          <div data-reveal="rise">
-            <h3>Mihomo 内核</h3>
-            <p>规则、全局与直连</p>
-          </div>
-          <div data-reveal="rise">
-            <h3>TUN 接管</h3>
-            <p>照顾更多应用的流量</p>
-          </div>
-          <div data-reveal="rise">
-            <h3>网络修复</h3>
-            <p>停止代理，清理残留</p>
-          </div>
-        </div>
-      </section>
-
-      <section class="section page-width" id="screenshots" aria-labelledby="screenshots-title">
-        <div class="section-heading">
-          <h2 id="screenshots-title" data-reveal="rise">从选择节点，到找到问题</h2>
-          <p data-reveal="rise">需要的信息放在一起，下一步做什么也更清楚。</p>
-        </div>
-        <div class="product-stories">
-          <figure>
-            <div class="screenshot-frame">
-              <img
-                src="screenshots/nodes.png"
-                width="900"
-                height="600"
-                loading="lazy"
-                alt="YouYu 节点列表，支持测速、手动切换和订阅更新"
-                data-reveal="picture"
-              />
-            </div>
-            <figcaption data-reveal="rise">
-              <h3>节点怎么选，心里有数</h3>
-              <p>查看延迟再决定用哪个，也可以交给自动选择。单节点和全部测速都支持，切换后首页同步更新。</p>
-              <a class="story-link" href="#features" data-open-scene="nodes"
-                >试试节点管理 <span aria-hidden="true">↗</span></a
-              >
-            </figcaption>
-          </figure>
-          <figure>
-            <div class="screenshot-frame">
-              <img
-                src="screenshots/connectivity-test.png"
-                width="900"
-                height="600"
-                loading="lazy"
-                alt="YouYu 连通性测试，集中展示 15 项服务的可用性与出口信息"
-                data-reveal="picture"
-              />
-            </div>
-            <figcaption data-reveal="rise">
-              <h3>逐项检查连接结果</h3>
-              <p>Steam、AI 服务与常用站点共 15 项测试。展开结果，可以看到耗时、出口信息与实际策略链。</p>
-              <a class="story-link" href="#features" data-open-scene="test"
-                >看看测试结果 <span aria-hidden="true">↗</span></a
-              >
-            </figcaption>
-          </figure>
-          <figure>
-            <div class="screenshot-frame">
-              <img
-                src="screenshots/settings.png"
-                width="900"
-                height="600"
-                loading="lazy"
-                alt="YouYu 设置页面，包含订阅、规则、TUN、诊断和更新操作"
-                data-reveal="picture"
-              />
-            </div>
-            <figcaption data-reveal="rise">
-              <h3>常用设置，集中处理</h3>
-              <p>管理订阅、规则与 TUN。遇到问题，先尝试网络修复；需要继续排查时，可以导出脱敏诊断。</p>
-              <a class="story-link" href="#features" data-open-scene="settings"
-                >打开设置看看 <span aria-hidden="true">↗</span></a
-              >
-            </figcaption>
-          </figure>
-        </div>
-        <p class="preview-note">界面使用示例数据，订阅、节点、流量与出口信息均为虚构示例。</p>
       </section>
 
       <section class="section pet-section page-width" id="companion" aria-labelledby="pet-title">
