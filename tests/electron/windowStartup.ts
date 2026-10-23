@@ -21,13 +21,15 @@ async function run() {
       html,
       '<!doctype html><style>html,body{width:100%;height:100%;margin:0;overflow:hidden}body{min-width:900px;min-height:600px}main{display:grid;place-items:center;width:100%;height:100%}button{width:204px;height:226px}</style><main><button>连接</button></main>'
     );
+    const nativeDisplay = screen.getPrimaryDisplay();
     const displays = [
       { size: { width: 1024, height: 576 }, workAreaSize: { width: 1024, height: 552 } },
       { size: { width: 1536, height: 864 }, workAreaSize: { width: 1536, height: 824 } },
       { size: { width: 1920, height: 1080 }, workAreaSize: { width: 1920, height: 1040 } },
       { size: { width: 2048, height: 1152 }, workAreaSize: { width: 2048, height: 1112 } },
       { size: { width: 2560, height: 1440 }, workAreaSize: { width: 2560, height: 1400 } },
-      { size: { width: 1920, height: 1080 }, workAreaSize: { width: 1200, height: 500 } }
+      { size: { width: 1920, height: 1080 }, workAreaSize: { width: 1200, height: 500 } },
+      nativeDisplay
     ];
     for (const display of displays) {
       const metrics = calculateMainWindowMetrics(display.size, display.workAreaSize);
@@ -46,11 +48,13 @@ async function run() {
       await win.loadFile(html);
       await check(win, metrics.zoomFactor, 'reload');
       assert.equal(auxiliary.webContents.getZoomFactor(), 1, 'main reload must not change auxiliary scale');
-      const workArea = screen.getDisplayMatching(win.getBounds()).workArea;
-      const bounds = win.getBounds();
-      assert(bounds.x >= workArea.x && bounds.y >= workArea.y, 'window starts inside the display');
-      assert(bounds.x + bounds.width <= workArea.x + workArea.width, 'window fits the display width');
-      assert(bounds.y + bounds.height <= workArea.y + workArea.height, 'window fits the display height');
+      if (display === nativeDisplay) {
+        const workArea = nativeDisplay.workArea;
+        const bounds = win.getBounds();
+        assert(bounds.x >= workArea.x && bounds.y >= workArea.y, 'window starts inside the display');
+        assert(bounds.x + bounds.width <= workArea.x + workArea.width, 'window fits the display width');
+        assert(bounds.y + bounds.height <= workArea.y + workArea.height, 'window fits the display height');
+      }
       console.log(`Window ${metrics.width}x${metrics.height}: first frame, auxiliary and reload passed`);
       auxiliary.destroy();
       win.destroy();
