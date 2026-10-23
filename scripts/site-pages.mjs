@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { format } from 'prettier';
 
 const repository = 'https://github.com/fishknowsss/YouYu';
 const escape = (value) =>
@@ -24,9 +23,11 @@ export async function renderSitePages(index, version) {
       .replace(/(<meta\s+property="og:description"\s+content=")[^"]+/, `$1${description}`)
       .replace(/(<meta property="og:url" content=")[^"]+/, `$1${url}`)
       .replace(/(<link rel="canonical" href=")[^"]+/, `$1${url}`);
-    return format(
-      `${head}${script}</head><body><a class="skip-link" href="#top">跳到正文</a>${header}<main id="top" class="subpage">${content}</main>${footer}</body></html>`,
-      { parser: 'html', printWidth: 120, singleQuote: true, endOfLine: 'lf' }
+    // Repository hygiene runs before npm ci. Keep generation deterministic and dependency-free.
+    return (
+      `${head}${script}</head><body><a class="skip-link" href="#top">跳到正文</a>${header}<main id="top" class="subpage">${content}</main>${footer}</body></html>`
+        .replace(/\r\n/g, '\n')
+        .replace(/>\s*</g, '>\n<') + '\n'
     );
   }
   const release = `${repository}/releases/download/v${version}`;
@@ -66,12 +67,9 @@ export async function renderSitePages(index, version) {
   return new Map([
     [
       'download.html',
-      await page('download.html', '下载', '下载 YouYu Windows x64 标准版或无桌宠版，查看安装要求和更新说明。', download)
+      page('download.html', '下载', '下载 YouYu Windows x64 标准版或无桌宠版，查看安装要求和更新说明。', download)
     ],
-    [
-      'guide.html',
-      await page('guide.html', '使用指南', 'YouYu 安装、登记、订阅、双模式操作、网络修复与更新指南。', guide)
-    ],
-    ['changelog.html', await page('changelog.html', '更新记录', '查看 YouYu 每个版本的功能变化、改进和修复。', changes)]
+    ['guide.html', page('guide.html', '使用指南', 'YouYu 安装、登记、订阅、双模式操作、网络修复与更新指南。', guide)],
+    ['changelog.html', page('changelog.html', '更新记录', '查看 YouYu 每个版本的功能变化、改进和修复。', changes)]
   ]);
 }

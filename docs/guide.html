@@ -1,167 +1,188 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>使用指南 · YouYu</title>
-    <meta name="description" content="YouYu 安装、登记、订阅、双模式操作、网络修复与更新指南。" />
-    <meta name="robots" content="index, follow, max-image-preview:large" />
-    <meta name="theme-color" content="#f7f4fb" />
-    <link rel="canonical" href="https://fishknowsss.github.io/YouYu/guide.html" />
-    <link rel="icon" type="image/png" href="assets/youyu-icon.png" />
-    <link rel="apple-touch-icon" href="assets/youyu-icon.png" />
-    <link rel="stylesheet" href="assets/site.css?v=bfad69f2cf" />
-    <meta property="og:type" content="website" />
-    <meta property="og:locale" content="zh_CN" />
-    <meta property="og:site_name" content="YouYu" />
-    <meta property="og:title" content="使用指南 · YouYu" />
-    <meta property="og:description" content="YouYu 安装、登记、订阅、双模式操作、网络修复与更新指南。" />
-    <meta property="og:url" content="https://fishknowsss.github.io/YouYu/guide.html" />
-    <meta property="og:image" content="https://fishknowsss.github.io/YouYu/assets/social-cover.png" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="YouYu：日常一键启停，专业全面掌控" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:image" content="https://fishknowsss.github.io/YouYu/assets/social-cover.png" />
-    <meta name="twitter:image:alt" content="YouYu Windows Mihomo 桌面客户端与真实专业模式界面" />
-    <script src="assets/pages.js?v=cbc8e2c0b9" defer></script>
-  </head>
-  <body>
-    <a class="skip-link" href="#top">跳到正文</a>
-    <div class="header-shell">
-      <header class="site-header page-width">
-        <a class="brand" href="index.html" aria-label="YouYu 首页">
-          <img src="assets/youyu-icon.png" width="40" height="40" alt="" />
-          <span>YouYu</span>
-        </a>
-        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" hidden>菜单</button>
-        <nav id="site-nav" aria-label="页面导航">
-          <a href="index.html#features">产品体验</a>
-          <a href="guide.html">使用指南</a>
-          <a class="nav-updates" href="changelog.html">更新记录</a>
-          <a class="nav-source" href="https://github.com/fishknowsss/YouYu">源码</a>
-          <a class="nav-download" href="download.html">下载</a>
-        </nav>
-      </header>
-    </div>
-    <main id="top" class="subpage">
-      <div class="guide-layout page-width">
-        <aside class="guide-toc" aria-label="使用指南目录">
-          <p>使用指南</p>
-          <nav aria-label="本页目录">
-            <a href="#start">安装与开始</a>
-            <a href="#modes">两种模式</a>
-            <a href="#nodes">节点与测试</a>
-            <a href="#network">设置与修复</a>
-            <a href="#pet">桌宠交互</a>
-            <a href="#update">更新与帮助</a>
-          </nav>
-        </aside>
-        <div class="guide-content">
-          <header class="page-intro">
-            <h1>开始使用 YouYu</h1>
-            <p>先完成安装和订阅设置，之后按自己的习惯使用。</p>
-          </header>
-          <section id="start">
-            <h2>安装与开始</h2>
-            <ol>
-              <li>在<a href="download.html">下载页</a>选择标准版或无桌宠版，运行安装程序并完成管理员授权。</li>
-              <li>首次打开后按提示完成使用登记。</li>
-              <li>进入专业模式的“设置”，填写并保存自己的订阅地址。公开安装包不内置订阅。</li>
-              <li>启动代理，等待连接状态更新。日常启停可以使用小白模式。</li>
-            </ol>
-            <p>安装程序会创建桌面和开始菜单快捷方式，YouYu 日常使用普通用户权限运行。</p>
-          </section>
-          <section id="modes">
-            <h2>小白模式与专业模式</h2>
-            <p>
-              两种模式包含在同一个安装包中。小白模式保留中央连接按钮和状态反馈；专业模式提供首页、节点、测试、桌宠和设置页面。
-            </p>
-            <p>
-              从小白模式进入专业模式：连续点击窗口左下角 7 次；也可以依次按 ↑ ↑ ↓ ↓ ← → ← → B A
-              切换模式。专业模式首页的“返回小白”可直接返回。
-            </p>
-            <figure class="guide-image">
-              <img
-                src="screenshots/home-advanced.png"
-                width="900"
-                height="600"
-                loading="lazy"
-                alt="YouYu 专业模式控制台，左侧为页面导航"
-              />
-              <figcaption>专业模式：首页集中显示节点、代理状态、流量与诊断。</figcaption>
-            </figure>
-            <a class="story-link" href="index.html#features">在网页里试试 <span aria-hidden="true">↗</span></a>
-          </section>
-          <section id="nodes">
-            <h2>选择节点，检查连接</h2>
-            <p>
-              在“节点”中可以单独测速、全部测速或切换节点。全部测速期间仍可选择节点，也可以停止本次测速。切换后，首页会同步当前节点和延迟。
-            </p>
-            <p>
-              “测试”中提供 Steam、AI 服务和常用站点等 15
-              项检查。先启动代理，再测试；展开一项结果，可查看耗时、出口信息和实际策略链。
-            </p>
-            <p>规则模式按目标分流，全局模式使用代理，直连模式直接访问。需要时可在专业模式首页切换。</p>
-          </section>
-          <section id="network">
-            <h2>设置与网络修复</h2>
-            <p>
-              “设置”集中提供订阅、规则来源、TUN、局域网访问和订阅刷新周期。修改后保存设置。启用 TUN
-              或执行修复时，会按需请求管理员授权。
-            </p>
-            <p>
-              停止代理后仍不能联网，先尝试设置页的“修复”。它会清理相关系统代理、WinHTTP、DNS
-              缓存等设置，并根据修复前的状态恢复运行。需要重建整个应用进程时，可使用托盘里的“网络修复”。
-            </p>
-            <p>继续排查时，导出诊断并描述发生问题的操作。诊断会脱敏；提交前也请检查内容，避免公开自己的订阅和凭据。</p>
-          </section>
-          <section id="pet">
-            <h2>和桌宠互动</h2>
-            <ul>
-              <li>单击或使用 Enter / Space：挥手。</li>
-              <li>按住后拖动：提起、跟随方向移动，松开后贴边或落地。</li>
-              <li>双击：跳跃并恢复软件主窗口。</li>
-              <li>靠近屏幕边缘：探头、眨眼或休息。</li>
-            </ul>
-            <p>标准版包含桌宠，专业模式的“桌宠”页可以预览 24 种状态。无桌宠版保留相同的网络功能。</p>
-            <a class="story-link" href="index.html#companion">体验网页桌宠 <span aria-hidden="true">↗</span></a>
-          </section>
-          <section id="update">
-            <h2>更新与帮助</h2>
-            <p>
-              在“设置”中检查更新，按提示下载和安装。标准版与无桌宠版各自更新；无法完成应用内更新时，可正常退出软件后，运行同一通道的安装包覆盖安装。
-            </p>
-            <div class="guide-next">
-              <a href="changelog.html"><span>查看变化</span><strong>更新记录 ↗</strong></a
-              ><a href="https://github.com/fishknowsss/YouYu/issues"
-                ><span>一般问题与建议</span><strong>GitHub Issues ↗</strong></a
-              >
-            </div>
-            <p>
-              安全问题请按<a href="https://github.com/fishknowsss/YouYu/blob/main/SECURITY.md">现有安全策略</a
-              >私下报告。开发、贡献和更完整的功能说明见<a
-                href="https://github.com/fishknowsss/YouYu/blob/main/README.md"
-                >项目 README</a
-              >。
-            </p>
-          </section>
-        </div>
-      </div>
-    </main>
-    <footer class="site-footer">
-      <div class="page-width">
-        <div class="footer-links">
-          <p><span class="footer-brand">YouYu</span> · 118 Studio<br />Windows Mihomo 桌面客户端</p>
-          <div>
-            <a href="guide.html">使用指南</a><a href="changelog.html">更新记录</a
-            ><a href="https://github.com/fishknowsss/YouYu">GitHub</a
-            ><a href="https://github.com/fishknowsss/YouYu/blob/main/LICENSE">MIT 许可</a
-            ><a href="https://github.com/fishknowsss/YouYu/blob/main/SECURITY.md">安全策略</a
-            ><a href="#top">返回顶部</a>
-          </div>
-        </div>
-      </div>
-    </footer>
-  </body>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>使用指南 · YouYu</title>
+<meta
+      name="description"
+      content="YouYu 安装、登记、订阅、双模式操作、网络修复与更新指南。"
+    />
+<meta name="robots" content="index, follow, max-image-preview:large" />
+<meta name="theme-color" content="#f7f4fb" />
+<link rel="canonical" href="https://fishknowsss.github.io/YouYu/guide.html" />
+<link rel="icon" type="image/png" href="assets/youyu-icon.png" />
+<link rel="apple-touch-icon" href="assets/youyu-icon.png" />
+<link rel="stylesheet" href="assets/site.css?v=bfad69f2cf" />
+<meta property="og:type" content="website" />
+<meta property="og:locale" content="zh_CN" />
+<meta property="og:site_name" content="YouYu" />
+<meta property="og:title" content="使用指南 · YouYu" />
+<meta
+      property="og:description"
+      content="YouYu 安装、登记、订阅、双模式操作、网络修复与更新指南。"
+    />
+<meta property="og:url" content="https://fishknowsss.github.io/YouYu/guide.html" />
+<meta property="og:image" content="https://fishknowsss.github.io/YouYu/assets/social-cover.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="YouYu：日常一键启停，专业全面掌控" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="https://fishknowsss.github.io/YouYu/assets/social-cover.png" />
+<meta name="twitter:image:alt" content="YouYu Windows Mihomo 桌面客户端与真实专业模式界面" />
+<script src="assets/pages.js?v=cbc8e2c0b9" defer>
+</script>
+</head>
+<body>
+<a class="skip-link" href="#top">跳到正文</a>
+<div class="header-shell">
+<header class="site-header page-width">
+<a class="brand" href="index.html" aria-label="YouYu 首页">
+<img src="assets/youyu-icon.png" width="40" height="40" alt="" />
+<span>YouYu</span>
+</a>
+<button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" hidden>菜单</button>
+<nav id="site-nav" aria-label="页面导航">
+<a href="index.html#features">产品体验</a>
+<a href="guide.html">使用指南</a>
+<a class="nav-updates" href="changelog.html">更新记录</a>
+<a class="nav-source" href="https://github.com/fishknowsss/YouYu">源码</a>
+<a class="nav-download" href="download.html">下载</a>
+</nav>
+</header>
+</div>
+<main id="top" class="subpage">
+<div class="guide-layout page-width">
+<aside class="guide-toc" aria-label="使用指南目录">
+<p>使用指南</p>
+<nav aria-label="本页目录">
+<a href="#start">安装与开始</a>
+<a href="#modes">两种模式</a>
+<a href="#nodes">节点与测试</a>
+<a href="#network">设置与修复</a>
+<a href="#pet">桌宠交互</a>
+<a href="#update">更新与帮助</a>
+</nav>
+</aside>
+<div class="guide-content">
+<header class="page-intro">
+<h1>开始使用 YouYu</h1>
+<p>先完成安装和订阅设置，之后按自己的习惯使用。</p>
+</header>
+<section id="start">
+<h2>安装与开始</h2>
+<ol>
+<li>在<a href="download.html">下载页</a>选择标准版或无桌宠版，运行安装程序并完成管理员授权。</li>
+<li>首次打开后按提示完成使用登记。</li>
+<li>进入专业模式的“设置”，填写并保存自己的订阅地址。公开安装包不内置订阅。</li>
+<li>启动代理，等待连接状态更新。日常启停可以使用小白模式。</li>
+</ol>
+<p>安装程序会创建桌面和开始菜单快捷方式，YouYu 日常使用普通用户权限运行。</p>
+</section>
+<section id="modes">
+<h2>小白模式与专业模式</h2>
+<p>
+        两种模式包含在同一个安装包中。小白模式保留中央连接按钮和状态反馈；专业模式提供首页、节点、测试、桌宠和设置页面。
+      </p>
+<p>
+        从小白模式进入专业模式：连续点击窗口左下角 7 次；也可以依次按 ↑ ↑ ↓ ↓ ← → ← → B A
+        切换模式。专业模式首页的“返回小白”可直接返回。
+      </p>
+<figure class="guide-image">
+<img
+          src="screenshots/home-advanced.png"
+          width="900"
+          height="600"
+          loading="lazy"
+          alt="YouYu 专业模式控制台，左侧为页面导航"
+        />
+<figcaption>专业模式：首页集中显示节点、代理状态、流量与诊断。</figcaption>
+</figure>
+<a class="story-link" href="index.html#features">在网页里试试 <span aria-hidden="true">↗</span>
+</a>
+</section>
+<section id="nodes">
+<h2>选择节点，检查连接</h2>
+<p>
+        在“节点”中可以单独测速、全部测速或切换节点。全部测速期间仍可选择节点，也可以停止本次测速。切换后，首页会同步当前节点和延迟。
+      </p>
+<p>
+        “测试”中提供 Steam、AI 服务和常用站点等 15
+        项检查。先启动代理，再测试；展开一项结果，可查看耗时、出口信息和实际策略链。
+      </p>
+<p>规则模式按目标分流，全局模式使用代理，直连模式直接访问。需要时可在专业模式首页切换。</p>
+</section>
+<section id="network">
+<h2>设置与网络修复</h2>
+<p>
+        “设置”集中提供订阅、规则来源、TUN、局域网访问和订阅刷新周期。修改后保存设置。启用 TUN
+        或执行修复时，会按需请求管理员授权。
+      </p>
+<p>
+        停止代理后仍不能联网，先尝试设置页的“修复”。它会清理相关系统代理、WinHTTP、DNS
+        缓存等设置，并根据修复前的状态恢复运行。需要重建整个应用进程时，可使用托盘里的“网络修复”。
+      </p>
+<p>继续排查时，导出诊断并描述发生问题的操作。诊断会脱敏；提交前也请检查内容，避免公开自己的订阅和凭据。</p>
+</section>
+<section id="pet">
+<h2>和桌宠互动</h2>
+<ul>
+<li>单击或使用 Enter / Space：挥手。</li>
+<li>按住后拖动：提起、跟随方向移动，松开后贴边或落地。</li>
+<li>双击：跳跃并恢复软件主窗口。</li>
+<li>靠近屏幕边缘：探头、眨眼或休息。</li>
+</ul>
+<p>标准版包含桌宠，专业模式的“桌宠”页可以预览 24 种状态。无桌宠版保留相同的网络功能。</p>
+<a class="story-link" href="index.html#companion">体验网页桌宠 <span aria-hidden="true">↗</span>
+</a>
+</section>
+<section id="update">
+<h2>更新与帮助</h2>
+<p>
+        在“设置”中检查更新，按提示下载和安装。标准版与无桌宠版各自更新；无法完成应用内更新时，可正常退出软件后，运行同一通道的安装包覆盖安装。
+      </p>
+<div class="guide-next">
+<a href="changelog.html">
+<span>查看变化</span>
+<strong>更新记录 ↗</strong>
+</a
+        >
+<a href="https://github.com/fishknowsss/YouYu/issues"
+          >
+<span>一般问题与建议</span>
+<strong>GitHub Issues ↗</strong>
+</a
+        >
+</div>
+<p>
+        安全问题请按<a href="https://github.com/fishknowsss/YouYu/blob/main/SECURITY.md">现有安全策略</a
+        >私下报告。开发、贡献和更完整的功能说明见<a href="https://github.com/fishknowsss/YouYu/blob/main/README.md"
+          >项目 README</a
+        >。
+      </p>
+</section>
+</div>
+</div>
+</main>
+<footer class="site-footer">
+<div class="page-width">
+<div class="footer-links">
+<p>
+<span class="footer-brand">YouYu</span> · 118 Studio<br />Windows Mihomo 桌面客户端</p>
+<div>
+<a href="guide.html">使用指南</a>
+<a href="changelog.html">更新记录</a
+            >
+<a href="https://github.com/fishknowsss/YouYu">GitHub</a
+            >
+<a href="https://github.com/fishknowsss/YouYu/blob/main/LICENSE">MIT 许可</a
+            >
+<a href="https://github.com/fishknowsss/YouYu/blob/main/SECURITY.md">安全策略</a
+            >
+<a href="#top">返回顶部</a>
+</div>
+</div>
+</div>
+</footer>
+</body>
 </html>
