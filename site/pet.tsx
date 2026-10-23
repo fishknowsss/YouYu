@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client';
+import { useEffect } from 'react';
 import { PetApp } from '../src/renderer/PetApp';
 import { createDevYouYuApi } from '../src/renderer/devApi';
 import type { DesktopPetState } from '../src/shared/ipc';
@@ -7,6 +8,13 @@ import styles from './pet.css?inline';
 
 type Point = { x: number; y: number };
 type Options = { origin: Point; running: boolean; onReturn: () => void; onShowMain: () => void };
+
+function FocusedPet({ container }: { container: HTMLElement }) {
+  useEffect(() => {
+    container.querySelector<HTMLButtonElement>('.pet-hit-target')?.focus({ preventScroll: true });
+  }, [container]);
+  return <PetApp />;
+}
 
 export function mountPet(host: HTMLElement, { origin, running, onReturn, onShowMain }: Options) {
   const shadow = host.attachShadow({ mode: 'open' });
@@ -176,6 +184,9 @@ export function mountPet(host: HTMLElement, { origin, running, onReturn, onShowM
   function outside(event: PointerEvent) {
     if (!event.composedPath().includes(windowFrame)) closeMenu();
   }
+  function dismiss(event: KeyboardEvent) {
+    if (event.key === 'Escape') onReturn();
+  }
   windowFrame.addEventListener('pointerdown', down, true);
   windowFrame.addEventListener('pointermove', drag, true);
   windowFrame.addEventListener('contextmenu', (event) => {
@@ -184,19 +195,17 @@ export function mountPet(host: HTMLElement, { origin, running, onReturn, onShowM
   });
   windowFrame.addEventListener('keydown', keys);
   document.addEventListener('pointerdown', outside);
+  document.addEventListener('keydown', dismiss);
   window.addEventListener('resize', resize);
   window.addEventListener('blur', blur);
   document.addEventListener('visibilitychange', visibility);
   move(position);
-  root.render(<PetApp />);
-  const focusFrame = requestAnimationFrame(() =>
-    container.querySelector<HTMLButtonElement>('.pet-hit-target')?.focus({ preventScroll: true })
-  );
+  root.render(<FocusedPet container={container} />);
   const dispose = () => {
     cancelAnimationFrame(frame);
-    cancelAnimationFrame(focusFrame);
     clearTimeout(holdTimer);
     document.removeEventListener('pointerdown', outside);
+    document.removeEventListener('keydown', dismiss);
     window.removeEventListener('resize', resize);
     window.removeEventListener('blur', blur);
     document.removeEventListener('visibilitychange', visibility);
