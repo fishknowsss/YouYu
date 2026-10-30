@@ -100,6 +100,27 @@ describe('Windows Job Object process host', () => {
   );
 
   it.runIf(process.platform === 'win32')(
+    'forwards a fast child exit code without reopening the process by pid',
+    async () => {
+      const powershellPath = join(
+        process.env.SystemRoot ?? 'C:\\Windows',
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe'
+      );
+      const host = spawnWindowsJobFixture(powershellPath, ['-NoProfile', '-NonInteractive', '-Command', 'exit 7']);
+      const code = await new Promise<number | null>((resolve, reject) => {
+        host.once('error', reject);
+        host.once('exit', resolve);
+      });
+
+      expect(code).toBe(7);
+    },
+    15_000
+  );
+
+  it.runIf(process.platform === 'win32')(
     'kills the contained child when the long-lived Job Object host exits abnormally',
     async () => {
       const powershellPath = join(

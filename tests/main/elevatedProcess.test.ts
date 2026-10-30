@@ -241,6 +241,9 @@ describe('elevated mihomo process script', () => {
     expect(nativeSource).toContain('AssignProcessToJobObject');
     expect(nativeSource).toContain('CREATE_SUSPENDED');
     expect(nativeSource).toContain('ResumeThread');
+    expect(nativeSource).toContain('WindowsJobProcessHandle');
+    expect(nativeSource).toContain('GetExitCodeProcess');
+    expect(nativeSource).toContain('WaitForSingleObject');
     expect(script).toContain('SetInformationJobObject');
     expect(script).toContain('SetAccessControl($secureWorkDir, $acl)');
     expect(script).not.toContain('NamedPipeClientStream');
@@ -266,6 +269,33 @@ describe('elevated mihomo process script', () => {
 });
 
 describe('managed elevated process cancellation', () => {
+  it('keeps outer PowerShell statements separately parseable by Windows PowerShell 5.1', async () => {
+    const launcher = createStalledLauncher();
+    const pipe = createStalledPipeConnection();
+    const spawnLauncher = vi.fn(() => launcher as never);
+    const elevated = spawnWindowsElevatedProcess('C:\\Program Files\\YouYu\\helper.exe', [], {
+      resolveUserIdentity: async () => ({ userSid: binding.targetUserSid, sessionId: binding.targetSessionId }),
+      spawnLauncher,
+      createPipeConnection: vi.fn(() => pipe as never)
+    });
+
+    try {
+      await vi.waitFor(() => expect(spawnLauncher).toHaveBeenCalledOnce());
+      const [, args] = spawnLauncher.mock.calls[0] as unknown as [string, string[]];
+      const outerCommand = args[3];
+      expect(outerCommand).toContain('\r\n');
+      expect(outerCommand).not.toContain("' $arguments =");
+      const parsed = spawnSync(
+        win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-Command', '[ScriptBlock]::Create([Console]::In.ReadToEnd()) | Out-Null'],
+        { encoding: 'utf8', input: outerCommand, windowsHide: true }
+      );
+      expect(parsed.status, parsed.stderr).toBe(0);
+    } finally {
+      elevated.kill();
+    }
+  });
+
   it('starts the outer launcher at the canonical PS5 path with an isolated module environment', async () => {
     const launcher = createStalledLauncher();
     const pipe = createStalledPipeConnection();

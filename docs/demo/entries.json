@@ -12,31 +12,27 @@
     "src": "../src/renderer/assets/youyu-icon.png"
   },
   "../src/renderer/pages/PetPreviewPage.tsx": {
-    "file": "assets/PetPreviewPage-Dh8ZVo9Z.js",
+    "file": "assets/PetPreviewPage-CJxuBXEp.js",
     "name": "PetPreviewPage",
     "src": "../src/renderer/pages/PetPreviewPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_react-CMY55oh2.js",
       "_pet-sprite--79Mbtcy.js",
-      "_index-ROtfj4XC.js",
-      "_devApi-Dc0dFtyP.js"
+      "_index-B683bMpk.js",
+      "_devApi-DtBnRNCH.js"
     ]
   },
-  "_devApi-Dc0dFtyP.js": {
-    "file": "assets/devApi-Dc0dFtyP.js",
+  "_devApi-DtBnRNCH.js": {
+    "file": "assets/devApi-DtBnRNCH.js",
     "name": "devApi"
   },
-  "_index-CDjrf-bA.css": {
-    "file": "assets/index-CDjrf-bA.css",
-    "src": "_index-CDjrf-bA.css"
-  },
-  "_index-ROtfj4XC.js": {
-    "file": "assets/index-ROtfj4XC.js",
+  "_index-B683bMpk.js": {
+    "file": "assets/index-B683bMpk.js",
     "name": "index",
     "imports": [
       "_react-CMY55oh2.js",
-      "_devApi-Dc0dFtyP.js"
+      "_devApi-DtBnRNCH.js"
     ],
     "dynamicImports": [
       "../src/renderer/pages/PetPreviewPage.tsx"
@@ -47,6 +43,10 @@
     "assets": [
       "assets/youyu-icon-Bj1kyXHr.png"
     ]
+  },
+  "_index-CDjrf-bA.css": {
+    "file": "assets/index-CDjrf-bA.css",
+    "src": "_index-CDjrf-bA.css"
   },
   "_pet-sprite--79Mbtcy.js": {
     "file": "assets/pet-sprite--79Mbtcy.js",
@@ -64,14 +64,14 @@
     "name": "react"
   },
   "pet.tsx": {
-    "file": "assets/pet-Bz9u7kOx.js",
+    "file": "assets/pet-C5vcIUCZ.js",
     "name": "pet",
     "src": "pet.tsx",
     "isEntry": true,
     "imports": [
       "_react-CMY55oh2.js",
       "_pet-sprite--79Mbtcy.js",
-      "_devApi-Dc0dFtyP.js"
+      "_devApi-DtBnRNCH.js"
     ]
   }
 }

@@ -8,10 +8,11 @@
 
 YouYu 是一款面向 Windows x64 的 Mihomo 桌面客户端，提供代理启停、节点选择与健康检查、连通性测试、流量统计、系统网络修复、自动更新、桌宠交互和轻量云端管理。
 
-当前版本为 [`1.8.4`](https://github.com/fishknowsss/YouYu/releases/tag/v1.8.4)。[下载标准版](https://github.com/fishknowsss/YouYu/releases/download/v1.8.4/YouYu-1.8.4-x64.exe) · [下载无桌宠版](https://github.com/fishknowsss/YouYu/releases/download/v1.8.4/YouYu-1.8.4-x64-no.exe)。其他通道、更新文件和校验清单见 [最新稳定 Release](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)。
+当前版本为 [`1.8.5`](https://github.com/fishknowsss/YouYu/releases/tag/v1.8.5)。[下载标准版](https://github.com/fishknowsss/YouYu/releases/download/v1.8.5/YouYu-1.8.5-x64.exe) · [下载无桌宠版](https://github.com/fishknowsss/YouYu/releases/download/v1.8.5/YouYu-1.8.5-x64-no.exe)。其他通道、更新文件和校验清单见 [最新稳定 Release](https://github.com/fishknowsss/YouYu/releases/latest)，版本演进见 [CHANGELOG](CHANGELOG.md)。
 
 ## 近期改进
 
+- 1.8.5 修复 Windows 管理员提升助手的 PowerShell 解析与子进程退出码问题，订阅启动失败时能返回真实错误。
 - 1.8.4 修复启动时窗口大小与页面缩放不一致造成的偏移和裁切，并补充真实 Electron 启动回归检查。
 - 小白模式连接按钮使用启动、连接、关闭、停止和失败五态图形反馈，并支持系统减少动态效果设置。
 - 网络修复、异常恢复和端口变化后保持系统代理与实际运行状态一致；崩溃前未结算流量可从本地日志恢复。

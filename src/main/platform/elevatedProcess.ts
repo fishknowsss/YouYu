@@ -790,7 +790,7 @@ export function spawnWindowsElevatedProcess(
         `$elevated = Start-Process -FilePath '${powershellPath.replaceAll("'", "''")}' -Verb RunAs -WindowStyle Hidden -ArgumentList $arguments -PassThru -Wait`,
         'exit $elevated.ExitCode',
         '}'
-      ].join(' ');
+      ].join('\r\n');
       const authorizationTimeoutMs = Math.max(1_000, options.authorizationTimeoutMs ?? defaultAuthorizationTimeoutMs);
       authorizationTimer = setTimeout(() => fail(new Error('等待管理员授权超时')), authorizationTimeoutMs);
       authorizationTimer.unref();

@@ -15,7 +15,6 @@ const windowsJobNativeSource = String.raw`
 using System;
 using System.ComponentModel;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -135,8 +134,70 @@ namespace YouYu {
     private static extern uint ResumeThread(IntPtr thread);
 
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+    private const uint INFINITE = 0xffffffff;
+    private const uint WAIT_FAILED = 0xffffffff;
+    private const uint STILL_ACTIVE = 259;
+
+    public sealed class WindowsJobProcessHandle : IDisposable {
+      private IntPtr handle;
+
+      public WindowsJobProcessHandle(IntPtr processHandle, int processId) {
+        if (processHandle == IntPtr.Zero) throw new ArgumentException("process handle is invalid", "processHandle");
+        if (processId <= 0) throw new ArgumentOutOfRangeException("processId");
+        handle = processHandle;
+        Id = processId;
+      }
+
+      public int Id { get; private set; }
+
+      public bool HasExited {
+        get {
+          uint exitCode;
+          if (!GetExitCodeProcess(handle, out exitCode)) ThrowLastWin32Error("GetExitCodeProcess");
+          return exitCode != STILL_ACTIVE;
+        }
+      }
+
+      public int ExitCode {
+        get {
+          uint exitCode;
+          if (!GetExitCodeProcess(handle, out exitCode)) ThrowLastWin32Error("GetExitCodeProcess");
+          if (exitCode == STILL_ACTIVE) throw new InvalidOperationException("process has not exited");
+          return unchecked((int)exitCode);
+        }
+      }
+
+      public void Kill() {
+        if (!TerminateProcess(handle, 1)) {
+          uint error = (uint)Marshal.GetLastWin32Error();
+          if (error != 5 && error != 87) throw new Win32Exception((int)error, "TerminateProcess failed");
+        }
+      }
+
+      public void WaitForExit() {
+        if (WaitForSingleObject(handle, INFINITE) == WAIT_FAILED) ThrowLastWin32Error("WaitForSingleObject");
+      }
+
+      public void Refresh() {
+        // The native handle is always live, so there is no cached Process state to refresh.
+      }
+
+      public void Dispose() {
+        var current = handle;
+        handle = IntPtr.Zero;
+        if (current != IntPtr.Zero) CloseHandle(current);
+      }
+    }
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetCurrentProcess();
@@ -160,7 +221,7 @@ namespace YouYu {
       throw new Win32Exception(Marshal.GetLastWin32Error(), operation + " failed");
     }
 
-    public static Process StartProcessSuspendedAndAssignToJobObject(
+    public static WindowsJobProcessHandle StartProcessSuspendedAndAssignToJobObject(
       IntPtr job,
       string applicationPath,
       string arguments,
@@ -206,7 +267,9 @@ namespace YouYu {
           TerminateProcess(created.hProcess, 1);
           throw new Win32Exception(resumeError, "ResumeThread failed");
         }
-        return Process.GetProcessById((int)created.dwProcessId);
+        var managedProcess = new WindowsJobProcessHandle(created.hProcess, (int)created.dwProcessId);
+        created.hProcess = IntPtr.Zero;
+        return managedProcess;
       } catch {
         TerminateProcess(created.hProcess, 1);
         throw;
