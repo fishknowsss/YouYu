@@ -51,7 +51,7 @@
     "release:publish": "node scripts/publish-github-release.mjs"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20261019.1",
+    "@cloudflare/workers-types": "5.20261023.1",
     "@electron/get": "5.1.0",
     "@eslint/js": "10.0.1",
     "@types/node": "24.10.2",
