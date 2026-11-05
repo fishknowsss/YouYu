@@ -13,7 +13,7 @@
     <link rel="canonical" href="https://fishknowsss.github.io/YouYu/" />
     <link rel="icon" type="image/png" href="assets/youyu-icon.png" />
     <link rel="apple-touch-icon" href="assets/youyu-icon.png" />
-    <link rel="stylesheet" href="assets/site.css?v=fff8d92660" />
+    <link rel="stylesheet" href="assets/site.css?v=cbe3aef453" />
     <link rel="preload" as="image" href="screenshots/home-advanced.png" />
     <meta property="og:type" content="website" />
     <meta property="og:locale" content="zh_CN" />
@@ -119,9 +119,18 @@
       </section>
 
       <section class="section page-width" id="features" aria-labelledby="features-title">
-        <div class="section-heading">
-          <h2 id="features-title" data-reveal="rise">先用起来，再按需要调整</h2>
-          <p data-reveal="rise">从日常启停，到节点、测试和设置，试试 YouYu 的实际操作。</p>
+        <div class="tour-heading">
+          <div class="section-heading">
+            <h2 id="features-title" data-reveal="rise">先用起来，再按需要调整</h2>
+            <p data-reveal="rise">从日常启停，到节点、测试和设置，试试 YouYu 的实际操作。</p>
+          </div>
+          <div class="tour-scenes" role="group" aria-label="选择体验场景" hidden>
+            <button type="button" data-scene="easy" aria-pressed="true">日常连接</button>
+            <button type="button" data-scene="advanced" aria-pressed="false">专业控制</button>
+            <button type="button" data-scene="nodes" aria-pressed="false">选择节点</button>
+            <button type="button" data-scene="test" aria-pressed="false">检查连接</button>
+            <button type="button" data-scene="settings" aria-pressed="false">按需设置</button>
+          </div>
         </div>
         <div class="product-tour" data-reveal="picture">
           <div class="tour-window">
@@ -159,13 +168,6 @@
             <div class="tour-footnote">使用示例数据，不会修改系统网络。</div>
           </div>
           <aside class="tour-guide" aria-label="功能导览">
-            <div class="tour-scenes" role="group" aria-label="选择体验场景" hidden>
-              <button type="button" data-scene="easy" aria-pressed="true">日常连接</button>
-              <button type="button" data-scene="advanced" aria-pressed="false">专业控制</button>
-              <button type="button" data-scene="nodes" aria-pressed="false">选择节点</button>
-              <button type="button" data-scene="test" aria-pressed="false">检查连接</button>
-              <button type="button" data-scene="settings" aria-pressed="false">按需设置</button>
-            </div>
             <div class="tour-description" aria-live="polite" aria-atomic="true">
               <h3 id="tour-title">日常，只需一个按钮</h3>
               <p id="tour-description">打开后连接，用完后停止。小白模式把日常需要的操作留在首页。</p>

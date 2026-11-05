@@ -379,7 +379,6 @@ h1 span {
   gap: 34px;
 }
 .tour-window {
-  grid-row: 2;
   min-width: 0;
   border-radius: 14px;
   overflow: hidden;
@@ -447,12 +446,13 @@ h1 span {
   display: none;
 }
 .tour-scenes {
-  grid-column: 1 / -1;
-  grid-row: 1;
   display: flex;
   justify-content: center;
-  gap: 24px;
-  margin-bottom: -8px;
+  flex-shrink: 0;
+  gap: clamp(4px, 1vw, 16px);
+}
+.tour-scenes[hidden] {
+  display: none;
 }
 .tour-guide {
   display: contents;
@@ -493,7 +493,6 @@ h1 span {
   background: var(--field);
 }
 .tour-description {
-  grid-row: 2;
   min-height: 215px;
 }
 .tour-description h3 {
@@ -920,11 +919,9 @@ h1 span {
     display: contents;
   }
   .tour-scenes {
-    grid-row: 1;
     flex-direction: row;
-    justify-content: center;
+    justify-content: flex-start;
     flex-wrap: wrap;
-    margin-bottom: 0;
     gap: 4px;
   }
   .tour-scenes button {
@@ -940,7 +937,6 @@ h1 span {
     width: auto;
   }
   .tour-description {
-    grid-row: 3;
     min-height: 0;
     max-width: 620px;
   }
@@ -1008,6 +1004,23 @@ h1 span {
   margin-top: 12px;
   color: var(--muted);
   max-width: 52em;
+}
+.tour-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+.tour-heading .section-heading {
+  margin-bottom: 0;
+}
+@media (max-width: 900px) {
+  .tour-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 16px;
+  }
 }
 .download-section {
   padding: 36px;
